@@ -19,6 +19,7 @@ export const ENDPOINTABLE: Record<ConnectionType, boolean> = {
   pg: true,
   ssh: true,
   api: true,
+  cloud: false,
 };
 
 export function maskedEndpoint(address: string): string {

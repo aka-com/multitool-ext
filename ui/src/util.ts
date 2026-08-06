@@ -60,6 +60,7 @@ export const TYPES = {
   api: { label: 'API', cls: 'b-api' },
   pg: { label: 'PG', cls: 'b-pg' },
   ssh: { label: 'SSH', cls: 'b-ssh' },
+  cloud: { label: 'Cloud', cls: 'b-cloud' },
 };
 
 // Lucide line icons plus the inlined Simple Icons brand marks, under one

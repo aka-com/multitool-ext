@@ -1092,10 +1092,10 @@ fn tool_name_candidate(connection: &BrokerConnection) -> String {
             }
         })
         .collect();
-    let suffix = if connection.kind == "api" {
-        "request"
-    } else {
-        "open"
+    let suffix = match connection.kind.as_str() {
+        "api" => "request",
+        "cloud" => "session",
+        _ => "open",
     };
     format!("multitool_{slug}_{suffix}")
 }
@@ -1165,12 +1165,17 @@ fn native_tools<'a>(
 
 fn tool_schema(connection: &BrokerConnection) -> Value {
     if connection.kind != "api" {
+        let description = if connection.kind == "cloud" {
+            "Idempotency key; retries with the same value reuse the minted session"
+        } else {
+            "Idempotency key; retries with the same value reuse the open"
+        };
         return json!({
             "type": "object",
             "properties": {
                 "request_id": {
                     "type": "string",
-                    "description": "Idempotency key; retries with the same value reuse the open",
+                    "description": description,
                 },
             },
             "additionalProperties": false,
@@ -1225,6 +1230,13 @@ fn describe(connection: &BrokerConnection) -> String {
              private key stays in the broker.",
             connection.target
         ),
+        "cloud" => format!(
+            "Mint a short-lived cloud CLI session for {} ({}). Returns temporary \
+             credentials and env exports for stock CLIs (aws / az / gcloud). \
+             Long-lived vault keys never leave Multitool; already-minted sessions \
+             are not revocable — rely on the short TTL.",
+            connection.name, connection.target
+        ),
         _ => format!("Use the Multitool connection \"{}\".", connection.name),
     }
 }
@@ -1247,6 +1259,19 @@ fn native_output_schema(connection: &BrokerConnection) -> Value {
                 "dsn": {"type": "string"},
                 "ticket": {"type": "string"},
                 "expires_in_seconds": {"type": "integer"},
+            },
+            "additionalProperties": true,
+        }),
+        "cloud" => json!({
+            "type": "object",
+            "properties": {
+                "provider": {"type": "string"},
+                "connection": {"type": "string"},
+                "expires_at": {"type": "string"},
+                "expires_in_seconds": {"type": "integer"},
+                "env": {"type": "object"},
+                "credentials": {"type": "object"},
+                "example": {"type": "string"},
             },
             "additionalProperties": true,
         }),

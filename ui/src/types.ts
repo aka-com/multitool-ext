@@ -1,4 +1,4 @@
-export type ConnectionType = 'api' | 'pg' | 'ssh';
+export type ConnectionType = 'api' | 'pg' | 'ssh' | 'cloud';
 
 export type SecretKind = 'secret' | 'password';
 
@@ -215,6 +215,8 @@ export interface ConnectionSummary {
   client_cert_path?: string | null;
   /** PEM private key for client_cert_path. */
   client_key_path?: string | null;
+  /** Non-secret setup coordinates for a cloud CLI connection. */
+  cloud?: CloudInfo | null;
   /**
    * Last-known health, learned passively (brokered calls) and from tests
    * and status checks: 'ok' | 'warning' | 'failed' |
@@ -223,6 +225,54 @@ export interface ConnectionSummary {
   last_status?: 'ok' | 'warning' | 'failed' | 'needs_reconnect' | null;
   last_detail?: string | null;
   last_checked_at?: string | null;
+}
+
+export interface CloudInfo {
+  provider: 'aws' | 'gcp' | 'azure';
+  region?: string | null;
+  role_arn?: string | null;
+  external_id?: string | null;
+  /** Set when the connection mints from a ~/.aws profile (no vault). */
+  source_profile?: string | null;
+  /** Which machine's ~/.aws that is, and how to name it. */
+  source_origin?: string | null;
+  source_origin_label?: string | null;
+  /** Set when this broker cannot mint the connection itself and depends on
+   * sessions pushed from `source_origin_label`. */
+  minted_elsewhere?: boolean;
+  /** Life left in the session the broker currently holds; absent when it
+   * holds none, which is the "waiting for that machine" state. */
+  pushed_expires_in_seconds?: number | null;
+  /** Managed policy ARN bounding minted sessions (AWS-enforced). */
+  session_policy_arn?: string | null;
+  /** Inline session-policy JSON bounding minted sessions (AWS-enforced). */
+  session_policy?: string | null;
+  tenant_id?: string | null;
+  client_id?: string | null;
+  subscription_id?: string | null;
+  project?: string | null;
+  scope?: string | null;
+  session_ttl_secs: number;
+}
+
+/** One local AWS profile the broker could mint from, for the reuse picker.
+ * Carries no key material: only the name, what kind of sign-in it is, and
+ * its region. */
+export interface AwsProfileList {
+  /** Identifies this machine, recorded on connections made from the list so
+   * a broker elsewhere never substitutes its own ~/.aws. */
+  origin: string;
+  /** How to name this machine when asking the user to come back to it. */
+  origin_label: string;
+  profiles: AwsProfileInfo[];
+}
+
+export interface AwsProfileInfo {
+  name: string;
+  /** `keys` (static, mintable), `temporary` (needs a role), `sso` (not
+   * readable by the broker), or `incomplete`. */
+  kind: 'keys' | 'temporary' | 'sso' | 'incomplete';
+  region?: string | null;
 }
 
 /** The shared broker identity ("this computer's key") — never the key itself. */
@@ -508,6 +558,7 @@ export interface ConnectionInput {
   secret_id?: string | null;
   new_secret_name?: string | null;
   new_secret_value?: string | null;
+  new_secrets?: Array<{ name: string; value: string }>;
   ssh_import_id?: string | null;
   identity_file?: string | null;
   /**
@@ -550,6 +601,26 @@ export interface ConnectionInput {
   // Upstream mTLS paths, both-or-neither (store-enforced).
   client_cert_path?: string | null;
   client_key_path?: string | null;
+  cloud_provider?: 'aws' | 'gcp' | 'azure' | null;
+  cloud_region?: string | null;
+  cloud_access_key_ref?: string | null;
+  cloud_secret_key_ref?: string | null;
+  cloud_session_token_ref?: string | null;
+  cloud_role_arn?: string | null;
+  cloud_external_id?: string | null;
+  cloud_source_profile?: string | null;
+  cloud_source_origin?: string | null;
+  cloud_source_origin_label?: string | null;
+  cloud_session_policy_arn?: string | null;
+  cloud_session_policy?: string | null;
+  cloud_tenant_id?: string | null;
+  cloud_client_id?: string | null;
+  cloud_client_secret_ref?: string | null;
+  cloud_subscription_id?: string | null;
+  cloud_scope?: string | null;
+  cloud_gcp_key_ref?: string | null;
+  cloud_project?: string | null;
+  cloud_session_ttl?: number | null;
   url?: string | null;
 }
 
@@ -715,6 +786,7 @@ export interface CommandMap {
     fieldType?: string;
   }, SecretSummary>;
   list_connections: CommandSpec<undefined, ConnectionSummary[]>;
+  list_aws_profiles: CommandSpec<undefined, AwsProfileList>;
   get_identity: CommandSpec<undefined, IdentityInfo>;
   list_sessions: CommandSpec<undefined, SessionSummary[]>;
   list_activity: CommandSpec<{ limit: number; before?: number | null }, ActivityPage>;

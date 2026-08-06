@@ -1256,3 +1256,144 @@ async fn a_denied_stream_ends_at_the_error_frame() {
     );
     assert_eq!(up.hits.load(Ordering::SeqCst), 0);
 }
+
+/* ------------------------------ cloud mints ------------------------------- */
+
+/// A stand-in STS endpoint that counts how many mints reached it.
+async fn mock_sts() -> (u16, Arc<AtomicUsize>) {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let sts_hits = hits.clone();
+    let app = Router::new().route(
+        "/",
+        post(move |body: String| {
+            let hits = sts_hits.clone();
+            async move {
+                assert!(body.contains("Action=GetSessionToken"), "{body}");
+                hits.fetch_add(1, Ordering::SeqCst);
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/xml")],
+                    r#"<?xml version="1.0"?>
+<GetSessionTokenResponse>
+  <GetSessionTokenResult>
+    <Credentials>
+      <AccessKeyId>ASIATESTSESSION</AccessKeyId>
+      <SecretAccessKey>temporary-secret</SecretAccessKey>
+      <SessionToken>temporary-session-token</SessionToken>
+      <Expiration>2099-01-01T00:00:00Z</Expiration>
+    </Credentials>
+  </GetSessionTokenResult>
+</GetSessionTokenResponse>"#
+                        .to_string(),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    (port, hits)
+}
+
+fn cloud_connection(harness: &Harness, name: &str) {
+    let stem = name.to_uppercase().replace('-', "_");
+    let access_ref = format!("{stem}_ACCESS_KEY");
+    let secret_ref = format!("{stem}_SECRET_KEY");
+    futures::executor::block_on(async {
+        for reference in [&access_ref, &secret_ref] {
+            harness
+                .broker
+                .store
+                .add_secret(
+                    &harness.broker.workspace,
+                    reference,
+                    Zeroizing::new("AKIALONGLIVEDMATERIAL".into()),
+                )
+                .await
+                .unwrap();
+        }
+        harness
+            .broker
+            .store
+            .add_connection(
+                &harness.broker.workspace,
+                ConnectionSpec {
+                    name: name.into(),
+                    config: ConnectionConfig::Cloud {
+                        provider: aka_core::types::CloudProvider::Aws {
+                            region: "us-east-1".into(),
+                            access_key_ref: access_ref.clone(),
+                            secret_key_ref: secret_ref.clone(),
+                            session_token_ref: None,
+                            role_arn: None,
+                            external_id: None,
+                            session_ttl_secs: 900,
+                        },
+                    },
+                    secrets: vec![],
+                },
+            )
+            .await
+            .unwrap();
+    });
+}
+
+impl Harness {
+    async fn cloud_session(&self, connection: &str) -> (u16, Value) {
+        uds_request(
+            &self.socket,
+            "POST",
+            "/v1/cloud/session",
+            &[("authorization", &format!("Bearer {}", self.token))],
+            Some(json!({ "connection": connection })),
+        )
+        .await
+    }
+}
+
+/// Minting hands out credentials the broker can never claw back, so a
+/// confirmed cloud tool parks the mint on the user's answer: a refusal
+/// keeps the request from ever reaching the provider, an approval mints.
+#[tokio::test]
+async fn a_confirmed_cloud_mint_asks_and_honors_the_answer() {
+    let (sts_port, sts_hits) = mock_sts().await;
+    // SAFETY: test-only process-wide STS redirect; this is the only test in
+    // this binary that reads it.
+    std::env::set_var(
+        "MULTITOOL_TEST_AWS_STS_URL",
+        format!("http://127.0.0.1:{sts_port}/"),
+    );
+    let user = ScriptedUser::new(Some(ApprovalDecision::Deny));
+    let h = harness(user.clone()).await;
+    cloud_connection(&h, "prod-aws");
+    cloud_connection(&h, "staging-aws");
+    h.confirm("prod-aws");
+    h.confirm("staging-aws");
+
+    // Refused: the mint never reaches the provider and the agent reads why.
+    let (status, body) = h.cloud_session("prod-aws").await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(reason(&body), "approval_denied");
+    assert_eq!(sts_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(user.prompts(), 1);
+    let prompt = user.last_prompt();
+    assert_eq!(prompt.summary, "New AWS CLI session");
+    assert_eq!(prompt.connection, "prod-aws");
+    assert_eq!(
+        prompt.credential_names,
+        ["PROD_AWS_ACCESS_KEY", "PROD_AWS_SECRET_KEY"],
+        "the prompt names the vault material a mint would spend"
+    );
+
+    // Approved: the mint proceeds. A fresh connection sidesteps the denial
+    // cooldown the first answer opened.
+    *user.decision.lock().unwrap() = Some(ApprovalDecision::ApproveWindow);
+    let (status, body) = h.cloud_session("staging-aws").await;
+    std::env::remove_var("MULTITOOL_TEST_AWS_STS_URL");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["provider"], "aws");
+    assert_eq!(body["credentials"]["AccessKeyId"], "ASIATESTSESSION");
+    assert_eq!(sts_hits.load(Ordering::SeqCst), 1);
+    assert_eq!(user.prompts(), 2);
+}

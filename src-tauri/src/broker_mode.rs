@@ -454,10 +454,20 @@ impl BrokerState {
         if profile.mode != "remote" {
             return;
         }
+        let reconnected = connected && !profile.connected;
         profile.connected = connected;
         profile.error = error;
         let snapshot = profile.clone();
         drop(profile);
+        // A link coming back may be a broker that restarted, and a restarted
+        // broker holds none of the sessions pushed to it — while this app's
+        // push clock still says they are fresh. Re-push now rather than
+        // leaving agents without the connection until half the TTL passes.
+        // (The initial switch-time push arrives already connected, so this
+        // fires only on a real drop-and-recover.)
+        if reconnected {
+            crate::cloud_refresh::refresh_soon(app);
+        }
         let _ = app.emit(EVT_BROKER, snapshot);
     }
 
@@ -517,6 +527,10 @@ impl BrokerState {
             // reconcile its first snapshot. `set_profile` repeats this with
             // the same key, which is intentionally a no-op.
             crate::attention::set_scope(app, "remote", Some(&url));
+            // This broker holds none of the cloud sessions the last one did,
+            // and may not be able to mint them at all — push what it needs
+            // now rather than after a tick of nothing.
+            crate::cloud_refresh::refresh_soon(app);
             self.arm_sse(app, backend);
             let profile = BrokerProfileInfo {
                 mode: "remote".into(),
@@ -637,6 +651,10 @@ impl BrokerState {
                     }
                     let profile = BrokerProfileInfo::local();
                     self.set_profile(app, profile.clone());
+                    // Drop what was pushed to the broker we just left: this
+                    // one reads the files itself, and stale bookkeeping would
+                    // suppress real pushes if we switch back.
+                    crate::cloud_refresh::refresh_soon(app);
                     Some(profile)
                 }
                 None => None,

@@ -2067,7 +2067,7 @@ pub(crate) async fn render_connection_injection(
             crate::types::SignerSpec::GcpServiceAccount { key_ref, scope } => {
                 let key_json = signer_secret(store, workspace, key_ref).await?;
                 let cache_key = format!("{}\0{key_ref}\0{scope}", connection.id);
-                let token = crate::gcp_signer::fresh_bearer(client, &key_json, scope, &cache_key)
+                let bearer = crate::gcp_signer::fresh_bearer(client, &key_json, scope, &cache_key)
                     .await
                     .map_err(|error| match error {
                         crate::gcp_signer::GcpTokenError::Config(message) => {
@@ -2082,7 +2082,7 @@ pub(crate) async fn render_connection_injection(
                 // injection, redirect re-application, and response redaction
                 // all follow the same path as a template credential.
                 let mut value =
-                    HeaderValue::from_str(&format!("Bearer {}", &*token)).map_err(|_| {
+                    HeaderValue::from_str(&format!("Bearer {}", &*bearer.token)).map_err(|_| {
                         "the minted access token is not a valid header value".to_string()
                     })?;
                 value.set_sensitive(true);

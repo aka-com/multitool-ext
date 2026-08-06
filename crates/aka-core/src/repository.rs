@@ -143,6 +143,12 @@ pub trait CatalogReader: Send + Sync {
         secret_name: &str,
         spec: &ConnectionSpec,
     ) -> Result<()>;
+    fn preflight_add_connection_with_secrets(
+        &self,
+        workspace: &WorkspaceContext,
+        secret_names: &[String],
+        spec: &ConnectionSpec,
+    ) -> Result<()>;
     async fn connection_oauth_grant(
         &self,
         workspace: &WorkspaceContext,
@@ -240,6 +246,12 @@ pub trait CatalogRepository: CatalogReader {
         value: SecretValue,
         spec: ConnectionSpec,
     ) -> Result<(SecretMeta, Connection)>;
+    async fn add_connection_with_secrets(
+        &self,
+        workspace: &WorkspaceContext,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> Result<(Vec<SecretMeta>, Connection)>;
     async fn update_connection(
         &self,
         workspace: &WorkspaceContext,
@@ -453,6 +465,15 @@ impl CatalogReader for Store {
         Store::preflight_add_connection_with_secret(self, secret_name, spec)
     }
 
+    fn preflight_add_connection_with_secrets(
+        &self,
+        _workspace: &WorkspaceContext,
+        secret_names: &[String],
+        spec: &ConnectionSpec,
+    ) -> Result<()> {
+        Store::preflight_add_connection_with_secrets(self, secret_names, spec)
+    }
+
     async fn connection_oauth_grant(
         &self,
         _workspace: &WorkspaceContext,
@@ -579,6 +600,15 @@ impl CatalogRepository for Store {
         spec: ConnectionSpec,
     ) -> Result<(SecretMeta, Connection)> {
         Store::add_connection_with_secret(self, secret_name, value, spec)
+    }
+
+    async fn add_connection_with_secrets(
+        &self,
+        _workspace: &WorkspaceContext,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> Result<(Vec<SecretMeta>, Connection)> {
+        Store::add_connection_with_secrets(self, secrets, spec)
     }
 
     async fn update_connection(

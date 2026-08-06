@@ -138,6 +138,7 @@ export function sshConfigBlock(socket: string, c: ConnectionSummary): string | n
 const SECRET_PLACEHOLDER = '<endpoint-secret>';
 
 export const ENDPOINT_FORMATS: Record<ConnectionType, EndpointFormat[]> = {
+  cloud: [],
   pg: [
     {
       key: 'psql',

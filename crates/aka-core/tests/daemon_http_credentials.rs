@@ -1877,3 +1877,818 @@ async fn the_endpoint_secret_is_recoverable_from_the_vault_after_a_reload() {
         "a reloaded record must carry no plaintext, or nothing changed"
     );
 }
+
+/* --------------------------- cloud CLI sessions --------------------------- */
+
+/// A loopback STS stand-in that answers GetSessionToken with fixed temp keys.
+/// Serializes tests that redirect STS through `MULTITOOL_TEST_AWS_STS_URL`:
+/// the variable is process-wide, and concurrent tests would race each
+/// other's ports. Survives poisoning so one failed test reads as one.
+static STS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The last STS request body the mock saw, so a test can assert which action
+/// and which policy parameters actually went on the wire.
+static STS_LAST_BODY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+async fn mock_sts() -> (u16, tokio::task::JoinHandle<()>) {
+    async fn sts(body: String) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
+        if body.contains("Action=GetCallerIdentity") {
+            let xml = r#"<?xml version="1.0"?>
+<GetCallerIdentityResponse>
+  <GetCallerIdentityResult>
+    <Arn>arn:aws:iam::123456789012:user/multitool-broker</Arn>
+    <UserId>AIDATESTUSER</UserId>
+    <Account>123456789012</Account>
+  </GetCallerIdentityResult>
+</GetCallerIdentityResponse>"#;
+            return (
+                [(axum::http::header::CONTENT_TYPE, "text/xml")],
+                xml.to_string(),
+            );
+        }
+        assert!(
+            body.contains("Action=GetSessionToken")
+                || body.contains("Action=AssumeRole")
+                || body.contains("Action=GetFederationToken"),
+            "unexpected STS body: {body}"
+        );
+        STS_LAST_BODY
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .replace(body.clone());
+        let xml = r#"<?xml version="1.0"?>
+<GetSessionTokenResponse>
+  <GetSessionTokenResult>
+    <Credentials>
+      <AccessKeyId>ASIATESTSESSION</AccessKeyId>
+      <SecretAccessKey>temporary-secret</SecretAccessKey>
+      <SessionToken>temporary-session-token</SessionToken>
+      <Expiration>2099-01-01T00:00:00Z</Expiration>
+    </Credentials>
+  </GetSessionTokenResult>
+</GetSessionTokenResponse>"#;
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/xml")],
+            xml.to_string(),
+        )
+    }
+    let app = Router::new().route("/", post(sts));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    (port, handle)
+}
+
+fn cloud_aws_connection(h: &Harness, name: &str) {
+    futures::executor::block_on(async {
+        h.broker
+            .store
+            .add_secret(
+                &h.broker.workspace,
+                "AWS_ACCESS_KEY_ID",
+                Zeroizing::new(AWS_ACCESS_KEY.into()),
+            )
+            .await
+            .unwrap();
+        h.broker
+            .store
+            .add_secret(
+                &h.broker.workspace,
+                "AWS_SECRET_ACCESS_KEY",
+                Zeroizing::new(AWS_SECRET_KEY.into()),
+            )
+            .await
+            .unwrap();
+        h.broker
+            .store
+            .add_connection(
+                &h.broker.workspace,
+                ConnectionSpec {
+                    name: name.into(),
+                    config: ConnectionConfig::Cloud {
+                        provider: aka_core::types::CloudProvider::Aws {
+                            region: "us-east-1".into(),
+                            access_key_ref: "AWS_ACCESS_KEY_ID".into(),
+                            secret_key_ref: "AWS_SECRET_ACCESS_KEY".into(),
+                            session_token_ref: None,
+                            role_arn: None,
+                            external_id: None,
+                            session_ttl_secs: 900,
+                        },
+                    },
+                    secrets: vec![],
+                },
+            )
+            .await
+            .unwrap();
+    });
+}
+
+#[tokio::test]
+async fn cloud_aws_session_mints_temporary_credentials() {
+    let (sts_port, _sts) = mock_sts().await;
+    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    std::env::set_var(
+        "MULTITOOL_TEST_AWS_STS_URL",
+        format!("http://127.0.0.1:{sts_port}/"),
+    );
+    let h = harness(BrokerConfig::default()).await;
+    cloud_aws_connection(&h, "prod-aws");
+
+    let (status, body) = h
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "prod-aws", "request_id": "req-cloud-1" }),
+        )
+        .await;
+    std::env::remove_var("MULTITOOL_TEST_AWS_STS_URL");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["provider"], "aws");
+    assert_eq!(body["credentials"]["Version"], 1);
+    assert_eq!(body["credentials"]["AccessKeyId"], "ASIATESTSESSION");
+    assert_eq!(body["credentials"]["SecretAccessKey"], "temporary-secret");
+    assert_eq!(
+        body["credentials"]["SessionToken"],
+        "temporary-session-token"
+    );
+    assert_eq!(body["env"]["AWS_ACCESS_KEY_ID"], "ASIATESTSESSION");
+    assert_eq!(body["env"]["AWS_DEFAULT_REGION"], "us-east-1");
+    // Long-lived vault material must never appear in the response.
+    let relayed = body.to_string();
+    assert!(
+        !relayed.contains(AWS_SECRET_KEY),
+        "vaulted secret access key leaked: {relayed}"
+    );
+    // Handing out credentials is audited like any other executed call.
+    let minted: Vec<_> = h
+        .broker
+        .audit
+        .recent(20)
+        .into_iter()
+        .filter(|entry| entry.text == "aws session minted: prod-aws")
+        .collect();
+    assert_eq!(minted.len(), 1, "one mint, one activity entry");
+    assert_eq!(minted[0].connection.as_deref(), Some("prod-aws"));
+    assert_eq!(minted[0].outcome.as_deref(), Some("minted"));
+    assert_eq!(minted[0].fields["provider"], "aws");
+    assert!(
+        !serde_json::to_string(&minted[0]).unwrap().contains("temporary-secret"),
+        "minted credentials must not enter the activity log"
+    );
+}
+
+#[tokio::test]
+async fn cloud_connection_test_names_the_caller_identity() {
+    let (sts_port, _sts) = mock_sts().await;
+    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    std::env::set_var(
+        "MULTITOOL_TEST_AWS_STS_URL",
+        format!("http://127.0.0.1:{sts_port}/"),
+    );
+    let h = harness(BrokerConfig::default()).await;
+    cloud_aws_connection(&h, "prod-aws");
+    let conn = h
+        .broker
+        .store
+        .connection_by_name(&h.broker.workspace, "prod-aws")
+        .unwrap();
+    let report = h.broker.ui_test_connection(&conn.id).await.unwrap();
+    std::env::remove_var("MULTITOOL_TEST_AWS_STS_URL");
+    assert!(report.ok, "{}", report.detail);
+    // The point of the test surface: it names the wired-up identity, so a
+    // user can tell the production broker user from a personal key.
+    assert!(
+        report
+            .detail
+            .starts_with("aws session ok as arn:aws:iam::123456789012:user/multitool-broker"),
+        "{}",
+        report.detail
+    );
+}
+
+#[tokio::test]
+async fn cloud_session_refuses_non_cloud_connections() {
+    let up = upstream().await;
+    let h = harness(BrokerConfig::default()).await;
+    api_connection(&h, "github", up.port);
+    let (status, body) = h
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "github" }),
+        )
+        .await;
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["reason"], "wrong_connection_type");
+}
+
+/// The 15-minute-to-1-hour session window is enforced where the value
+/// enters: the broker's own mint clamps, but the raw stored TTL also rides
+/// the DTO to the profile-push loop, which would hand it to STS verbatim —
+/// so a connection outside the window must never save at all.
+#[tokio::test]
+async fn cloud_connections_refuse_out_of_range_session_ttls() {
+    let h = harness(BrokerConfig::default()).await;
+    for ttl in [0u64, 899, 3601, 129_600] {
+        let refused = h
+            .broker
+            .store
+            .add_connection(
+                &h.broker.workspace,
+                ConnectionSpec {
+                    name: format!("ttl-{ttl}"),
+                    config: ConnectionConfig::Cloud {
+                        provider: aka_core::types::CloudProvider::AwsProfile {
+                            region: None,
+                            profile: "default".into(),
+                            origin: "some-machine".into(),
+                            origin_label: None,
+                            role_arn: None,
+                            external_id: None,
+                            session_policy_arn: None,
+                            session_policy: None,
+                            session_ttl_secs: ttl,
+                        },
+                    },
+                    secrets: vec![],
+                },
+            )
+            .await;
+        assert!(refused.is_err(), "ttl {ttl} must not save");
+    }
+}
+
+/// Reuse: the broker mints from the operator's own ~/.aws profile, with no
+/// vaulted credential at all, and AWS — not the broker — bounds the session.
+#[tokio::test]
+async fn cloud_aws_profile_federates_with_a_session_policy() {
+    let (sts_port, _sts) = mock_sts().await;
+    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = dir.path().join("credentials");
+    std::fs::write(
+        &credentials,
+        format!(
+            "[work]\naws_access_key_id = {AWS_ACCESS_KEY}\naws_secret_access_key = {AWS_SECRET_KEY}\nregion = eu-west-1\n"
+        ),
+    )
+    .unwrap();
+    std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", &credentials);
+    std::env::set_var("AWS_CONFIG_FILE", dir.path().join("config-absent"));
+    std::env::set_var(
+        "MULTITOOL_TEST_AWS_STS_URL",
+        format!("http://127.0.0.1:{sts_port}/"),
+    );
+
+    let h = harness(BrokerConfig::default()).await;
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "my-aws".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::AwsProfile {
+                        region: None,
+                        profile: "work".into(),
+                        origin: h.broker.install_id().to_string(),
+                        origin_label: None,
+                        role_arn: None,
+                        external_id: None,
+                        session_policy_arn: Some(
+                            "arn:aws:iam::aws:policy/ReadOnlyAccess".into(),
+                        ),
+                        session_policy: None,
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = h
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "my-aws", "request_id": "req-cloud-profile" }),
+        )
+        .await;
+    let sent = STS_LAST_BODY
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
+        .unwrap_or_default();
+    std::env::remove_var("MULTITOOL_TEST_AWS_STS_URL");
+    std::env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
+    std::env::remove_var("AWS_CONFIG_FILE");
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["credentials"]["AccessKeyId"], "ASIATESTSESSION");
+    // The profile's own region carried through without being configured.
+    assert_eq!(body["env"]["AWS_DEFAULT_REGION"], "eu-west-1");
+    // The leash is a real STS parameter, not broker-side filtering: no role
+    // means GetFederationToken, whose session is the intersection of the
+    // caller's access and this policy.
+    assert!(sent.contains("Action=GetFederationToken"), "{sent}");
+    assert!(
+        sent.contains("PolicyArns.member.1.arn=arn%3Aaws%3Aiam%3A%3Aaws%3Apolicy%2FReadOnlyAccess"),
+        "{sent}"
+    );
+    // The profile's long-lived key never reaches the agent.
+    let relayed = body.to_string();
+    assert!(!relayed.contains(AWS_SECRET_KEY), "profile key leaked: {relayed}");
+}
+
+/// A profile that only signs in through Identity Center cannot be minted
+/// from: the broker cannot read that cached session, and says so instead of
+/// failing at STS with something cryptic.
+#[tokio::test]
+async fn cloud_aws_profile_refuses_sso_profiles() {
+    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    std::fs::write(
+        &config,
+        "[profile sso-admin]\nsso_start_url = https://example.awsapps.com/start\nregion = us-west-2\n",
+    )
+    .unwrap();
+    std::env::set_var("AWS_CONFIG_FILE", &config);
+    std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", dir.path().join("creds-absent"));
+
+    let h = harness(BrokerConfig::default()).await;
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "sso-aws".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::AwsProfile {
+                        region: None,
+                        profile: "sso-admin".into(),
+                        origin: h.broker.install_id().to_string(),
+                        origin_label: None,
+                        role_arn: None,
+                        external_id: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = h
+        .post("/v1/cloud/session", json!({ "connection": "sso-aws" }))
+        .await;
+    std::env::remove_var("AWS_CONFIG_FILE");
+    std::env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body.to_string().contains("Identity Center"),
+        "the refusal should name the cause: {body}"
+    );
+}
+
+/// The guard: a connection whose files live on another machine must never
+/// be served by reading this broker's own ~/.aws, which is another account.
+#[tokio::test]
+async fn cloud_aws_profile_refuses_another_machines_files() {
+    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = dir.path().join("credentials");
+    // This broker *can* read a profile by that name — that is the trap.
+    std::fs::write(
+        &credentials,
+        format!(
+            "[work]\naws_access_key_id = {AWS_ACCESS_KEY}\naws_secret_access_key = {AWS_SECRET_KEY}\nregion = eu-west-1\n"
+        ),
+    )
+    .unwrap();
+    std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", &credentials);
+    std::env::set_var("AWS_CONFIG_FILE", dir.path().join("config-absent"));
+
+    let h = harness(BrokerConfig::default()).await;
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "someone-elses".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::AwsProfile {
+                        region: None,
+                        profile: "work".into(),
+                        origin: "a-different-machine".into(),
+                        origin_label: Some("Ray's laptop".into()),
+                        role_arn: None,
+                        external_id: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = h
+        .post("/v1/cloud/session", json!({ "connection": "someone-elses" }))
+        .await;
+    std::env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
+    std::env::remove_var("AWS_CONFIG_FILE");
+    assert_eq!(status, 400, "{body}");
+    let text = body.to_string();
+    // It names where to go, rather than quietly minting the wrong identity.
+    assert!(text.contains("Ray's laptop"), "{text}");
+    assert!(!text.contains(AWS_SECRET_KEY), "local keys leaked: {text}");
+}
+
+/// ...and is served instead by whatever that machine pushed, until it
+/// expires.
+#[tokio::test]
+async fn cloud_aws_profile_serves_a_pushed_session() {
+    let h = harness(BrokerConfig::default()).await;
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "pushed-aws".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::AwsProfile {
+                        region: None,
+                        profile: "work".into(),
+                        origin: "a-different-machine".into(),
+                        origin_label: Some("Ray's laptop".into()),
+                        role_arn: None,
+                        external_id: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let conn = h
+        .broker
+        .store
+        .connection_by_name(&h.broker.workspace, "pushed-aws")
+        .unwrap();
+
+    let expires_at = (chrono::Utc::now() + chrono::TimeDelta::minutes(15)).to_rfc3339();
+    let manage = aka_core::manage::LocalBackend::new(h.broker.clone());
+    aka_core::manage::ManagementBackend::push_cloud_session(
+        &manage,
+        aka_api::CloudSessionPushDto {
+            connection_id: conn.id.to_string(),
+            expires_at: expires_at.clone(),
+            expires_in_seconds: 900,
+            provider: "aws".into(),
+            env: vec![("AWS_ACCESS_KEY_ID".into(), "ASIAPUSHED".into())],
+            credentials: json!({ "Version": 1, "AccessKeyId": "ASIAPUSHED" }),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = h
+        .post("/v1/cloud/session", json!({ "connection": "pushed-aws" }))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["credentials"]["AccessKeyId"], "ASIAPUSHED");
+    // Remaining time is recomputed on the way out, not replayed from the
+    // push: a session served ten minutes later has ten minutes less.
+    assert!(body["expires_in_seconds"].as_u64().unwrap() <= 900);
+
+    // An expiring push is refused outright rather than stored to be served
+    // for the three seconds it has left.
+    let stale = aka_core::manage::ManagementBackend::push_cloud_session(
+        &manage,
+        aka_api::CloudSessionPushDto {
+            connection_id: conn.id.to_string(),
+            expires_at: (chrono::Utc::now() + chrono::TimeDelta::seconds(3)).to_rfc3339(),
+            expires_in_seconds: 3,
+            provider: "aws".into(),
+            env: vec![],
+            credentials: json!({}),
+        },
+    )
+    .await;
+    assert!(stale.is_err(), "an already-expiring push must be refused");
+
+    // A connection this broker mints for itself takes no pushes: storing
+    // one would never be read, and the silence would read as success.
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "ours".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::AwsProfile {
+                        region: None,
+                        profile: "work".into(),
+                        origin: h.broker.install_id().to_string(),
+                        origin_label: None,
+                        role_arn: None,
+                        external_id: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let ours = h
+        .broker
+        .store
+        .connection_by_name(&h.broker.workspace, "ours")
+        .unwrap();
+    let refused = aka_core::manage::ManagementBackend::push_cloud_session(
+        &manage,
+        aka_api::CloudSessionPushDto {
+            connection_id: ours.id.to_string(),
+            expires_at,
+            expires_in_seconds: 900,
+            provider: "aws".into(),
+            env: vec![],
+            credentials: json!({}),
+        },
+    )
+    .await;
+    assert!(refused.is_err(), "a self-minting connection must refuse pushes");
+}
+
+/// The list says which state a pushed connection is in, and deleting it
+/// takes the live credentials out of memory rather than leaving them to
+/// lapse on their own.
+#[tokio::test]
+async fn pushed_sessions_are_reported_and_dropped_with_the_connection() {
+    let h = harness(BrokerConfig::default()).await;
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "elsewhere-aws".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::AwsProfile {
+                        region: None,
+                        profile: "work".into(),
+                        origin: "a-different-machine".into(),
+                        origin_label: Some("Ray's laptop".into()),
+                        role_arn: None,
+                        external_id: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let conn = h
+        .broker
+        .store
+        .connection_by_name(&h.broker.workspace, "elsewhere-aws")
+        .unwrap();
+    let manage = aka_core::manage::LocalBackend::new(h.broker.clone());
+
+    // Before any push: the tool exists but nothing can use it, and the list
+    // says so rather than looking healthy.
+    let dto = aka_core::manage::connection_dto(&h.broker, &conn);
+    let cloud = dto.cloud.as_ref().unwrap();
+    assert!(cloud.minted_elsewhere);
+    assert_eq!(cloud.pushed_expires_in_seconds, None);
+    assert_eq!(cloud.source_origin_label.as_deref(), Some("Ray's laptop"));
+
+    aka_core::manage::ManagementBackend::push_cloud_session(
+        &manage,
+        aka_api::CloudSessionPushDto {
+            connection_id: conn.id.to_string(),
+            expires_at: (chrono::Utc::now() + chrono::TimeDelta::minutes(15)).to_rfc3339(),
+            expires_in_seconds: 900,
+            provider: "aws".into(),
+            env: vec![],
+            credentials: json!({ "AccessKeyId": "ASIAPUSHED" }),
+        },
+    )
+    .await
+    .unwrap();
+    let supplied = aka_core::manage::connection_dto(&h.broker, &conn);
+    let remaining = supplied.cloud.unwrap().pushed_expires_in_seconds.unwrap();
+    assert!((840..=900).contains(&remaining), "{remaining}");
+
+    h.broker.ui_delete_connection(&conn.id).await.unwrap();
+    assert_eq!(
+        h.broker.pushed_cloud_sessions.remaining_seconds(conn.id),
+        None,
+        "deleting the tool must drop the credentials it was serving"
+    );
+}
+
+async fn mock_entra() -> (u16, tokio::task::JoinHandle<()>) {
+    async fn token() -> axum::Json<Value> {
+        axum::Json(json!({
+            "token_type": "Bearer",
+            "expires_in": 3599,
+            "access_token": "eyJazure-test-token",
+        }))
+    }
+    let app = Router::new().route("/oauth2/v2.0/token", post(token));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    (port, handle)
+}
+
+fn cloud_azure_connection(h: &Harness, name: &str) {
+    futures::executor::block_on(async {
+        h.broker
+            .store
+            .add_secret(
+                &h.broker.workspace,
+                "AZURE_CLIENT_SECRET",
+                Zeroizing::new("super-secret-client-value".into()),
+            )
+            .await
+            .unwrap();
+        h.broker
+            .store
+            .add_connection(
+                &h.broker.workspace,
+                ConnectionSpec {
+                    name: name.into(),
+                    config: ConnectionConfig::Cloud {
+                        provider: aka_core::types::CloudProvider::Azure {
+                            tenant_id: "tenant-guid".into(),
+                            client_id: "app-guid".into(),
+                            client_secret_ref: "AZURE_CLIENT_SECRET".into(),
+                            subscription_id: Some("sub-guid".into()),
+                            scope: "https://management.azure.com/.default".into(),
+                            session_ttl_secs: 900,
+                        },
+                    },
+                    secrets: vec![],
+                },
+            )
+            .await
+            .unwrap();
+    });
+}
+
+#[tokio::test]
+async fn cloud_azure_session_mints_access_token() {
+    let (port, _server) = mock_entra().await;
+    std::env::set_var(
+        "MULTITOOL_TEST_AZURE_TOKEN_URL",
+        format!("http://127.0.0.1:{port}/oauth2/v2.0/token"),
+    );
+    let h = harness(BrokerConfig::default()).await;
+    cloud_azure_connection(&h, "prod-azure");
+    let (status, body) = h
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "prod-azure", "request_id": "req-azure-1" }),
+        )
+        .await;
+    std::env::remove_var("MULTITOOL_TEST_AZURE_TOKEN_URL");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["provider"], "azure");
+    assert_eq!(body["credentials"]["access_token"], "eyJazure-test-token");
+    assert_eq!(body["env"]["AZURE_ACCESS_TOKEN"], "eyJazure-test-token");
+    assert_eq!(body["env"]["AZURE_TENANT_ID"], "tenant-guid");
+    assert_eq!(body["env"]["AZURE_SUBSCRIPTION_ID"], "sub-guid");
+    let relayed = body.to_string();
+    assert!(
+        !relayed.contains("super-secret-client-value"),
+        "client secret leaked: {relayed}"
+    );
+}
+
+#[tokio::test]
+async fn cloud_gcp_session_mints_access_token() {
+    let exchanges = Arc::new(AtomicUsize::new(0));
+    let counted = exchanges.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let token_port = listener.local_addr().unwrap().port();
+    let token_endpoint = Router::new().route(
+        "/token",
+        post(move |body: String| {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                assert!(body.contains("jwt-bearer"), "{body}");
+                axum::Json(json!({
+                    "access_token": "ya29.cloud-session-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                }))
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, token_endpoint).await;
+    });
+
+    let test_key_pem = {
+        use rsa::pkcs8::EncodePrivateKey as _;
+        let key = rsa::RsaPrivateKey::new(&mut ssh_key::rand_core::OsRng, 2048).unwrap();
+        use base64::Engine as _;
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            base64::engine::general_purpose::STANDARD
+                .encode(key.to_pkcs8_der().unwrap().as_bytes())
+        )
+    };
+    let key_json = json!({
+        "type": "service_account",
+        "client_email": "agent@project.iam.gserviceaccount.com",
+        "private_key": test_key_pem,
+        "token_uri": format!("http://127.0.0.1:{token_port}/token"),
+    })
+    .to_string();
+
+    let h = harness(BrokerConfig::default()).await;
+    h.broker
+        .store
+        .add_secret(
+            &h.broker.workspace,
+            "GCP_SA_KEY",
+            Zeroizing::new(key_json),
+        )
+        .await
+        .unwrap();
+    h.broker
+        .store
+        .add_connection(
+            &h.broker.workspace,
+            ConnectionSpec {
+                name: "prod-gcp".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::Gcp {
+                        key_ref: "GCP_SA_KEY".into(),
+                        scope: "https://www.googleapis.com/auth/cloud-platform".into(),
+                        project: Some("my-project".into()),
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = h
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "prod-gcp", "request_id": "req-gcp-1" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["provider"], "gcp");
+    assert_eq!(
+        body["credentials"]["access_token"],
+        "ya29.cloud-session-token"
+    );
+    assert_eq!(
+        body["env"]["CLOUDSDK_AUTH_ACCESS_TOKEN"],
+        "ya29.cloud-session-token"
+    );
+    assert_eq!(body["env"]["CLOUDSDK_CORE_PROJECT"], "my-project");
+    let first_expiry = body["expires_at"].clone();
+    let (cached_status, cached) = h
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "prod-gcp", "request_id": "req-gcp-2" }),
+        )
+        .await;
+    assert_eq!(cached_status, 200, "{cached}");
+    assert_eq!(cached["expires_at"], first_expiry);
+    assert!(cached["expires_in_seconds"].as_u64().unwrap() <= 3600);
+    assert_eq!(exchanges.load(Ordering::SeqCst), 1, "second mint used the cache");
+    let relayed = body.to_string();
+    assert!(
+        !relayed.contains("BEGIN PRIVATE KEY"),
+        "service-account private key leaked: {relayed}"
+    );
+}

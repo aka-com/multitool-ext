@@ -107,6 +107,7 @@ COMMON WORKFLOWS
   Headless broker  multitool serve [--listen …]
   Postgres         eval \"$(multitool dsn <conn>)\" && psql
   SSH              export SSH_AUTH_SOCK=\"$(multitool ssh <conn>)\"
+  Cloud            eval \"$(multitool cloud env <conn>)\"   # aws / az / gcloud
   Ops              multitool status | key | activity | requests
 
 See also: multitool <command> --help
@@ -330,6 +331,16 @@ enum Command {
         /// Attribution only, never authorization.
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
+    },
+    /// Mint a short-lived cloud CLI session.
+    ///
+    /// Cloud connections hold long-lived AWS/Azure/GCP identity in the vault.
+    /// These subcommands mint temporary credentials and never print the
+    /// vaulted long-lived keys. Already-issued sessions cannot be revoked by
+    /// Multitool — short TTL is the bound.
+    Cloud {
+        #[command(subcommand)]
+        command: CloudCommand,
     },
     /// Agent socket for auth-required direct endpoints.
     ///
@@ -940,6 +951,54 @@ struct ConnAdd {
     /// api: PEM private key for --client-cert (PKCS#8, PKCS#1, or SEC1).
     #[arg(long, requires = "client_cert")]
     client_key: Option<String>,
+    /// cloud: provider (`aws`, `azure`, or `gcp`). Required for --kind cloud.
+    #[arg(long)]
+    cloud_provider: Option<String>,
+    /// cloud/aws: default region (e.g. us-east-1).
+    #[arg(long)]
+    cloud_region: Option<String>,
+    /// cloud/aws: vault secret name holding the access key ID.
+    #[arg(long)]
+    cloud_access_key_ref: Option<String>,
+    /// cloud/aws: vault secret name holding the secret access key.
+    #[arg(long)]
+    cloud_secret_key_ref: Option<String>,
+    /// cloud/aws: optional vault secret name holding a session token
+    /// (requires --cloud-role-arn so Multitool can AssumeRole).
+    #[arg(long)]
+    cloud_session_token_ref: Option<String>,
+    /// cloud/aws: when set, AssumeRole into this ARN instead of GetSessionToken.
+    #[arg(long)]
+    cloud_role_arn: Option<String>,
+    /// cloud/aws: optional ExternalId for AssumeRole.
+    #[arg(long)]
+    cloud_external_id: Option<String>,
+    /// cloud/azure: Entra tenant ID (GUID or domain).
+    #[arg(long)]
+    cloud_tenant_id: Option<String>,
+    /// cloud/azure: application (client) ID.
+    #[arg(long)]
+    cloud_client_id: Option<String>,
+    /// cloud/azure: vault secret name holding the client secret.
+    #[arg(long)]
+    cloud_client_secret_ref: Option<String>,
+    /// cloud/azure: optional default subscription ID.
+    #[arg(long)]
+    cloud_subscription_id: Option<String>,
+    /// cloud/azure|gcp: OAuth scope (azure default:
+    /// https://management.azure.com/.default; required for gcp).
+    #[arg(long)]
+    cloud_scope: Option<String>,
+    /// cloud/gcp: vault secret name holding the service-account JSON key.
+    #[arg(long)]
+    cloud_gcp_key_ref: Option<String>,
+    /// cloud/gcp: optional default project id for gcloud / client libraries.
+    #[arg(long)]
+    cloud_project: Option<String>,
+    /// cloud: requested session TTL in seconds (900–3600, default 900).
+    /// Azure/GCP use the IdP's expires_in; this is informational there.
+    #[arg(long)]
+    cloud_session_ttl: Option<u64>,
     /// Operate on a broker rooted here instead of the default layout.
     #[arg(long)]
     root: Option<PathBuf>,
@@ -957,6 +1016,65 @@ enum ConnKind {
     Api,
     Pg,
     Ssh,
+    Cloud,
+}
+
+#[derive(Subcommand)]
+enum CloudCommand {
+    /// Print shell exports for stock cloud CLIs (`eval "$(multitool cloud env …)"`).
+    Env {
+        /// The cloud connection's name.
+        connection: String,
+        /// Open against a broker rooted here instead of the default layout.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Label this client in the user's activity log.
+        #[arg(long, value_parser = parse_client_label)]
+        client: Option<String>,
+    },
+    /// Print raw credentials for credential_process / scripts.
+    ///
+    /// Default format is provider-native: AWS prints credential_process JSON
+    /// (Version 1). Use --format env for KEY=value lines, or json for the full
+    /// broker response.
+    Creds {
+        /// The cloud connection's name.
+        connection: String,
+        /// Output shape: `native` (default), `env`, or `json`.
+        #[arg(long, value_enum, default_value_t = CloudCredsFormat::Native)]
+        format: CloudCredsFormat,
+        /// Open against a broker rooted here instead of the default layout.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Label this client in the user's activity log.
+        #[arg(long, value_parser = parse_client_label)]
+        client: Option<String>,
+    },
+    /// Print an AWS shared-config profile stanza for credential_process.
+    Install {
+        /// The cloud connection's name.
+        connection: String,
+        /// Profile name to emit (default: multitool-<connection>).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Open against a broker rooted here instead of the default layout.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Label this client in the user's activity log (unused for install
+        /// text, kept for consistency with other cloud subcommands).
+        #[arg(long, value_parser = parse_client_label)]
+        client: Option<String>,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum CloudCredsFormat {
+    /// Provider-native blob (AWS credential_process JSON).
+    Native,
+    /// Shell KEY=value lines (not `export`).
+    Env,
+    /// Full broker `/v1/cloud/session` JSON body.
+    Json,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1132,6 +1250,25 @@ fn run_cli() {
             root,
             client,
         } => cmd_ssh(connection, root, client, json),
+        Command::Cloud { command } => match command {
+            CloudCommand::Env {
+                connection,
+                root,
+                client,
+            } => cmd_cloud_env(connection, root, client, json),
+            CloudCommand::Creds {
+                connection,
+                format,
+                root,
+                client,
+            } => cmd_cloud_creds(connection, format, root, client, json),
+            CloudCommand::Install {
+                connection,
+                profile,
+                root,
+                client: _,
+            } => cmd_cloud_install(connection, profile, root, json),
+        },
         Command::SshAgent {
             connection,
             root,
@@ -1942,10 +2079,10 @@ fn cmd_conn_add(args: ConnAdd) {
     };
     let managed =
         management_backend_with_create(args.root.clone(), args.broker.clone(), args.create_root);
-    // pg/ssh bind at most one secret by name; api derives its secrets
-    // from the template's refs inside add_connection.
+    // pg/ssh bind at most one secret by name; api and cloud derive theirs
+    // from template / provider refs inside add_connection.
     let secrets = match (&args.secret, args.kind) {
-        (_, ConnKind::Api) => Vec::new(),
+        (_, ConnKind::Api | ConnKind::Cloud) => Vec::new(),
         (Some(name), _) => vec![dto_id(&secret_dto(&managed, name).id)],
         (None, _) => Vec::new(),
     };
@@ -2056,6 +2193,7 @@ fn conn_config(args: &ConnAdd) -> Result<ConnectionConfig, String> {
                 ("ca-bundle", args.ca_bundle.is_some()),
                 ("mcp-path", args.mcp_path.is_some()),
                 ("test-path", args.test_path.is_some()),
+                ("cloud-provider", args.cloud_provider.is_some()),
             ])?;
             require("secret", &args.secret)?;
             Ok(ConnectionConfig::Ssh {
@@ -2067,6 +2205,74 @@ fn conn_config(args: &ConnAdd) -> Result<ConnectionConfig, String> {
                 // first agent connection after a trust prompt.
                 host_key_fingerprint: args.host_key_fingerprint.clone().unwrap_or_default(),
             })
+        }
+        ConnKind::Cloud => {
+            forbid(&[
+                ("host", args.host.is_some()),
+                ("scheme", args.scheme.is_some()),
+                ("port", args.port.is_some()),
+                ("template", args.template.is_some()),
+                ("dbname", args.dbname.is_some()),
+                ("user", args.user.is_some()),
+                ("secret", args.secret.is_some()),
+                ("sslmode", args.sslmode.is_some()),
+                ("ca-bundle", args.ca_bundle.is_some()),
+                ("mcp-path", args.mcp_path.is_some()),
+                ("test-path", args.test_path.is_some()),
+                ("host-key-fingerprint", args.host_key_fingerprint.is_some()),
+                ("sigv4-region", args.sigv4_region.is_some()),
+                ("gcp-key-ref", args.gcp_key_ref.is_some()),
+                ("client-cert", args.client_cert.is_some()),
+            ])?;
+            let provider = require("cloud-provider", &args.cloud_provider)?;
+            let ttl = args
+                .cloud_session_ttl
+                .unwrap_or(aka_core::types::DEFAULT_CLOUD_SESSION_TTL_SECS);
+            match provider.as_str() {
+                "aws" => Ok(ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::Aws {
+                        region: require("cloud-region", &args.cloud_region)?,
+                        access_key_ref: require(
+                            "cloud-access-key-ref",
+                            &args.cloud_access_key_ref,
+                        )?,
+                        secret_key_ref: require(
+                            "cloud-secret-key-ref",
+                            &args.cloud_secret_key_ref,
+                        )?,
+                        session_token_ref: args.cloud_session_token_ref.clone(),
+                        role_arn: args.cloud_role_arn.clone(),
+                        external_id: args.cloud_external_id.clone(),
+                        session_ttl_secs: ttl,
+                    },
+                }),
+                "azure" => Ok(ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::Azure {
+                        tenant_id: require("cloud-tenant-id", &args.cloud_tenant_id)?,
+                        client_id: require("cloud-client-id", &args.cloud_client_id)?,
+                        client_secret_ref: require(
+                            "cloud-client-secret-ref",
+                            &args.cloud_client_secret_ref,
+                        )?,
+                        subscription_id: args.cloud_subscription_id.clone(),
+                        scope: args.cloud_scope.clone().unwrap_or_else(|| {
+                            "https://management.azure.com/.default".into()
+                        }),
+                        session_ttl_secs: ttl,
+                    },
+                }),
+                "gcp" => Ok(ConnectionConfig::Cloud {
+                    provider: aka_core::types::CloudProvider::Gcp {
+                        key_ref: require("cloud-gcp-key-ref", &args.cloud_gcp_key_ref)?,
+                        scope: require("cloud-scope", &args.cloud_scope)?,
+                        project: args.cloud_project.clone(),
+                        session_ttl_secs: ttl,
+                    },
+                }),
+                other => Err(format!(
+                    "unknown cloud provider {other:?} (supported: aws, azure, gcp)"
+                )),
+            }
         }
     }
 }
@@ -3519,6 +3725,13 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+/// Quote one token in an AWS shared-config `credential_process` command.
+/// AWS parses this line itself, so use its documented double-quoted form
+/// rather than POSIX-shell quoting.
+fn aws_process_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn pg_env_exports(dsn: &str, ticket: &str) -> Result<String, String> {
     let parsed = url::Url::parse(dsn).map_err(|e| format!("invalid DSN from the broker: {e}"))?;
     let host = parsed
@@ -3691,6 +3904,239 @@ fn ssh_config_block(body: &serde_json::Value, auth_sock: &str, destination: &str
         block.push(format!("    {key} {value}"));
     }
     block
+}
+
+fn cmd_cloud_env(
+    connection: String,
+    root: Option<PathBuf>,
+    client: Option<String>,
+    json: bool,
+) {
+    let client = Some(client.unwrap_or_else(|| "multitool-cloud".to_string()));
+    let body = open_session("/v1/cloud/session", &connection, root, client);
+    if json {
+        print_json(&body);
+        return;
+    }
+    if let Some(secs) = body["expires_in_seconds"].as_u64() {
+        eprintln!(
+            "  session expires in {secs}s — re-run before then; Multitool cannot revoke minted credentials"
+        );
+    }
+    let Some(env) = body["env"].as_object() else {
+        die("the broker's response carried no env map");
+    };
+    for (name, value) in env {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        // This output is eval'd. shell_quote makes a value inert; a name sits
+        // where the shell expects a name, so the only safe handling of one
+        // that is not a name is to refuse the whole block rather than emit a
+        // partial environment the caller would believe in.
+        if !is_env_var_name(name) {
+            die(format!(
+                "the broker returned {name:?} as an environment variable name; \
+                 refusing to emit shell code from it"
+            ));
+        }
+        // Empty AWS_PROFILE clears a sticky profile so minted keys win.
+        if value.is_empty() {
+            println!("unset {name}");
+        } else {
+            println!("export {name}={}", shell_quote(value));
+        }
+    }
+}
+
+/// Same rule the broker applies to a pushed session
+/// ([`aka_core::cloud::is_env_var_name`]), re-checked here because this is
+/// the process that actually hands the line to a shell.
+fn is_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn cmd_cloud_creds(
+    connection: String,
+    format: CloudCredsFormat,
+    root: Option<PathBuf>,
+    client: Option<String>,
+    json: bool,
+) {
+    if json && format != CloudCredsFormat::Json {
+        die_with(
+            ExitCode::Usage,
+            "--json is equivalent to --format json; do not combine them with another --format",
+        );
+    }
+    let client = Some(client.unwrap_or_else(|| "multitool-cloud".to_string()));
+    let body = open_session("/v1/cloud/session", &connection, root, client);
+    let format = if json {
+        CloudCredsFormat::Json
+    } else {
+        format
+    };
+    match format {
+        CloudCredsFormat::Json => print_json(&body),
+        CloudCredsFormat::Env => {
+            let Some(env) = body["env"].as_object() else {
+                die("the broker's response carried no env map");
+            };
+            for (name, value) in env {
+                let Some(value) = value.as_str() else {
+                    continue;
+                };
+                // Not eval'd, but this feeds .env files and `env -S`-style
+                // readers; hold it to the same shape so the two formats
+                // never disagree about what a session exports.
+                if !is_env_var_name(name) {
+                    die(format!(
+                        "the broker returned {name:?} as an environment variable name"
+                    ));
+                }
+                if !value.is_empty() {
+                    println!("{name}={value}");
+                }
+            }
+        }
+        CloudCredsFormat::Native => {
+            let creds = &body["credentials"];
+            if creds.is_null() {
+                die("the broker's response carried no credentials");
+            }
+            // credential_process and similar hooks want pure JSON on stdout.
+            println!(
+                "{}",
+                serde_json::to_string(creds).unwrap_or_else(|e| die(e.to_string()))
+            );
+        }
+    }
+}
+
+fn cmd_cloud_install(
+    connection: String,
+    profile: Option<String>,
+    root: Option<PathBuf>,
+    json: bool,
+) {
+    // Install only needs to know the connection exists and which provider it
+    // is; minting is deferred to credential_process at CLI use time.
+    let managed = management_backend(root.clone(), None);
+    let dto = conn_dto(&managed, &connection);
+    if dto.kind != "cloud" {
+        die_with(
+            ExitCode::Usage,
+            format!(
+                "{connection} is a {} connection; cloud install only applies to cloud connections",
+                dto.kind
+            ),
+        );
+    }
+    let profile_name = profile.unwrap_or_else(|| {
+        let slug: String = connection
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        format!("multitool-{slug}")
+    });
+    // Resolve the multitool binary path for a durable credential_process line.
+    let exe = std::env::current_exe()
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "multitool".into());
+    let mut process = format!(
+        "{} cloud creds {}",
+        aws_process_quote(&exe),
+        aws_process_quote(&connection)
+    );
+    if let Some(root) = &root {
+        process.push_str(&format!(
+            " --root {}",
+            aws_process_quote(&root.display().to_string())
+        ));
+    }
+    let provider = dto.scheme.as_deref().unwrap_or("");
+    match provider {
+        // A profile-reuse connection may pin no region at all (host is bare
+        // "aws"): the minted credentials carry the profile's own region, so
+        // the emitted stanza simply omits the region line.
+        "aws" | "" if dto.host.as_deref().is_some_and(|h| h == "aws" || h.starts_with("aws:")) => {
+            let region = dto
+                .host
+                .as_deref()
+                .and_then(|h| h.strip_prefix("aws:"))
+                .filter(|r| !r.is_empty());
+            let region_line = region
+                .map(|region| format!("region = {region}\n"))
+                .unwrap_or_default();
+            if json {
+                print_json(&serde_json::json!({
+                    "provider": "aws",
+                    "profile": profile_name,
+                    "region": region,
+                    "credential_process": process,
+                    "config": format!(
+                        "[profile {profile_name}]\n{region_line}credential_process = {process}\n"
+                    ),
+                }));
+                return;
+            }
+            println!("# Append to ~/.aws/config (or AWS_CONFIG_FILE)");
+            println!("[profile {profile_name}]");
+            print!("{region_line}");
+            println!("credential_process = {process}");
+            eprintln!("  then: export AWS_PROFILE={profile_name}");
+        }
+        "azure" | "gcp" => {
+            let mut env_cmd = format!(
+                "{} cloud env {}",
+                shell_quote(&exe),
+                shell_quote(&connection)
+            );
+            if let Some(root) = &root {
+                env_cmd.push_str(&format!(
+                    " --root {}",
+                    shell_quote(&root.display().to_string())
+                ));
+            }
+            if json {
+                print_json(&serde_json::json!({
+                    "provider": provider,
+                    "shell": format!("eval \"$({env_cmd})\""),
+                }));
+                return;
+            }
+            match provider {
+                "azure" => {
+                    println!("# Short-lived Azure access token (client secret stays in Multitool)");
+                    println!("eval \"$({env_cmd})\"");
+                    println!("# Then e.g.:");
+                    println!(
+                        "# az rest --method get --url https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID?api-version=2020-01-01 --headers Authorization=\"Bearer $AZURE_ACCESS_TOKEN\""
+                    );
+                }
+                _ => {
+                    println!("# Short-lived GCP access token (service-account key stays in Multitool)");
+                    println!("eval \"$({env_cmd})\"");
+                    println!("# CLOUDSDK_AUTH_ACCESS_TOKEN is set for gcloud; e.g.:");
+                    println!("# gcloud storage ls");
+                }
+            }
+            eprintln!("  re-run before the token expires; Multitool cannot revoke minted tokens");
+        }
+        other => die_with(
+            ExitCode::Usage,
+            format!("cloud install does not support provider {other:?}"),
+        ),
+    }
 }
 
 fn cmd_ssh(connection: String, root: Option<PathBuf>, client: Option<String>, json: bool) {
@@ -5137,6 +5583,20 @@ mod tests {
     }
 
     #[test]
+    fn aws_credential_process_quotes_paths_and_connection_names() {
+        let command = format!(
+            "{} cloud creds {} --root {}",
+            aws_process_quote("/Applications/Multitool Preview/multitool"),
+            aws_process_quote("Production AWS"),
+            aws_process_quote("/tmp/vault \"copy\"")
+        );
+        assert_eq!(
+            command,
+            "\"/Applications/Multitool Preview/multitool\" cloud creds \"Production AWS\" --root \"/tmp/vault \\\"copy\\\"\""
+        );
+    }
+
+    #[test]
     fn secret_input_strips_one_line_ending_unless_raw() {
         assert_eq!(normalize_secret_input("secret\n".into(), false), "secret");
         assert_eq!(normalize_secret_input("secret\r\n".into(), false), "secret");
@@ -5483,10 +5943,48 @@ mod tests {
             gcp_scope: None,
             client_cert: None,
             client_key: None,
+            cloud_provider: None,
+            cloud_region: None,
+            cloud_access_key_ref: None,
+            cloud_secret_key_ref: None,
+            cloud_session_token_ref: None,
+            cloud_role_arn: None,
+            cloud_external_id: None,
+            cloud_tenant_id: None,
+            cloud_client_id: None,
+            cloud_client_secret_ref: None,
+            cloud_subscription_id: None,
+            cloud_scope: None,
+            cloud_gcp_key_ref: None,
+            cloud_project: None,
+            cloud_session_ttl: None,
             root: None,
             create_root: false,
             broker: None,
         }
+    }
+
+    #[test]
+    fn cloud_aws_builds_a_provider_config() {
+        let mut a = args(ConnKind::Cloud);
+        assert!(conn_config(&a).unwrap_err().contains("--cloud-provider"));
+        a.cloud_provider = Some("aws".into());
+        assert!(conn_config(&a).unwrap_err().contains("--cloud-region"));
+        a.cloud_region = Some("us-east-1".into());
+        a.cloud_access_key_ref = Some("AWS_ACCESS_KEY_ID".into());
+        a.cloud_secret_key_ref = Some("AWS_SECRET_ACCESS_KEY".into());
+        a.cloud_role_arn = Some("arn:aws:iam::123:role/Agent".into());
+        let config = conn_config(&a).unwrap();
+        assert!(matches!(
+            config,
+            ConnectionConfig::Cloud {
+                provider: aka_core::types::CloudProvider::Aws {
+                    ref region,
+                    ref role_arn,
+                    ..
+                }
+            } if region == "us-east-1" && role_arn.as_deref() == Some("arn:aws:iam::123:role/Agent")
+        ));
     }
 
     #[test]
@@ -5767,6 +6265,7 @@ mod tests {
             signer: None,
             client_cert_path: None,
             client_key_path: None,
+            cloud: None,
         }
     }
 

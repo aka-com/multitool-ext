@@ -30,6 +30,7 @@ fn kind_label(kind: ConnectionKind) -> &'static str {
         ConnectionKind::Pg => "Postgres",
         ConnectionKind::Ssh => "SSH",
         ConnectionKind::Api => "API",
+        ConnectionKind::Cloud => "Cloud",
     }
 }
 

@@ -158,6 +158,9 @@ impl ApprovalRequest {
         let unit = match connection.kind() {
             ConnectionKind::Pg => ApprovalUnit::Session,
             ConnectionKind::Ssh => ApprovalUnit::Login,
+            // One decision covers one minted credential set and everything
+            // done with it until expiry.
+            ConnectionKind::Cloud => ApprovalUnit::Session,
             _ => ApprovalUnit::Request,
         };
         Self {

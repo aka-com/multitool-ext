@@ -6,7 +6,8 @@
 // the progress rules are testable on their own.
 
 import { catalogEntryById, connectionsForEntry } from './catalog';
-import type { ConnectionSummary, ConnectionType } from './types';
+import { cloudSetupCommand } from './cloud-setup';
+import type { CloudInfo, ConnectionSummary, ConnectionType } from './types';
 
 export interface StartOption {
   id: string;
@@ -95,6 +96,37 @@ export const START_OPTIONS: StartOption[] = [
     unit: 'Sentry organization',
     taskBody: `summarize the highest-impact unresolved issues from this week.`,
   },
+  // Cloud rows sit with the other infrastructure they resemble: something you
+  // point at, reached by a stock CLI. Their tasks are read-only inventory
+  // questions — the first thing anyone actually wants, and safe to paste into
+  // an agent that has just been handed live cloud credentials.
+  {
+    id: 'aws-cli',
+    label: 'AWS CLI',
+    icon: 'cloud',
+    connType: 'cloud',
+    catalogId: 'aws-cli',
+    unit: 'AWS account',
+    taskBody: `list my EC2 instances and S3 buckets with their regions, and flag any bucket that allows public access.`,
+  },
+  {
+    id: 'gcp-cli',
+    label: 'Google Cloud CLI',
+    icon: 'cloud',
+    connType: 'cloud',
+    catalogId: 'gcp-cli',
+    unit: 'Google Cloud project',
+    taskBody: `list the Compute Engine instances and storage buckets in this project, and flag anything running that looks idle.`,
+  },
+  {
+    id: 'azure',
+    label: 'Azure',
+    icon: 'cloud',
+    connType: 'cloud',
+    catalogId: 'azure',
+    unit: 'Azure subscription',
+    taskBody: `list the resource groups in this subscription with what each one contains, and flag any public IP address.`,
+  },
   // The odd ones out sit at the bottom: Slack rides the plain API (its name
   // says so, since rows carry no kind tag), and Custom MCP is the catch-all.
   {
@@ -138,6 +170,10 @@ function startSubject(option: StartOption): string {
     // beside MCP-backed rows; in a sentence it is just Slack.
     : option.id === 'slack'
     ? 'Slack'
+    // A cloud row's label names a CLI ("AWS CLI"), but what the sentence is
+    // about is the account behind it, which is what `unit` already says.
+    : option.connType === 'cloud'
+    ? `this ${option.unit}`
     : option.label;
 }
 
@@ -178,13 +214,18 @@ export function startAddAnotherLabel(option: StartOption, verb: string): string 
 /**
  * How the agent reaches the broker in step 2. `direct` is the per-tool
  * endpoint (a Postgres DSN or SSH agent socket) and is only offered for
- * kinds that have one; every other mode rides the shared key.
+ * kinds that have one; `cloud-cli` is the stock cloud CLI reading a minted
+ * session out of its own config or environment, and is only offered for
+ * cloud. Every other mode rides the shared key.
  */
 export type ConnectModeId =
-  | 'direct' | 'claude-code' | 'claude-desktop' | 'codex' | 'mcp' | 'cli';
+  | 'direct' | 'cloud-cli' | 'claude-code' | 'claude-desktop' | 'codex' | 'mcp' | 'cli';
 
 export const CONNECT_MODE_LABELS: Record<ConnectModeId, string> = {
   direct: 'Direct',
+  // The mode names where the agent runs, not what it runs — "Cloud CLI" here
+  // beside a tool already called "AWS CLI" said the same word twice.
+  'cloud-cli': 'Local shell',
   'claude-code': 'Claude Code',
   'claude-desktop': 'Claude Desktop',
   codex: 'Codex',
@@ -195,6 +236,7 @@ export const CONNECT_MODE_LABELS: Record<ConnectModeId, string> = {
 /** How the hero sentence names each mode: “Connect to Postgres from <this>.” */
 export const CONNECT_MODE_SENTENCE_LABELS: Record<ConnectModeId, string> = {
   direct: 'any database client',
+  'cloud-cli': 'a local shell',
   'claude-code': 'Claude Code',
   'claude-desktop': 'Claude Desktop',
   codex: 'Codex',
@@ -453,6 +495,11 @@ export function clientMatchesLabel(client: ConnectClient, label: string): boolea
 
 /** The connect modes step 2 offers for the picked tool, in display order. */
 export function connectModesFor(option: StartOption): ConnectModeId[] {
+  // Cloud has no endpoint to hand out — the broker refuses to issue one —
+  // but it does have a local path that isn't the shared key: a minted session
+  // read by the vendor's own CLI. It leads for the same reason `direct` does,
+  // being the shortest route to the thing the tool is for.
+  if (option.connType === 'cloud') return ['cloud-cli', ...SHARED_KEY_MODES];
   const hasDirect = option.connType === 'pg' || option.connType === 'ssh';
   return hasDirect ? ['direct', ...SHARED_KEY_MODES] : [...SHARED_KEY_MODES];
 }
@@ -642,6 +689,48 @@ export function directStartTask(
     ? `Connect to this Postgres DSN: ${endpoint.dsn}`
     : `Connect to the direct endpoint Multitool issued.`;
   return `${lead}\n\nThen ${option.taskBody}`;
+}
+
+/**
+ * Step 3's prompt when the agent drives a stock cloud CLI.
+ *
+ * Unlike a DSN or an agent socket, the session does not exist yet: the command
+ * is what mints it, so the prompt has to hand over the command rather than an
+ * address. It also states the expiry, because this is the one connect mode
+ * whose credential dies while the agent is still working — and re-running the
+ * command is the whole remedy.
+ */
+export function cloudStartTask(
+  option: StartOption,
+  progress: StartProgress,
+  connection: { name: string; cloud?: CloudInfo | null } | null | undefined,
+): string {
+  if (!connection?.cloud) return startTask(option, progress);
+  const command = cloudSetupCommand(connection);
+  const minutes = Math.round(connection.cloud.session_ttl_secs / 60);
+  const lead = connection.cloud.provider === 'aws'
+    ? `Run ${command} and follow what it prints to add the profile, then export AWS_PROFILE.`
+    : `Run ${command} in your shell first — it exports a short-lived token.`;
+  return `${lead}\nThe session lasts about ${minutes} minutes; run it again if it expires.`
+    + `\n\nThen, using my Multitool connection "${progress.toolName ?? 'my-tool'}", ${option.taskBody}`;
+}
+
+/**
+ * Whether a session has actually been minted for this tool.
+ *
+ * The other modes prove themselves by an observable act — an endpoint issued,
+ * a client seen in the activity log. Running a shell command is neither, but
+ * the mint it causes is: the broker records every one. So step 2 waits for the
+ * mint rather than claiming a step the user may not have taken.
+ */
+export function cloudSessionMinted(
+  toolName: string | null,
+  activity: Array<{ kind?: string | null; connection?: string | null }>,
+): boolean {
+  if (!toolName) return false;
+  return activity.some(
+    (entry) => entry.kind === 'cloud_session_minted' && entry.connection === toolName,
+  );
 }
 
 /**

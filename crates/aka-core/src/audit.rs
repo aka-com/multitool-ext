@@ -221,6 +221,9 @@ pub enum AuditKind {
     HttpExecuted,
     SessionOpened,
     SessionClosed,
+    /// Short-lived cloud CLI credentials handed to an agent
+    /// (`/v1/cloud/session`). Refusals are `Denied`, like every other plane.
+    CloudSessionMinted,
     /// One SSH signature issued (or refused) by the agent adapter.
     SshSigned,
     /// An SSH host key pinned trust-on-first-use at the first agent
@@ -305,6 +308,7 @@ impl AuditKind {
             AuditKind::HttpExecuted => "globe",
             AuditKind::SessionOpened => "logIn",
             AuditKind::SessionClosed => "logOut",
+            AuditKind::CloudSessionMinted => "cloud",
             AuditKind::SshSigned => "keyRound",
             AuditKind::SshHostKeyPinned => "lock",
             AuditKind::TlsDowngraded => "shieldAlert",

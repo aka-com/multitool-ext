@@ -471,7 +471,28 @@ explicit `-o PubkeyAuthentication=host-bound` is optional. Clients without
 those OpenSSH extensions fail closed because the broker refuses unbound or
 host-key-mismatched signing requests.
 
-## 7. MCP tool routing
+## 7. Cloud CLI sessions: POST /v1/cloud/session
+
+    POST /v1/cloud/session
+    {{"connection": "prod-aws", "request_id": "req-<uuid>"}}
+
+    → 200 {{"provider": "aws", "connection": "prod-aws",
+            "expires_at": "…", "expires_in_seconds": 900,
+            "env": {{"AWS_ACCESS_KEY_ID": "ASIA…", …}},
+            "credentials": {{"Version": 1, "AccessKeyId": "…", …}},
+            "example": "eval \"$(multitool cloud env prod-aws)\""}}
+
+Cloud connections hold long-lived cloud identity in the vault. This call
+mints **short-lived** credentials for stock CLIs: AWS STS sessions
+(`credential_process`), Azure Entra access tokens, and GCP service-account
+access tokens (`CLOUDSDK_AUTH_ACCESS_TOKEN` for gcloud). Vaulted long-lived
+keys never appear in the response. Already-issued sessions are not
+revocable by Multitool — the short TTL is the bound. Prefer
+`multitool cloud env <name>` or `multitool cloud creds <name>` over calling
+this endpoint by hand. For AWS profiles use
+`multitool cloud install <name>`.
+
+## 8. MCP tool routing
 
 `multitool mcp` is a stdio adapter for MCP clients. It discovers the broker's
 Streamable HTTP MCP endpoint and authenticates every request with this
@@ -481,7 +502,8 @@ must themselves speak Streamable HTTP at their configured `mcp_path`;
 upstream stdio servers are not supported.
 
 Plain API connections appear as `multitool_<connection>_request`; Postgres and
-SSH connections appear as `multitool_<connection>_open`. An upstream MCP
+SSH connections appear as `multitool_<connection>_open`; cloud connections
+appear as `multitool_<connection>_session`. An upstream MCP
 connection contributes bounded names derived from both the connection and
 the upstream tool name. Its `allowed_tools` field, when present, is the
 curated upstream subset the broker enforces on every `tools/call`; absence
@@ -517,7 +539,7 @@ repeated headers, `body_base64`, path/header restrictions, response bounds,
 and mutating-call `request_id` semantics. `_open` tools follow the ticket and
 expiry rules in §§3, 5, and 6.
 
-## 8. Other errors
+## 9. Other errors
 
 - `400 {{"reason": "invalid_json"}}`: the request body was not valid JSON
   for the endpoint (wrong/missing Content-Type, malformed JSON, or a
@@ -783,7 +805,8 @@ mod tests {
             "distinct values are also preserved",
             "/v1/pg/open",
             "/v1/ssh/open",
-            "## 7. MCP tool routing",
+            "/v1/cloud/session",
+            "## 8. MCP tool routing",
             "multitool_status",
             "multitool_search_tools",
             "multitool_call_tool",

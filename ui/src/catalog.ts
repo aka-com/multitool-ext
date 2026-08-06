@@ -116,6 +116,8 @@ export interface CatalogEntry {
   section: CatalogSection;
   via: 'connection' | 'builtin';
   connType?: ConnectionType;
+  /** Provider identity for one of the cloud CLI setup rows. */
+  cloudProvider?: 'aws' | 'gcp' | 'azure';
   /**
    * Added by pointing at an MCP server. Stored as an API connection with
    * `mcp_path` set; the form asks for a server URL rather than an API root.
@@ -422,6 +424,42 @@ export const CATALOG: CatalogEntry[] = [
     keywords: ['rest', 'http', 'endpoint'],
   },
   {
+    id: 'aws-cli',
+    name: 'AWS',
+    icon: 'cloud',
+    description: 'Perform AWS CLI actions',
+    section: 'Infrastructure',
+    via: 'connection',
+    connType: 'cloud',
+    cloudProvider: 'aws',
+    requiresSetup: true,
+    keywords: ['amazon', 'aws', 'iam', 'sts', 'credential process'],
+  },
+  {
+    id: 'gcp-cli',
+    name: 'Google Cloud',
+    icon: 'cloud',
+    description: 'Perform gcloud actions',
+    section: 'Infrastructure',
+    via: 'connection',
+    connType: 'cloud',
+    cloudProvider: 'gcp',
+    requiresSetup: true,
+    keywords: ['google', 'gcp', 'gcloud', 'service account', 'oauth'],
+  },
+  {
+    id: 'azure',
+    name: 'Azure',
+    icon: 'cloud',
+    description: 'Perform Azure Cloud actions',
+    section: 'Infrastructure',
+    via: 'connection',
+    connType: 'cloud',
+    cloudProvider: 'azure',
+    requiresSetup: true,
+    keywords: ['microsoft', 'azure', 'entra', 'arm', 'service principal', 'az rest'],
+  },
+  {
     id: 'postgres',
     name: 'Postgres',
     icon: 'postgres',
@@ -549,6 +587,13 @@ function templateHost(entry: CatalogEntry): string | null {
  * the row for its protocol.
  */
 export function entryForConnection(connection: ConnectionSummary): CatalogEntry | undefined {
+  if (connection.type === 'cloud') {
+    const provider = connection.cloud?.provider
+      ?? (['aws', 'gcp', 'azure'].includes(connection.scheme ?? '')
+        ? connection.scheme as 'aws' | 'gcp' | 'azure'
+        : null);
+    return provider ? CATALOG.find((entry) => entry.cloudProvider === provider) : undefined;
+  }
   if (connection.type === 'api' && connection.mcp_path) {
     const host = (connection.host || '').toLowerCase();
     const branded = CATALOG.find((entry) => entry.mcp && host && templateHost(entry) === host)
@@ -681,6 +726,7 @@ export function visibleCatalog(query: string): CatalogEntry[] {
 
 /** The catalog's name for a connection type — the dialog titles reuse it. */
 export function catalogNameForType(type: ConnectionType): string {
+  if (type === 'cloud') return 'Cloud CLI';
   return CATALOG.find(
     (entry) => entry.via === 'connection' && entry.connType === type
       && !entry.mcp && !entry.preset,

@@ -19,8 +19,9 @@
 use std::sync::Arc;
 
 use aka_api::{IssuedEndpointDto, ManageError};
+use aka_core::cloud_push::{LeashParams, LeashPins};
 use aka_core::store::ConnectionSpec;
-use aka_core::types::{ConnectionConfig, PgSslMode};
+use aka_core::types::{CloudProvider, ConnectionConfig, PgSslMode};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter as _, Manager as _, State};
 use tauri_plugin_clipboard_manager::ClipboardExt as _;
@@ -870,6 +871,35 @@ pub struct ConnectionInput {
     // Upstream mTLS: PEM chain and key paths, both-or-neither (store-enforced).
     pub client_cert_path: Option<String>,
     pub client_key_path: Option<String>,
+    // Cloud CLI session provider coordinates. Secret fields are vault names;
+    // raw values, when supplied by setup, ride in `new_secrets` below.
+    pub cloud_provider: Option<String>,
+    pub cloud_region: Option<String>,
+    pub cloud_access_key_ref: Option<String>,
+    pub cloud_secret_key_ref: Option<String>,
+    pub cloud_session_token_ref: Option<String>,
+    pub cloud_role_arn: Option<String>,
+    pub cloud_external_id: Option<String>,
+    // AWS reuse: mint from a ~/.aws profile instead of vaulted keys, bounded
+    // by a managed-policy ARN or inline session policy. The origin below
+    // says whose files those are, which decides who does the minting.
+    pub cloud_source_profile: Option<String>,
+    /// Which machine's ~/.aws the profile above lives on. Supplied by the
+    /// same read that listed the profiles, so the connection records the
+    /// files it actually means rather than trusting whichever host later
+    /// runs the mint.
+    pub cloud_source_origin: Option<String>,
+    pub cloud_source_origin_label: Option<String>,
+    pub cloud_session_policy_arn: Option<String>,
+    pub cloud_session_policy: Option<String>,
+    pub cloud_tenant_id: Option<String>,
+    pub cloud_client_id: Option<String>,
+    pub cloud_client_secret_ref: Option<String>,
+    pub cloud_subscription_id: Option<String>,
+    pub cloud_scope: Option<String>,
+    pub cloud_gcp_key_ref: Option<String>,
+    pub cloud_project: Option<String>,
+    pub cloud_session_ttl: Option<u64>,
     // WS
     // pg/ssh single-secret binding (by id)
     pub secret_id: Option<String>,
@@ -877,6 +907,10 @@ pub struct ConnectionInput {
     // the core writes the vault item and connection atomically.
     pub new_secret_name: Option<String>,
     pub new_secret_value: Option<String>,
+    /// Several write-only credentials committed atomically with the
+    /// connection (notably an AWS access-key pair).
+    #[serde(default)]
+    pub new_secrets: Vec<NewConnectionSecretInput>,
     // SSH import-only: an opaque preview id and one identity path returned by
     // that preview. The backend verifies the binding before reading the file.
     pub ssh_import_id: Option<String>,
@@ -887,6 +921,12 @@ pub struct ConnectionInput {
     /// for a stored key, and re-prompting per signature is not on offer. Never
     /// stored, never echoed back.
     pub key_passphrase: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct NewConnectionSecretInput {
+    pub name: String,
+    pub value: String,
 }
 
 /// A key-import failure as a form error.
@@ -931,6 +971,28 @@ fn present(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn cloud_required(
+    value: Option<String>,
+    field: &'static str,
+    message: &'static str,
+) -> FormResult<String> {
+    present(value).ok_or_else(|| FormError::validation("cloud_field_required", field, message))
+}
+
+fn cloud_session_ttl(value: Option<u64>) -> FormResult<u64> {
+    let ttl = value.unwrap_or(aka_core::types::DEFAULT_CLOUD_SESSION_TTL_SECS);
+    if !(aka_core::types::MIN_CLOUD_SESSION_TTL_SECS..=aka_core::types::MAX_CLOUD_SESSION_TTL_SECS)
+        .contains(&ttl)
+    {
+        return Err(FormError::validation(
+            "invalid_cloud_session_ttl",
+            "cloudSessionTtl",
+            "Choose a session lifetime from 15 to 60 minutes",
+        ));
+    }
+    Ok(ttl)
 }
 
 impl ConnectionInput {
@@ -1032,6 +1094,94 @@ impl ConnectionInput {
                 user: self.user.unwrap_or_default(),
                 host_key_fingerprint: self.host_key_fingerprint.unwrap_or_default(),
             },
+            "cloud" => {
+                let provider = cloud_required(
+                    self.cloud_provider,
+                    "cloudProvider",
+                    "Choose a cloud provider",
+                )?;
+                let session_ttl_secs = cloud_session_ttl(self.cloud_session_ttl)?;
+                let provider = match provider.as_str() {
+                    // A source profile means reuse: the broker mints from the
+                    // operator's own ~/.aws sign-in and nothing is vaulted.
+                    "aws" if present(self.cloud_source_profile.clone()).is_some() => {
+                        aka_core::types::CloudProvider::AwsProfile {
+                            region: present(self.cloud_region),
+                            profile: present(self.cloud_source_profile)
+                                .expect("guard checked presence"),
+                            origin: present(self.cloud_source_origin).unwrap_or_default(),
+                            origin_label: present(self.cloud_source_origin_label),
+                            role_arn: present(self.cloud_role_arn),
+                            external_id: present(self.cloud_external_id),
+                            session_policy_arn: present(self.cloud_session_policy_arn),
+                            session_policy: present(self.cloud_session_policy),
+                            session_ttl_secs,
+                        }
+                    }
+                    "aws" => aka_core::types::CloudProvider::Aws {
+                        region: cloud_required(
+                            self.cloud_region,
+                            "cloudRegion",
+                            "Enter the AWS region",
+                        )?,
+                        access_key_ref: cloud_required(
+                            self.cloud_access_key_ref,
+                            "cloudAccessKeyRef",
+                            "Provide or choose an access key ID",
+                        )?,
+                        secret_key_ref: cloud_required(
+                            self.cloud_secret_key_ref,
+                            "cloudSecretKeyRef",
+                            "Provide or choose a secret access key",
+                        )?,
+                        session_token_ref: present(self.cloud_session_token_ref),
+                        role_arn: present(self.cloud_role_arn),
+                        external_id: present(self.cloud_external_id),
+                        session_ttl_secs,
+                    },
+                    "gcp" => aka_core::types::CloudProvider::Gcp {
+                        key_ref: cloud_required(
+                            self.cloud_gcp_key_ref,
+                            "cloudGcpKeyRef",
+                            "Provide or choose a service-account JSON key",
+                        )?,
+                        scope: present(self.cloud_scope).unwrap_or_else(|| {
+                            "https://www.googleapis.com/auth/cloud-platform".into()
+                        }),
+                        project: present(self.cloud_project),
+                        session_ttl_secs,
+                    },
+                    "azure" => aka_core::types::CloudProvider::Azure {
+                        tenant_id: cloud_required(
+                            self.cloud_tenant_id,
+                            "cloudTenantId",
+                            "Enter the tenant ID",
+                        )?,
+                        client_id: cloud_required(
+                            self.cloud_client_id,
+                            "cloudClientId",
+                            "Enter the application client ID",
+                        )?,
+                        client_secret_ref: cloud_required(
+                            self.cloud_client_secret_ref,
+                            "cloudClientSecretRef",
+                            "Provide or choose a client secret",
+                        )?,
+                        subscription_id: present(self.cloud_subscription_id),
+                        scope: present(self.cloud_scope)
+                            .unwrap_or_else(|| "https://management.azure.com/.default".into()),
+                        session_ttl_secs,
+                    },
+                    _ => {
+                        return Err(FormError::validation(
+                            "invalid_cloud_provider",
+                            "cloudProvider",
+                            "Choose AWS, Google Cloud, or Azure",
+                        ))
+                    }
+                };
+                ConnectionConfig::Cloud { provider }
+            }
             other => {
                 return Err(FormError::global(
                     "system",
@@ -1065,6 +1215,7 @@ impl ConnectionInput {
 /// all) adds without a prompt.
 #[tauri::command]
 pub async fn add_connection(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mut input: ConnectionInput,
 ) -> FormResult<()> {
@@ -1073,6 +1224,10 @@ pub async fn add_connection(
     // Wrap the user-entered value before any fallible parsing below so every
     // error path zeroizes it rather than dropping an ordinary String.
     let mut new_secret_value = input.new_secret_value.take().map(Zeroizing::new);
+    let new_secrets = std::mem::take(&mut input.new_secrets)
+        .into_iter()
+        .map(|secret| (secret.name, Zeroizing::new(secret.value)))
+        .collect::<Vec<_>>();
     let key_passphrase = input.key_passphrase.take().map(Zeroizing::new);
     if kind == "ssh" {
         if let Some(value) = &new_secret_value {
@@ -1128,23 +1283,51 @@ pub async fn add_connection(
         }
     };
     let spec = input.into_spec()?;
-    let includes_new_secret =
-        new_secret_name.is_some() || new_secret_value.is_some() || imported_value.is_some();
-    let result = match (new_secret_name, new_secret_value.or(imported_value)) {
+    // The mint leash of a reuse connection, taken from the submitted form —
+    // the one moment it is known without asking the broker — so it can be
+    // pinned once the add succeeds (see `aka_core::cloud_push::LeashPins`).
+    let leash = aws_profile_leash(&spec).map(|params| (spec.name.clone(), params));
+    let mut pending_secrets = new_secrets;
+    match (new_secret_name, new_secret_value.or(imported_value)) {
         (Some(name), Some(value)) if !name.is_empty() && !value.is_empty() => {
-            state
-                .brokers
-                .backend()
-                .add_connection_with_secret(name, value, spec)
-                .await
+            pending_secrets.push((name, value));
         }
-        (None, None) => state.brokers.backend().add_connection(spec).await,
+        (None, None) => {}
         _ => {
             return Err(FormError::validation(
                 "incomplete_new_credential",
                 "newSecretValue",
                 "Credential name and value must be provided together",
             ))
+        }
+    }
+    if pending_secrets
+        .iter()
+        .any(|(name, value)| name.trim().is_empty() || value.is_empty())
+    {
+        return Err(FormError::validation(
+            "incomplete_new_credential",
+            "newSecretValue",
+            "Every credential needs a name and value",
+        ));
+    }
+    let includes_new_secret = !pending_secrets.is_empty();
+    let result = match pending_secrets.len() {
+        0 => state.brokers.backend().add_connection(spec).await,
+        1 => {
+            let (name, value) = pending_secrets.remove(0);
+            state
+                .brokers
+                .backend()
+                .add_connection_with_secret(name, value, spec)
+                .await
+        }
+        _ => {
+            state
+                .brokers
+                .backend()
+                .add_connection_with_secrets(pending_secrets, spec)
+                .await
         }
     };
     result.map_err(|error| {
@@ -1159,7 +1342,67 @@ pub async fn add_connection(
     if let Some(import_id) = ssh_import_id {
         state.ssh_imports.lock().unwrap().remove(&import_id);
     }
+    // Pin the reuse leash before the first refresh runs, so even the first
+    // mint is checked against what the user chose rather than
+    // trust-on-first-use of whatever the broker reports back.
+    if let Some((name, params)) = leash {
+        pin_connection_leash(&app, &state, &name, params).await;
+    }
+    // A connection that mints from this machine's ~/.aws needs its first
+    // session pushed now; waiting out the refresher's tick would make a
+    // working setup look broken for a minute.
+    crate::cloud_refresh::refresh_soon(&app);
     Ok(())
+}
+
+/// The mint parameters of a reuse connection spec, or None for every other
+/// connection shape. These are what [`LeashPins`] records at creation.
+fn aws_profile_leash(spec: &ConnectionSpec) -> Option<LeashParams> {
+    match &spec.config {
+        ConnectionConfig::Cloud {
+            provider:
+                CloudProvider::AwsProfile {
+                    region,
+                    profile,
+                    role_arn,
+                    external_id,
+                    session_policy_arn,
+                    session_policy,
+                    session_ttl_secs,
+                    ..
+                },
+        } => Some(LeashParams {
+            profile: profile.clone(),
+            region: region.clone(),
+            role_arn: role_arn.clone(),
+            external_id: external_id.clone(),
+            session_policy_arn: session_policy_arn.clone(),
+            session_policy: session_policy.clone(),
+            session_ttl_secs: *session_ttl_secs,
+        }),
+        _ => None,
+    }
+}
+
+/// Resolve the just-created connection's id by its (unique) name and pin the
+/// submitted mint parameters. Best-effort: an unreachable broker only means
+/// the refresher pins on first sight instead, the same trust extended to
+/// connections created before pinning existed.
+async fn pin_connection_leash(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    name: &str,
+    params: LeashParams,
+) {
+    let Some(pins) = app.try_state::<Arc<LeashPins>>() else {
+        return;
+    };
+    let Ok(connections) = state.brokers.backend().list_connections().await else {
+        return;
+    };
+    if let Some(connection) = connections.iter().find(|c| c.name == name) {
+        pins.pin(&connection.id, params);
+    }
 }
 
 /// Security-relevant connection edits are core-gated; metadata-only
@@ -1180,6 +1423,25 @@ pub async fn edit_connection(
             Some(detail),
         )
     })?;
+    // Cloud provider coordinates and credential references are deliberately
+    // recreate-only. The edit sheet can still rename the connection without
+    // reconstructing secret-bearing capability state in the webview.
+    if kind == "cloud" {
+        return state
+            .brokers
+            .backend()
+            .rename_connection(id, expected_updated_at, input.name)
+            .await
+            .map_err(|error| {
+                FormError::from_manage(
+                    error,
+                    FormContext::Connection {
+                        kind: &kind,
+                        includes_new_secret: false,
+                    },
+                )
+            });
+    }
     let spec = input.into_spec()?;
     state
         .brokers
@@ -1198,14 +1460,24 @@ pub async fn edit_connection(
 }
 
 #[tauri::command]
-pub async fn delete_connection(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+pub async fn delete_connection(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> CmdResult<()> {
     let id = parse_id(&id)?;
     state
         .brokers
         .backend()
         .delete_connection(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Only an app-initiated delete forgets a leash pin: a broker that could
+    // clear pins by editing its listings could re-pin itself a wider leash.
+    if let Some(pins) = app.try_state::<Arc<LeashPins>>() {
+        pins.forget(&id.to_string());
+    }
+    Ok(())
 }
 
 /// Persist the user's drag-reordered Tools list. `ordered_ids` is the full
@@ -1256,6 +1528,7 @@ pub async fn test_connection_draft(
     let kind = input.kind.clone();
     let _ = input.new_secret_name.take();
     let typed_secret = input.new_secret_value.take().map(Zeroizing::new);
+    let _ = std::mem::take(&mut input.new_secrets);
     // The reachability test performs no key exchange, so a pending SSH
     // import needs no resolution for a draft dial.
     let _ = input.ssh_import_id.take();
@@ -1275,6 +1548,31 @@ pub async fn test_connection_draft(
                 },
             )
         })
+}
+
+/// This machine's AWS profiles, for the "use my aws sign-in" picker, along
+/// with who "this machine" is.
+///
+/// Reads profile *names* and shapes from `~/.aws` — never key material —
+/// and always from the desktop's own home, whichever broker is active. The
+/// identity rides along so a connection created from this list records the
+/// files it means: a hosted broker refuses to substitute its own `~/.aws`
+/// and is handed sessions minted here instead.
+#[derive(serde::Serialize)]
+pub struct AwsProfileList {
+    origin: String,
+    origin_label: String,
+    profiles: Vec<aka_core::cloud::AwsProfileInfo>,
+}
+
+#[tauri::command]
+pub fn list_aws_profiles() -> AwsProfileList {
+    let paths = aka_core::paths::Paths::default_locations().ok();
+    AwsProfileList {
+        origin: paths.map(|paths| paths.install_id()).unwrap_or_default(),
+        origin_label: aka_core::cloud::aws_home_label(),
+        profiles: aka_core::cloud::list_aws_profiles(),
+    }
 }
 
 /* -------------------------------- MCP ------------------------------------ */
@@ -2267,6 +2565,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Syn
         reorder_connections,
         test_connection,
         test_connection_draft,
+        list_aws_profiles,
         start_mcp_auth,
         get_mcp_auth,
         cancel_mcp_auth,
@@ -2374,9 +2673,30 @@ mod tests {
             signer_gcp_scope: None,
             client_cert_path: None,
             client_key_path: None,
+            cloud_provider: None,
+            cloud_region: None,
+            cloud_access_key_ref: None,
+            cloud_secret_key_ref: None,
+            cloud_session_token_ref: None,
+            cloud_role_arn: None,
+            cloud_external_id: None,
+            cloud_source_profile: None,
+            cloud_source_origin: None,
+            cloud_source_origin_label: None,
+            cloud_session_policy_arn: None,
+            cloud_session_policy: None,
+            cloud_tenant_id: None,
+            cloud_client_id: None,
+            cloud_client_secret_ref: None,
+            cloud_subscription_id: None,
+            cloud_scope: None,
+            cloud_gcp_key_ref: None,
+            cloud_project: None,
+            cloud_session_ttl: None,
             secret_id: None,
             new_secret_name: None,
             new_secret_value: None,
+            new_secrets: Vec::new(),
             ssh_import_id: None,
             identity_file: None,
             key_passphrase: None,
@@ -2409,42 +2729,124 @@ mod tests {
     }
 
     #[test]
+    fn cloud_aws_input_preserves_setup_coordinates() {
+        let mut input = api_input();
+        input.kind = "cloud".into();
+        input.cloud_provider = Some("aws".into());
+        input.cloud_region = Some("us-west-2".into());
+        input.cloud_access_key_ref = Some("AWS_ACCESS_KEY_ID".into());
+        input.cloud_secret_key_ref = Some("AWS_SECRET_ACCESS_KEY".into());
+        input.cloud_role_arn = Some("arn:aws:iam::123456789012:role/Agents".into());
+        input.cloud_session_ttl = Some(1800);
+
+        assert!(matches!(
+            input.into_spec().unwrap().config,
+            ConnectionConfig::Cloud {
+                provider: aka_core::types::CloudProvider::Aws {
+                    ref region,
+                    ref access_key_ref,
+                    session_ttl_secs: 1800,
+                    ..
+                }
+            } if region == "us-west-2" && access_key_ref == "AWS_ACCESS_KEY_ID"
+        ));
+    }
+
+    #[test]
+    fn cloud_aws_source_profile_makes_a_reuse_connection() {
+        let mut input = api_input();
+        input.kind = "cloud".into();
+        input.cloud_provider = Some("aws".into());
+        input.cloud_source_profile = Some("acme-dev".into());
+        input.cloud_session_policy_arn = Some("arn:aws:iam::aws:policy/ReadOnlyAccess".into());
+        input.cloud_session_ttl = Some(900);
+
+        // A source profile routes to the reuse variant, which needs no
+        // region and no vaulted credential refs at all.
+        assert!(matches!(
+            input.into_spec().unwrap().config,
+            ConnectionConfig::Cloud {
+                provider: aka_core::types::CloudProvider::AwsProfile {
+                    ref profile,
+                    ref region,
+                    ref session_policy_arn,
+                    session_ttl_secs: 900,
+                    ..
+                }
+            } if profile == "acme-dev"
+                && region.is_none()
+                && session_policy_arn.as_deref()
+                    == Some("arn:aws:iam::aws:policy/ReadOnlyAccess")
+        ));
+
+        // A blank profile is absent, so the vaulted-key path still applies
+        // and still demands its own fields.
+        let mut blank = api_input();
+        blank.kind = "cloud".into();
+        blank.cloud_provider = Some("aws".into());
+        blank.cloud_source_profile = Some("   ".into());
+        assert!(blank.into_spec().is_err());
+    }
+
+    #[test]
+    fn cloud_gcp_input_preserves_setup_coordinates() {
+        let mut input = api_input();
+        input.kind = "cloud".into();
+        input.cloud_provider = Some("gcp".into());
+        input.cloud_gcp_key_ref = Some("GCP_SERVICE_ACCOUNT_JSON".into());
+        input.cloud_project = Some("production-project".into());
+        input.cloud_scope = Some("https://www.googleapis.com/auth/cloud-platform".into());
+        input.cloud_session_ttl = Some(3600);
+
+        assert!(matches!(
+            input.into_spec().unwrap().config,
+            ConnectionConfig::Cloud {
+                provider: aka_core::types::CloudProvider::Gcp {
+                    ref key_ref,
+                    ref project,
+                    session_ttl_secs: 3600,
+                    ..
+                }
+            } if key_ref == "GCP_SERVICE_ACCOUNT_JSON"
+                && project.as_deref() == Some("production-project")
+        ));
+    }
+
+    #[test]
+    fn cloud_azure_input_preserves_setup_coordinates() {
+        let mut input = api_input();
+        input.kind = "cloud".into();
+        input.cloud_provider = Some("azure".into());
+        input.cloud_tenant_id = Some("contoso.onmicrosoft.com".into());
+        input.cloud_client_id = Some("22222222-2222-2222-2222-222222222222".into());
+        input.cloud_client_secret_ref = Some("AZURE_CLIENT_SECRET".into());
+        input.cloud_subscription_id = Some("33333333-3333-3333-3333-333333333333".into());
+        input.cloud_session_ttl = Some(3600);
+
+        assert!(matches!(
+            input.into_spec().unwrap().config,
+            ConnectionConfig::Cloud {
+                provider: aka_core::types::CloudProvider::Azure {
+                    ref tenant_id,
+                    ref client_secret_ref,
+                    ref scope,
+                    session_ttl_secs: 3600,
+                    ..
+                }
+            } if tenant_id == "contoso.onmicrosoft.com"
+                && client_secret_ref == "AZURE_CLIENT_SECRET"
+                && scope == "https://management.azure.com/.default"
+        ));
+    }
+
+    #[test]
     fn connection_input_preserves_api_origin_and_ws_template() {
         let api = ConnectionInput {
-            mcp_path: None,
-            test_path: None,
             name: "local-api".into(),
-            kind: "api".into(),
             host: Some("localhost".into()),
             scheme: Some("http".into()),
             port: Some(8080),
-            template: Some("Authorization: Bearer {{TOKEN}}".into()),
-            oauth_auth_url: None,
-            oauth_token_url: None,
-            oauth_client_id: None,
-            oauth_scopes: None,
-            oauth_extra_params: None,
-            dbname: None,
-            user: None,
-            host_key_fingerprint: None,
-            destination: None,
-            sslmode: None,
-            trusted_ca_bundle_path: None,
-            signer_region: None,
-            signer_service: None,
-            signer_access_key_ref: None,
-            signer_secret_key_ref: None,
-            signer_session_token_ref: None,
-            signer_gcp_key_ref: None,
-            signer_gcp_scope: None,
-            client_cert_path: None,
-            client_key_path: None,
-            secret_id: None,
-            new_secret_name: None,
-            new_secret_value: None,
-            ssh_import_id: None,
-            identity_file: None,
-            key_passphrase: None,
+            ..api_input()
         }
         .into_spec()
         .unwrap();

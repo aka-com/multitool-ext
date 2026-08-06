@@ -272,8 +272,9 @@ test('forms preserve credential-less edits without guessing from masked text', a
   const saveSecret = app.match(
     /async function saveSecret\(\): Promise<void> \{([\s\S]*?)\n\}/,
   )?.[0] ?? '';
+  // saveConn is a re-entrancy wrapper; the form logic lives in saveConnInner.
   const saveConnection = app.match(
-    /async function saveConn\(\): Promise<void> \{([\s\S]*?)\n\}/,
+    /async function saveConnInner\(sheet: SheetState\): Promise<void> \{([\s\S]*?)\n\}/,
   )?.[0] ?? '';
 
   assert.match(app, /return initialSecretSource\(\{/);

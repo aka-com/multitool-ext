@@ -275,6 +275,7 @@ pub fn router() -> Router<AppState> {
         .route("/sessions", get(sessions))
         .route("/sessions/{id}", delete(close_session))
         .route("/activity", get(activity).delete(clear_activity))
+        .route("/cloud/session", post(push_cloud_session))
         .route("/activity/page", get(activity_page))
         .route("/settings", get(settings).patch(patch_settings))
         .route("/agent-setup", get(agent_setup))
@@ -821,20 +822,44 @@ async fn add_connection(
     _authed: ManageAuthed,
     ApiJson(body): ApiJson<ConnectionAddBody>,
 ) -> Response {
-    match body.new_secret {
-        Some(new_secret) => respond(
+    let mut new_secrets = body.new_secrets;
+    if let Some(new_secret) = body.new_secret {
+        new_secrets.push(new_secret);
+    }
+    match new_secrets.len() {
+        0 => respond(state.manage.add_connection(body.spec).await),
+        1 => {
+            let new_secret = new_secrets.remove(0);
+            respond(
+                state
+                    .manage
+                    .add_connection_with_secret(
+                        // Connection-first setup stores a plain named secret;
+                        // typed fields have no meaning on this path.
+                        new_secret.name.unwrap_or_default(),
+                        Zeroizing::new(new_secret.value),
+                        body.spec,
+                    )
+                    .await,
+            )
+        }
+        _ => respond(
             state
                 .manage
-                .add_connection_with_secret(
-                    // Connection-first setup stores a plain named secret;
-                    // typed fields have no meaning on this path.
-                    new_secret.name.unwrap_or_default(),
-                    Zeroizing::new(new_secret.value),
+                .add_connection_with_secrets(
+                    new_secrets
+                        .into_iter()
+                        .map(|secret| {
+                            (
+                                secret.name.unwrap_or_default(),
+                                Zeroizing::new(secret.value),
+                            )
+                        })
+                        .collect(),
                     body.spec,
                 )
                 .await,
         ),
-        None => respond(state.manage.add_connection(body.spec).await),
     }
 }
 
@@ -1317,6 +1342,21 @@ async fn activity_page(
         .unwrap_or(ACTIVITY_VIEW_LIMIT)
         .min(ACTIVITY_VIEW_LIMIT);
     respond(state.manage.activity_page(limit, query.before).await)
+}
+
+/// Accept a cloud session minted on the machine that owns the credentials.
+///
+/// Authenticated as any other manage write. Note what a caller can and
+/// cannot do with it: the pushed material is short-lived and scoped to one
+/// connection that already exists and already declares itself
+/// machine-bound, so this widens nothing that adding a connection did not
+/// already allow.
+async fn push_cloud_session(
+    State(state): State<AppState>,
+    _authed: ManageAuthed,
+    ApiJson(body): ApiJson<aka_api::CloudSessionPushDto>,
+) -> Response {
+    respond(state.manage.push_cloud_session(body).await)
 }
 
 async fn clear_activity(State(state): State<AppState>, _authed: ManageAuthed) -> Response {

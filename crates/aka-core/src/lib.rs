@@ -14,6 +14,8 @@ pub mod approvals;
 pub mod audit;
 pub mod broker;
 pub mod capability;
+pub mod cloud;
+pub mod cloud_push;
 pub mod config;
 pub mod daemon;
 pub mod domain;

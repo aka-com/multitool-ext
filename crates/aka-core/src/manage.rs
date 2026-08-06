@@ -191,6 +191,7 @@ pub fn connection_dto(broker: &Broker, conn: &Connection) -> ConnectionDto {
                     Api { .. } => e
                         .port
                         .map(|port| format!("http://{}:{port}", broker.advertise_host())),
+                    Cloud { .. } => None,
                 };
                 EndpointChip {
                     endpoint_id: e.id.to_string(),
@@ -232,6 +233,7 @@ pub fn connection_dto(broker: &Broker, conn: &Connection) -> ConnectionDto {
         signer: None,
         client_cert_path: None,
         client_key_path: None,
+        cloud: None,
     };
     match &conn.config {
         Api {
@@ -329,6 +331,149 @@ pub fn connection_dto(broker: &Broker, conn: &Connection) -> ConnectionDto {
             // use, pending" apart from a pinned fingerprint.
             dto.host_key_fingerprint =
                 (!host_key_fingerprint.is_empty()).then(|| host_key_fingerprint.clone());
+        }
+        Cloud { provider } => {
+            // Surface enough for the manage plane / UI to identify the
+            // provider without exposing vault secret values. Secret *names*
+            // already ride `secret_names`.
+            match provider {
+                crate::types::CloudProvider::Aws {
+                    region,
+                    role_arn,
+                    external_id,
+                    session_ttl_secs,
+                    ..
+                } => {
+                    dto.host = Some(format!("aws:{region}"));
+                    dto.scheme = Some("aws".into());
+                    dto.cloud = Some(aka_api::CloudDto {
+                        provider: "aws".into(),
+                        region: Some(region.clone()),
+                        role_arn: role_arn.clone(),
+                        external_id: external_id.clone(),
+                        source_profile: None,
+                        source_origin: None,
+                        source_origin_label: None,
+                        minted_elsewhere: false,
+                        pushed_expires_in_seconds: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        tenant_id: None,
+                        client_id: None,
+                        subscription_id: None,
+                        project: None,
+                        scope: None,
+                        session_ttl_secs: *session_ttl_secs,
+                    });
+                }
+                crate::types::CloudProvider::AwsProfile {
+                    region,
+                    profile,
+                    origin,
+                    origin_label,
+                    role_arn,
+                    external_id,
+                    session_policy_arn,
+                    session_policy,
+                    session_ttl_secs,
+                } => {
+                    dto.host = Some(match region {
+                        Some(region) => format!("aws:{region}"),
+                        None => "aws".into(),
+                    });
+                    dto.scheme = Some("aws".into());
+                    dto.user = Some(profile.clone());
+                    // Whether this broker can mint for itself decides what
+                    // the UI must explain, so it is computed once here.
+                    let elsewhere = origin.is_empty() || origin != broker.install_id();
+                    dto.cloud = Some(aka_api::CloudDto {
+                        provider: "aws".into(),
+                        region: region.clone(),
+                        role_arn: role_arn.clone(),
+                        external_id: external_id.clone(),
+                        source_profile: Some(profile.clone()),
+                        source_origin: (!origin.is_empty()).then(|| origin.clone()),
+                        source_origin_label: origin_label.clone(),
+                        minted_elsewhere: elsewhere,
+                        pushed_expires_in_seconds: elsewhere
+                            .then(|| broker.pushed_cloud_sessions.remaining_seconds(conn.id))
+                            .flatten(),
+                        session_policy_arn: session_policy_arn.clone(),
+                        session_policy: session_policy.clone(),
+                        tenant_id: None,
+                        client_id: None,
+                        subscription_id: None,
+                        project: None,
+                        scope: None,
+                        session_ttl_secs: *session_ttl_secs,
+                    });
+                }
+                crate::types::CloudProvider::Azure {
+                    tenant_id,
+                    client_id,
+                    subscription_id,
+                    scope,
+                    session_ttl_secs,
+                    ..
+                } => {
+                    dto.host = Some(format!("azure:{tenant_id}"));
+                    dto.scheme = Some("azure".into());
+                    dto.user = Some(client_id.clone());
+                    dto.dbname = subscription_id.clone();
+                    dto.cloud = Some(aka_api::CloudDto {
+                        provider: "azure".into(),
+                        region: None,
+                        role_arn: None,
+                        external_id: None,
+                        source_profile: None,
+                        source_origin: None,
+                        source_origin_label: None,
+                        minted_elsewhere: false,
+                        pushed_expires_in_seconds: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        tenant_id: Some(tenant_id.clone()),
+                        client_id: Some(client_id.clone()),
+                        subscription_id: subscription_id.clone(),
+                        project: None,
+                        scope: Some(scope.clone()),
+                        session_ttl_secs: *session_ttl_secs,
+                    });
+                }
+                crate::types::CloudProvider::Gcp {
+                    project,
+                    scope,
+                    session_ttl_secs,
+                    ..
+                } => {
+                    dto.host = Some(match project {
+                        Some(p) => format!("gcp:{p}"),
+                        None => "gcp".into(),
+                    });
+                    dto.scheme = Some("gcp".into());
+                    dto.template = Some(scope.clone());
+                    dto.dbname = project.clone();
+                    dto.cloud = Some(aka_api::CloudDto {
+                        provider: "gcp".into(),
+                        region: None,
+                        role_arn: None,
+                        external_id: None,
+                        source_profile: None,
+                        source_origin: None,
+                        source_origin_label: None,
+                        minted_elsewhere: false,
+                        pushed_expires_in_seconds: None,
+                        session_policy_arn: None,
+                        session_policy: None,
+                        tenant_id: None,
+                        client_id: None,
+                        subscription_id: None,
+                        project: project.clone(),
+                        scope: Some(scope.clone()),
+                        session_ttl_secs: *session_ttl_secs,
+                    });
+                }
+            }
         }
     }
     dto
@@ -1107,6 +1252,11 @@ pub struct ConnectionAddBody {
     pub spec: ConnectionSpec,
     #[serde(default)]
     pub new_secret: Option<SecretAddBody>,
+    /// Several credentials created atomically with one connection. Kept
+    /// separate from `new_secret` so older clients and servers retain their
+    /// one-secret wire shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_secrets: Vec<SecretAddBody>,
 }
 
 /// `PUT /v1/manage/connections/{id}`.
@@ -1324,6 +1474,36 @@ fn patched_connection_spec(
                 host_key_fingerprint: patch
                     .host_key_fingerprint
                     .unwrap_or_else(|| host_key_fingerprint.clone()),
+            }
+        }
+        ConnectionConfig::Cloud { provider } => {
+            for (field, present) in [
+                ("host", patch.host.is_some()),
+                ("scheme", patch.scheme.is_some()),
+                ("port", patch.port.is_some()),
+                ("template", patch.template.is_some()),
+                ("dbname", patch.dbname.is_some()),
+                ("user", patch.user.is_some()),
+                ("sslmode", patch.sslmode.is_some()),
+                ("host_key_fingerprint", patch.host_key_fingerprint.is_some()),
+                (
+                    "trusted_ca_bundle_path",
+                    patch.trusted_ca_bundle_path.is_some() || patch.clear_trusted_ca_bundle,
+                ),
+                (
+                    "test_path",
+                    patch.test_path.is_some() || patch.clear_test_path,
+                ),
+                ("secret_id", patch.secret_id.is_some()),
+            ] {
+                if present {
+                    return Err(invalid_patch(field, "cloud"));
+                }
+            }
+            // Cloud connections are renamed/enable-only from the manage patch
+            // surface; recreate to change provider fields.
+            ConnectionConfig::Cloud {
+                provider: provider.clone(),
             }
         }
     };
@@ -1548,6 +1728,11 @@ pub trait ManagementBackend: Send + Sync {
         value: SecretValue,
         spec: ConnectionSpec,
     ) -> ManageResult<()>;
+    async fn add_connection_with_secrets(
+        &self,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> ManageResult<()>;
     async fn update_connection(
         &self,
         id: Uuid,
@@ -1695,6 +1880,12 @@ pub trait ManagementBackend: Send + Sync {
         before: Option<u64>,
     ) -> ManageResult<aka_api::ActivityPageDto>;
     async fn clear_activity(&self) -> ManageResult<()>;
+
+    /* cloud sessions minted elsewhere */
+    /// Hand this broker a session for a connection whose credentials live
+    /// on another machine. The pusher is the machine that owns them; the
+    /// broker only ever holds material that expires on its own.
+    async fn push_cloud_session(&self, push: aka_api::CloudSessionPushDto) -> ManageResult<()>;
 
     /* settings */
     async fn settings(&self) -> ManageResult<SettingsDto>;
@@ -1981,6 +2172,23 @@ impl ManagementBackend for LocalBackend {
             .blocking_async(move |broker| async move {
                 broker
                     .ui_add_connection_with_secret(&secret_name, value, spec)
+                    .await
+                    .map(|conn| conn.id)
+            })
+            .await?;
+        self.broker.auto_issue_api_endpoint(&id).await;
+        Ok(())
+    }
+
+    async fn add_connection_with_secrets(
+        &self,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> ManageResult<()> {
+        let id = self
+            .blocking_async(move |broker| async move {
+                broker
+                    .ui_add_connection_with_secrets(secrets, spec)
                     .await
                     .map(|conn| conn.id)
             })
@@ -2357,6 +2565,59 @@ impl ManagementBackend for LocalBackend {
             entries: page.entries.iter().map(activity_dto).collect(),
             next_before: page.next_before,
         })
+    }
+
+    async fn push_cloud_session(&self, push: aka_api::CloudSessionPushDto) -> ManageResult<()> {
+        let id = uuid::Uuid::parse_str(&push.connection_id)
+            .map_err(|_| crate::error::CoreError::ConnectionNotFound)?;
+        // Refuse a push for a connection that would never serve it: a
+        // silent no-op here would look like a working refresh loop.
+        let connection = self.broker.store.connection_by_id(&self.broker.workspace, &id)?;
+        // Only a connection this broker cannot mint for itself has anything
+        // to do with a push. Accepting one for a connection whose files are
+        // right here would store material that the mint path never reads —
+        // a no-op that looks from the outside like a working refresh loop.
+        let ours = match &connection.config {
+            crate::types::ConnectionConfig::Cloud {
+                provider: crate::types::CloudProvider::AwsProfile { origin, .. },
+            } => Some(!origin.is_empty() && origin == self.broker.install_id()),
+            _ => None,
+        };
+        match ours {
+            None => {
+                return Err(crate::error::CoreError::InvalidConnectionField {
+                    field: aka_api::ConnectionField::Template,
+                    message: "this connection mints its own sessions and takes no pushes".into(),
+                }
+                .into())
+            }
+            Some(true) => {
+                return Err(crate::error::CoreError::InvalidConnectionField {
+                    field: aka_api::ConnectionField::Template,
+                    message: "this broker reads that profile itself and takes no pushes".into(),
+                }
+                .into())
+            }
+            Some(false) => {}
+        }
+        self.broker
+            .pushed_cloud_sessions
+            .store(
+                id,
+                crate::cloud::CloudSession {
+                    provider: push.provider,
+                    connection: connection.name.clone(),
+                    expires_at: push.expires_at,
+                    expires_in_seconds: push.expires_in_seconds,
+                    env: push.env,
+                    credentials: push.credentials,
+                },
+            )
+            .map_err(|error| crate::error::CoreError::InvalidConnectionField {
+                field: aka_api::ConnectionField::Template,
+                message: error.to_string(),
+            })?;
+        Ok(())
     }
 
     async fn clear_activity(&self) -> ManageResult<()> {

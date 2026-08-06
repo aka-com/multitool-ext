@@ -10,6 +10,7 @@ mod applock;
 mod attention;
 mod broker_mode;
 mod clipboard;
+mod cloud_refresh;
 mod commands;
 mod events;
 mod ssh_import;
@@ -384,6 +385,19 @@ pub fn run() {
                 brokers,
                 ssh_imports: Default::default(),
             });
+            // A hosted broker cannot read this machine's ~/.aws, so any
+            // connection that names it is kept alive from here.
+            app.manage(Arc::new(aka_core::cloud_push::PushedClock::default()));
+            // The mint parameters this app agreed to, pinned outside the
+            // broker's reach: a broker cannot re-leash the app's mints by
+            // editing its own connection records.
+            app.manage(Arc::new(aka_core::cloud_push::LeashPins::load(
+                Paths::default_locations()
+                    .map(|paths| paths.data_dir)
+                    .unwrap_or_default()
+                    .join("cloud-leashes.json"),
+            )));
+            cloud_refresh::start(handle.clone());
             Ok(())
         })
         .build(tauri::generate_context!())

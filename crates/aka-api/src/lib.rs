@@ -572,6 +572,76 @@ pub struct ConnectionDto {
     /// PEM private key for `client_cert_path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_key_path: Option<String>,
+    /// Provider-specific, non-secret cloud setup coordinates. Vault values
+    /// never appear here; credential names remain in `secret_names`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<CloudDto>,
+}
+
+/// A cloud session minted on the machine that owns the credentials and
+/// handed to a broker that cannot read them. Short-lived by construction:
+/// the broker serves it until `expires_at` and then has nothing until the
+/// origin machine pushes again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudSessionPushDto {
+    pub connection_id: String,
+    /// RFC3339 expiry of the minted material.
+    pub expires_at: String,
+    pub expires_in_seconds: u64,
+    pub provider: String,
+    pub env: Vec<(String, String)>,
+    pub credentials: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudDto {
+    /// `aws`, `gcp`, or `azure`.
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_arn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// The `~/.aws` profile this connection mints from (reuse connections;
+    /// nothing vaulted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_profile: Option<String>,
+    /// Which machine's `~/.aws` that is. The app on that machine watches
+    /// for this id to know which connections it must keep refreshed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_origin_label: Option<String>,
+    /// For a connection minted on another machine: how long the session this
+    /// broker currently holds still has, or `None` when it holds none — the
+    /// difference between "working" and "waiting for that machine".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_expires_in_seconds: Option<u64>,
+    /// Whether this broker mints for itself. False means it depends on
+    /// pushes from `source_origin_label`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub minted_elsewhere: bool,
+    /// Managed policy ARN bounding minted sessions (AWS-enforced leash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_policy_arn: Option<String>,
+    /// Inline session-policy JSON bounding minted sessions, alongside or
+    /// instead of the ARN above. Carried here — not just stored — because
+    /// the machine that mints for a hosted broker reads its parameters from
+    /// this DTO: omitting it would mint the session without its leash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    pub session_ttl_secs: u64,
 }
 
 /// A dispatch-time request signer, mirrored from the connection config.
@@ -990,6 +1060,7 @@ mod tests {
             signer: None,
             client_cert_path: None,
             client_key_path: None,
+            cloud: None,
         };
         let value = serde_json::to_value(&dto).unwrap();
         assert_eq!(value["type"], "api");

@@ -206,6 +206,11 @@ pub struct Broker {
     pub approvals: crate::approvals::Approvals,
     /// Upstream MCP tool calls parked on the user for interactive input.
     pub elicitations: crate::elicitations::Elicitations,
+    /// Cloud sessions minted on another machine and pushed here to serve
+    /// (see [`crate::cloud::PushedSessions`]).
+    pub pushed_cloud_sessions: crate::cloud::PushedSessions,
+    /// This install's id, read once — the mint path consults it per call.
+    install_id: std::sync::OnceLock<String>,
     /// Short-lived, single-use capabilities proving that an elicitation came
     /// from an upstream response the broker relayed.
     pub(crate) elicitation_permits: Arc<crate::elicitations::ElicitationPermits>,
@@ -499,6 +504,8 @@ impl Broker {
             approvals,
             elicitations,
             elicitation_permits: Arc::new(crate::elicitations::ElicitationPermits::default()),
+            pushed_cloud_sessions: crate::cloud::PushedSessions::default(),
+            install_id: std::sync::OnceLock::new(),
             request_history,
             mcp_auth: crate::mcp_auth::McpAuthSessions::default(),
             manage_oauth: Mutex::new(HashMap::new()),
@@ -620,6 +627,20 @@ impl Broker {
     /// The configured public URL, when serving one.
     pub fn public_url(&self) -> Option<String> {
         self.public_url.lock().unwrap().clone()
+    }
+
+    /// This install's id, for deciding whether a machine-bound connection's
+    /// credentials are ours to read.
+    pub fn install_id(&self) -> &str {
+        self.install_id.get_or_init(|| self.paths.install_id())
+    }
+
+    /// What the cloud mint path needs to know about where it is running.
+    pub fn install_context(&self) -> crate::cloud::InstallContext<'_> {
+        crate::cloud::InstallContext {
+            id: self.install_id(),
+            pushed: &self.pushed_cloud_sessions,
+        }
     }
 
     /// Configure the data-plane bind address and advertised host (once, at
@@ -1379,6 +1400,41 @@ impl Broker {
         Ok(conn)
     }
 
+    /// Connection-first setup for identities composed from several vault
+    /// values. The catalog and vault commit as one operation, so an AWS key
+    /// pair cannot leave an orphaned half if validation or persistence fails.
+    pub async fn ui_add_connection_with_secrets(
+        &self,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> Result<Connection> {
+        let names: Vec<String> = secrets.iter().map(|(name, _)| name.clone()).collect();
+        self.store
+            .preflight_add_connection_with_secrets(&self.workspace, &names, &spec)?;
+        let committed = self
+            .domain
+            .add_connection_with_secrets(&self.workspace, secrets, spec)
+            .await?;
+        self.apply_domain_outbox(&committed.outbox);
+        let (created_secrets, conn) = committed.value;
+        for secret in created_secrets {
+            self.audit.append(AuditEntry::new(
+                AuditKind::SecretAdded,
+                format!("Secret added: {}", secret.name),
+            ));
+        }
+        let entry = AuditEntry::new(
+            AuditKind::ConnectionAdded,
+            format!("Tool added: {}", conn.name),
+        )
+        .connection(conn.name.clone())
+        .detail(format!("{} → {}", conn.kind().label(), conn.target()))
+        .field("kind", conn.kind().as_str())
+        .field("target", conn.target());
+        self.audit.append(entry);
+        Ok(conn)
+    }
+
     /// Update a connection. Any capability change closes the tool's live
     /// sessions, so in-flight traffic cannot outlive the settings it was
     /// authorized under. When the pinned target changes, its direct endpoints
@@ -1505,6 +1561,10 @@ impl Broker {
             .await?;
         let effects = self.apply_domain_outbox(&committed.outbox);
         let conn = committed.value.connection;
+        // A session pushed for this connection has nothing left to serve.
+        // Dropping it now keeps live credentials out of memory for the rest
+        // of their hour rather than waiting for them to lapse.
+        self.pushed_cloud_sessions.forget(*id);
         self.audit.append(
             AuditEntry::new(
                 AuditKind::ConnectionDeleted,
@@ -1650,6 +1710,51 @@ impl Broker {
                 ConnectionKind::Ssh => crate::capability::ssh::test_login(self, &connection)
                     .await
                     .map(|detail| (detail, crate::types::HealthStatus::Ok)),
+                ConnectionKind::Cloud => {
+                    // Minting hits the real cloud STS/token endpoint; treat a
+                    // successful mint as health proof, then discard the session.
+                    match crate::cloud::mint_session(
+                        &self.store,
+                        &self.workspace,
+                        &self.http_client,
+                        &connection,
+                        "multitool-test",
+                        &self.install_context(),
+                    )
+                    .await
+                    {
+                        Ok(session) => {
+                            // Name the identity, not just the fact of issue:
+                            // the test's job is showing *which* account and
+                            // principal this connection is wired to. The mint
+                            // already proved the credentials work, so a
+                            // whoami hiccup degrades the message rather than
+                            // failing the test.
+                            let identity =
+                                crate::cloud::session_identity(&self.http_client, &session)
+                                    .await
+                                    .ok()
+                                    .flatten();
+                            let detail = match identity {
+                                Some(who) => format!(
+                                    "{} session ok as {} (expires in {}s)",
+                                    session.provider, who, session.expires_in_seconds
+                                ),
+                                None => format!(
+                                    "{} session ok (expires in {}s)",
+                                    session.provider, session.expires_in_seconds
+                                ),
+                            };
+                            Ok((detail, crate::types::HealthStatus::Ok))
+                        }
+                        Err(crate::cloud::CloudMintError::Config(message)) => {
+                            Err(crate::capability::TestError::from(message))
+                        }
+                        Err(crate::cloud::CloudMintError::Upstream(message)) => {
+                            Err(crate::capability::TestError::from(message))
+                        }
+                    }
+                }
             }
         };
         let outcome = match tokio::time::timeout(TEST_TIMEOUT, test).await {
@@ -2479,6 +2584,12 @@ impl Broker {
                     expires_at: endpoint.expires_at,
                 }
             }
+            ConnectionConfig::Cloud { .. } => {
+                return Err(CoreError::InvalidConnectionConfig(
+                    "cloud connections mint short-lived CLI sessions; they have no direct endpoint"
+                        .into(),
+                ));
+            }
         };
         Ok(info)
     }
@@ -2957,6 +3068,12 @@ impl Broker {
                         .await;
                 }
                 handle
+            }
+            ConnectionKind::Cloud => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "cloud connections have no direct endpoint listener",
+                ));
             }
         };
         if let Some(old) = self
@@ -3745,9 +3862,16 @@ mod tests {
         // previous version of this check looked for a phrase in `broker.rs`
         // that appeared nowhere except inside the assertion itself, so it held
         // no matter what the code did.
+        //
+        // Whitespace-stripped because the read is a method chain rustfmt is
+        // free to re-wrap, and this check is about which setting the code
+        // consults, not how the line happens to break. The `)` keeps it
+        // anchored to a `settings(…)` call rather than any field of that
+        // name on some other struct.
         let ssh = include_str!("capability/ssh.rs");
+        let dense: String = ssh.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            ssh.contains("settings().confirm_ssh_host_keys"),
+            dense.contains(").confirm_ssh_host_keys"),
             "the host-key pin must consult the setting"
         );
         assert!(

@@ -813,6 +813,7 @@ impl ManagementBackend for RemoteBackend {
             &ConnectionAddBody {
                 spec,
                 new_secret: None,
+                new_secrets: Vec::new(),
             },
         )
         .await
@@ -829,6 +830,26 @@ impl ManagementBackend for RemoteBackend {
             &ConnectionAddBody {
                 spec,
                 new_secret: Some(SecretAddBody::plain(secret_name, value.to_string())),
+                new_secrets: Vec::new(),
+            },
+        )
+        .await
+    }
+
+    async fn add_connection_with_secrets(
+        &self,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> ManageResult<()> {
+        self.post(
+            "/v1/manage/connections",
+            &ConnectionAddBody {
+                spec,
+                new_secret: None,
+                new_secrets: secrets
+                    .into_iter()
+                    .map(|(name, value)| SecretAddBody::plain(name, value.to_string()))
+                    .collect(),
             },
         )
         .await
@@ -1241,6 +1262,10 @@ impl ManagementBackend for RemoteBackend {
 
     async fn clear_activity(&self) -> ManageResult<()> {
         self.delete("/v1/manage/activity").await
+    }
+
+    async fn push_cloud_session(&self, push: aka_api::CloudSessionPushDto) -> ManageResult<()> {
+        self.post("/v1/manage/cloud/session", &push).await
     }
 
     async fn settings(&self) -> ManageResult<SettingsDto> {

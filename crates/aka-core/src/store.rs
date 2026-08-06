@@ -30,8 +30,9 @@ use crate::onepassword::{
 use crate::paths::Paths;
 use crate::template::{is_valid_secret_name, Template};
 use crate::types::{
-    Connection, ConnectionConfig, ConnectionKind, SecretKind, SecretMeta, SecretSource,
-    SecretValue, Settings, SignerSpec,
+    CloudProvider, Connection, ConnectionConfig, ConnectionKind, SecretKind, SecretMeta,
+    SecretSource, SecretValue, Settings, SignerSpec, MAX_CLOUD_SESSION_TTL_SECS,
+    MIN_CLOUD_SESSION_TTL_SECS,
 };
 use crate::vault::{SecretVault, VaultAttrs};
 use crate::Result;
@@ -100,7 +101,7 @@ impl Default for IndexState {
 
 /// Connection kinds this build still understands. A store written by an older
 /// version may name one that has since been removed.
-const SUPPORTED_CONNECTION_KINDS: [&str; 3] = ["api", "pg", "ssh"];
+const SUPPORTED_CONNECTION_KINDS: [&str; 4] = ["api", "pg", "ssh", "cloud"];
 
 thread_local! {
     /// What the last load dropped, as `name (kind)` per row.
@@ -561,24 +562,26 @@ impl Store {
         let mut next = state.clone();
         let mut rewritten = 0usize;
         for conn in next.connections.iter_mut() {
-            let (template, signer) = match &mut conn.config {
+            let mut touched = false;
+            match &mut conn.config {
                 ConnectionConfig::Api {
                     template, signer, ..
-                } => (Some(template), signer.as_mut()),
-                ConnectionConfig::Pg { .. } | ConnectionConfig::Ssh { .. } => (None, None),
-            };
-            let mut touched = false;
-            if let Some(template) = template {
-                let parsed = Template::parse(template)?;
-                if parsed.refs().contains(&old_name) {
-                    *template = parsed.rename_ref(&old_name, new_name);
-                    touched = true;
+                } => {
+                    let parsed = Template::parse(template)?;
+                    if parsed.refs().contains(&old_name) {
+                        *template = parsed.rename_ref(&old_name, new_name);
+                        touched = true;
+                    }
+                    // Signer credential references name secrets the same way
+                    // template refs do, so a rename rewrites them here too.
+                    if let Some(signer) = signer {
+                        touched |= signer.rename_ref(&old_name, new_name);
+                    }
                 }
-            }
-            // Signer credential references name secrets the same way template
-            // refs do, so a rename rewrites them in the same transaction.
-            if let Some(signer) = signer {
-                touched |= signer.rename_ref(&old_name, new_name);
+                ConnectionConfig::Cloud { provider } => {
+                    touched |= provider.rename_ref(&old_name, new_name);
+                }
+                ConnectionConfig::Pg { .. } | ConnectionConfig::Ssh { .. } => {}
             }
             if touched {
                 conn.updated_at = next_connection_updated_at(&conn.updated_at);
@@ -1133,8 +1136,7 @@ impl Store {
         secret_name: &str,
         spec: &ConnectionSpec,
     ) -> Result<()> {
-        let state = self.state.lock().unwrap();
-        prepare_connection_with_secret(&state, secret_name, spec.clone()).map(|_| ())
+        self.preflight_add_connection_with_secrets(&[secret_name.to_string()], spec)
     }
 
     pub fn add_connection_with_secret(
@@ -1143,29 +1145,69 @@ impl Store {
         value: SecretValue,
         spec: ConnectionSpec,
     ) -> Result<(SecretMeta, Connection)> {
+        let (mut secrets, connection) =
+            self.add_connection_with_secrets(vec![(secret_name.to_string(), value)], spec)?;
+        Ok((secrets.remove(0), connection))
+    }
+
+    /// Validate connection-first setup that creates several credentials in
+    /// the same transaction. Cloud identities need this because AWS source
+    /// credentials are a pair that must never become partially visible.
+    pub fn preflight_add_connection_with_secrets(
+        &self,
+        secret_names: &[String],
+        spec: &ConnectionSpec,
+    ) -> Result<()> {
+        let state = self.state.lock().unwrap();
+        prepare_connection_with_secrets(&state, secret_names, spec.clone()).map(|_| ())
+    }
+
+    /// Atomically add all supplied credentials and the connection that first
+    /// uses them. Any vault or index failure removes every item written by
+    /// this operation before returning the error.
+    pub fn add_connection_with_secrets(
+        &self,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> Result<(Vec<SecretMeta>, Connection)> {
         let mut state = self.state.lock().unwrap();
-        let (meta, conn) = prepare_connection_with_secret(&state, secret_name, spec)?;
+        let names: Vec<String> = secrets.iter().map(|(name, _)| name.clone()).collect();
+        let (metas, conn) = prepare_connection_with_secrets(&state, &names, spec)?;
         let mut next = state.clone();
-        next.secrets.push(meta.clone());
+        next.secrets.extend(metas.iter().cloned());
         next.connections.push(conn.clone());
 
-        self.vault.set(
-            &meta.id,
-            &VaultAttrs {
-                name: meta.name.clone(),
-                created_at: meta.created_at,
-            },
-            &value,
-        )?;
-        drop(value);
+        let mut stored = Vec::new();
+        for (meta, (_, value)) in metas.iter().zip(secrets) {
+            if let Err(error) = self.vault.set(
+                &meta.id,
+                &VaultAttrs {
+                    name: meta.name.clone(),
+                    created_at: meta.created_at,
+                },
+                &value,
+            ) {
+                drop(value);
+                for id in stored {
+                    if let Err(rollback) = self.vault.delete(&id) {
+                        tracing::error!("failed to roll back vault item {id}: {rollback}");
+                    }
+                }
+                return Err(error);
+            }
+            drop(value);
+            stored.push(meta.id);
+        }
         if let Err(error) = self.persist(&next) {
-            if let Err(rollback) = self.vault.delete(&meta.id) {
-                tracing::error!("failed to roll back vault item {}: {rollback}", meta.id);
+            for id in stored {
+                if let Err(rollback) = self.vault.delete(&id) {
+                    tracing::error!("failed to roll back vault item {id}: {rollback}");
+                }
             }
             return Err(error);
         }
         *state = next;
-        Ok((meta, conn))
+        Ok((metas, conn))
     }
 
     /// Update a connection. The kind is fixed after creation. Returns the
@@ -1625,50 +1667,68 @@ fn prepare_connection(state: &IndexState, mut spec: ConnectionSpec) -> Result<Co
     })
 }
 
-fn prepare_connection_with_secret(
+fn prepare_connection_with_secrets(
     state: &IndexState,
-    secret_name: &str,
+    secret_names: &[String],
     mut spec: ConnectionSpec,
-) -> Result<(SecretMeta, Connection)> {
-    if !is_valid_secret_name(secret_name) {
-        return Err(CoreError::InvalidSecretName(secret_name.to_string()));
+) -> Result<(Vec<SecretMeta>, Connection)> {
+    if secret_names.is_empty() {
+        return Err(CoreError::InvalidConnectionConfig(
+            "connection-first setup needs at least one credential".into(),
+        ));
+    }
+    let mut unique = std::collections::HashSet::new();
+    for secret_name in secret_names {
+        if !is_valid_secret_name(secret_name) {
+            return Err(CoreError::InvalidSecretName(secret_name.clone()));
+        }
+        if !unique.insert(secret_name)
+            || state
+                .secrets
+                .iter()
+                .any(|secret| secret.name == *secret_name)
+        {
+            return Err(CoreError::SecretNameTaken(secret_name.clone()));
+        }
     }
     validate_connection_name(&spec.name)?;
-    if state
-        .secrets
-        .iter()
-        .any(|secret| secret.name == secret_name)
-    {
-        return Err(CoreError::SecretNameTaken(secret_name.to_string()));
-    }
     if state.connections.iter().any(|conn| conn.name == spec.name) {
         return Err(CoreError::ConnectionNameTaken(spec.name));
     }
 
     let now = Utc::now();
-    let meta = SecretMeta {
-        id: Uuid::new_v4(),
-        name: secret_name.to_string(),
-        created_at: now,
-        updated_at: now,
-        source: SecretSource::Local,
-        kind: SecretKind::Secret,
-        site: None,
-        username: None,
-        totp_vault_id: None,
-    };
+    let metas: Vec<SecretMeta> = secret_names
+        .iter()
+        .map(|secret_name| SecretMeta {
+            id: Uuid::new_v4(),
+            name: secret_name.clone(),
+            created_at: now,
+            updated_at: now,
+            source: SecretSource::Local,
+            kind: SecretKind::Secret,
+            site: None,
+            username: None,
+            totp_vault_id: None,
+        })
+        .collect();
     let mut next = state.clone();
-    next.secrets.push(meta.clone());
-    if spec.config.kind() != ConnectionKind::Api {
-        spec.secrets = vec![meta.id];
+    next.secrets.extend(metas.iter().cloned());
+    if matches!(spec.config.kind(), ConnectionKind::Pg | ConnectionKind::Ssh) {
+        if metas.len() != 1 {
+            return Err(CoreError::InvalidConnectionConfig(
+                "Postgres and SSH setup accept one credential".into(),
+            ));
+        }
+        spec.secrets = vec![metas[0].id];
     }
     let secrets = validate_config_and_bind_secrets(&next, &spec)?;
-    if !secrets.contains(&meta.id) {
+    if metas.iter().any(|meta| !secrets.contains(&meta.id)) {
         return Err(CoreError::InvalidConnectionConfig(
-            "the new credential is not referenced by this connection".into(),
+            "every new credential must be referenced by this connection".into(),
         ));
     }
-    pin_oauth_token_secret(&mut spec.config, &secrets, Some(meta.id))?;
+    let preferred = (metas.len() == 1).then(|| metas[0].id);
+    pin_oauth_token_secret(&mut spec.config, &secrets, preferred)?;
     let conn = Connection {
         id: Uuid::new_v4(),
         name: spec.name,
@@ -1679,7 +1739,7 @@ fn prepare_connection_with_secret(
         created_at: now,
         updated_at: now,
     };
-    Ok((meta, conn))
+    Ok((metas, conn))
 }
 
 fn validate_connection_name(name: &str) -> Result<()> {
@@ -1973,6 +2033,187 @@ fn validate_config_and_bind_secrets(
             }
             bind_optional_secret(state, spec)
         }
+        ConnectionConfig::Cloud { provider } => {
+            match provider {
+                CloudProvider::Aws {
+                    region,
+                    access_key_ref,
+                    secret_key_ref,
+                    session_token_ref,
+                    role_arn,
+                    external_id,
+                    ..
+                } => {
+                    if region.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Host,
+                            message: "An AWS cloud connection needs a region".into(),
+                        });
+                    }
+                    check_aws_region(region.trim())?;
+                    if access_key_ref.trim().is_empty() || secret_key_ref.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "An AWS cloud connection needs access and secret key \
+                                      credential references"
+                                .into(),
+                        });
+                    }
+                    if session_token_ref.is_some()
+                        && role_arn.as_ref().is_none_or(|r| r.trim().is_empty())
+                    {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "A session-token credential requires a role_arn so Multitool \
+                                      can AssumeRole into a short-lived session"
+                                .into(),
+                        });
+                    }
+                    if role_arn.as_ref().is_some_and(|r| r.trim().is_empty()) {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "role_arn cannot be blank".into(),
+                        });
+                    }
+                    if external_id.is_some()
+                        && role_arn.as_ref().is_none_or(|r| r.trim().is_empty())
+                    {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "An AWS external ID requires a role_arn".into(),
+                        });
+                    }
+                }
+                CloudProvider::AwsProfile {
+                    region,
+                    profile,
+                    role_arn,
+                    external_id,
+                    session_policy,
+                    ..
+                } => {
+                    // Blank is legal here — it means "whatever region the
+                    // profile names" — but a present one still reaches STS.
+                    if let Some(region) = region.as_deref().map(str::trim).filter(|r| !r.is_empty())
+                    {
+                        check_aws_region(region)?;
+                    }
+                    if profile.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::User,
+                            message: "An AWS profile connection needs a profile name".into(),
+                        });
+                    }
+                    if role_arn.as_ref().is_some_and(|r| r.trim().is_empty()) {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "role_arn cannot be blank".into(),
+                        });
+                    }
+                    if external_id.is_some()
+                        && role_arn.as_ref().is_none_or(|r| r.trim().is_empty())
+                    {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "An AWS external ID requires a role_arn".into(),
+                        });
+                    }
+                    if let Some(policy) = session_policy {
+                        if serde_json::from_str::<serde_json::Value>(policy).is_err() {
+                            return Err(CoreError::InvalidConnectionField {
+                                field: ConnectionField::Template,
+                                message: "The session policy must be valid policy JSON".into(),
+                            });
+                        }
+                    }
+                }
+                CloudProvider::Azure {
+                    tenant_id,
+                    client_id,
+                    client_secret_ref,
+                    scope,
+                    ..
+                } => {
+                    if tenant_id.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Host,
+                            message: "An Azure cloud connection needs a tenant ID".into(),
+                        });
+                    }
+                    if client_id.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::User,
+                            message: "An Azure cloud connection needs a client ID".into(),
+                        });
+                    }
+                    if client_secret_ref.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "An Azure cloud connection needs a client secret \
+                                      credential reference"
+                                .into(),
+                        });
+                    }
+                    if scope.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "An Azure cloud connection needs an OAuth scope".into(),
+                        });
+                    }
+                }
+                CloudProvider::Gcp { key_ref, scope, .. } => {
+                    if key_ref.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "A GCP cloud connection needs a service-account key \
+                                      credential reference"
+                                .into(),
+                        });
+                    }
+                    if scope.trim().is_empty() {
+                        return Err(CoreError::InvalidConnectionField {
+                            field: ConnectionField::Template,
+                            message: "A GCP cloud connection needs an OAuth scope".into(),
+                        });
+                    }
+                }
+            }
+            // The broker's own mint path clamps at mint time, but the raw
+            // value also rides the DTO to the profile-push loop, which
+            // hands it to STS as DurationSeconds — so the documented
+            // 15-minute-to-1-hour window is enforced where the value enters,
+            // not just where this broker happens to read it.
+            let requested_ttl = match provider {
+                CloudProvider::Aws {
+                    session_ttl_secs, ..
+                }
+                | CloudProvider::AwsProfile {
+                    session_ttl_secs, ..
+                }
+                | CloudProvider::Azure {
+                    session_ttl_secs, ..
+                }
+                | CloudProvider::Gcp {
+                    session_ttl_secs, ..
+                } => *session_ttl_secs,
+            };
+            if !(MIN_CLOUD_SESSION_TTL_SECS..=MAX_CLOUD_SESSION_TTL_SECS)
+                .contains(&requested_ttl)
+            {
+                return Err(CoreError::InvalidConnectionField {
+                    field: ConnectionField::Template,
+                    message: format!(
+                        "A cloud session lifetime must be {MIN_CLOUD_SESSION_TTL_SECS}–\
+                         {MAX_CLOUD_SESSION_TTL_SECS} seconds"
+                    ),
+                });
+            }
+            provider
+                .refs()
+                .iter()
+                .map(|name| find_by_name(name))
+                .collect()
+        }
     }
 }
 
@@ -2093,11 +2334,26 @@ fn pin_oauth_token_secret(
     Ok(())
 }
 
+/// Reject a region the STS endpoint could not safely be built from, at the
+/// point a connection is saved. [`crate::cloud::is_aws_region`] explains why
+/// the shape matters; the mint path re-checks because a region can also come
+/// from a profile file this never saw.
+fn check_aws_region(region: &str) -> Result<()> {
+    if crate::cloud::is_aws_region(region) {
+        return Ok(());
+    }
+    Err(CoreError::InvalidConnectionField {
+        field: ConnectionField::Host,
+        message: "Enter an AWS region like us-west-2".into(),
+    })
+}
+
 fn bind_optional_secret(state: &IndexState, spec: &ConnectionSpec) -> Result<Vec<Uuid>> {
     let kind = match spec.config.kind() {
         ConnectionKind::Pg => "postgres",
         ConnectionKind::Ssh => "ssh",
-        ConnectionKind::Api => unreachable!(),
+        // api/cloud bind secrets from templates/provider refs, not this path.
+        ConnectionKind::Api | ConnectionKind::Cloud => unreachable!(),
     };
     if spec.secrets.len() > 1 {
         return Err(CoreError::WrongSecretCount { kind });
@@ -2651,6 +2907,93 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, CoreError::InvalidConnectionConfig(_)));
         assert!(store.secret_by_name("ORPHAN_TOKEN").is_none());
+        assert_eq!(vault.len(), before_invalid);
+    }
+
+    #[tokio::test]
+    async fn add_connection_with_secrets_atomically_binds_an_aws_key_pair() {
+        let (store, vault, _dir) = store().await;
+        let initial_vault_len = vault.len();
+        let (secrets, connection) = store
+            .add_connection_with_secrets(
+                vec![
+                    ("AWS_ACCESS_KEY_ID".into(), val("AKIAEXAMPLE")),
+                    ("AWS_SECRET_ACCESS_KEY".into(), val("secret")),
+                ],
+                ConnectionSpec {
+                    name: "production-aws".into(),
+                    config: ConnectionConfig::Cloud {
+                        provider: CloudProvider::Aws {
+                            region: "us-west-2".into(),
+                            access_key_ref: "AWS_ACCESS_KEY_ID".into(),
+                            secret_key_ref: "AWS_SECRET_ACCESS_KEY".into(),
+                            session_token_ref: None,
+                            role_arn: None,
+                            external_id: None,
+                            session_ttl_secs: 900,
+                        },
+                    },
+                    secrets: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(secrets.len(), 2);
+        assert_eq!(connection.secrets.len(), 2);
+        assert!(secrets
+            .iter()
+            .all(|secret| connection.secrets.contains(&secret.id)));
+        assert_eq!(vault.len(), initial_vault_len + 2);
+
+        let external_id_without_role = store
+            .add_connection(ConnectionSpec {
+                name: "invalid-external-id".into(),
+                config: ConnectionConfig::Cloud {
+                    provider: CloudProvider::Aws {
+                        region: "us-west-2".into(),
+                        access_key_ref: "AWS_ACCESS_KEY_ID".into(),
+                        secret_key_ref: "AWS_SECRET_ACCESS_KEY".into(),
+                        session_token_ref: None,
+                        role_arn: None,
+                        external_id: Some("customer-123".into()),
+                        session_ttl_secs: 900,
+                    },
+                },
+                secrets: Vec::new(),
+            })
+            .unwrap_err();
+        assert!(matches!(
+            external_id_without_role,
+            CoreError::InvalidConnectionField { .. }
+        ));
+
+        let before_invalid = vault.len();
+        let error = store
+            .add_connection_with_secrets(
+                vec![
+                    ("ORPHAN_A".into(), val("one")),
+                    ("ORPHAN_B".into(), val("two")),
+                ],
+                ConnectionSpec {
+                    name: "broken-aws".into(),
+                    config: ConnectionConfig::Cloud {
+                        provider: CloudProvider::Aws {
+                            region: "us-west-2".into(),
+                            access_key_ref: "ORPHAN_A".into(),
+                            secret_key_ref: "AWS_SECRET_ACCESS_KEY".into(),
+                            session_token_ref: None,
+                            role_arn: None,
+                            external_id: None,
+                            session_ttl_secs: 900,
+                        },
+                    },
+                    secrets: Vec::new(),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, CoreError::InvalidConnectionConfig(_)));
+        assert!(store.secret_by_name("ORPHAN_A").is_none());
+        assert!(store.secret_by_name("ORPHAN_B").is_none());
         assert_eq!(vault.len(), before_invalid);
     }
 

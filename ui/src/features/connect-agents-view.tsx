@@ -10,12 +10,15 @@ import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { state } from '../app-state';
 import { canQuickConnectMcp, catalogEntryById } from '../catalog';
+import { cloudSetupCommand } from '../cloud-setup';
 import { EndpointStrip } from './endpoint-view';
 import {
   CLI_INSTALL_COMMAND,
   CONNECT_MODE_LABELS,
   START_OPTIONS,
   clientMatchesLabel,
+  cloudSessionMinted,
+  cloudStartTask,
   connectClientById,
   connectModeSentenceLabel,
   connectModesFor,
@@ -108,8 +111,10 @@ function ClientMenu({ option, connectMode }: {
           ? (option.connType === 'ssh'
               ? 'Connect via local SSH socket'
               : 'Connect via local Postgres endpoint')
+          : mode === 'cloud-cli'
+          ? 'Mint a session for the stock CLI'
           : client?.sub;
-        // Rules split the menu into direct / named agents / escape hatches.
+        // Rules split the menu into local / named agents / escape hatches.
         const startsGroup = (mode === 'claude-code' && index > 0) || mode === 'mcp';
         return (
           <Fragment key={mode}>
@@ -223,6 +228,29 @@ function StartConnectPane({ mode: connectMode, option, progress }: {
     return <><p>{lead}</p><EndpointStrip connection={connection} /></>;
   }
 
+  if (connectMode === 'cloud-cli') {
+    if (!connection?.cloud) {
+      return <><p>{`Add ${option.label} first.`}</p>
+        <div className="start-actions"><button className="btn primary sm" disabled>
+          Copy setup command</button></div></>;
+    }
+    // Nothing is issued here: the command mints on demand, so unlike an
+    // endpoint there is no address to hold and nothing to revoke afterwards.
+    const command = cloudSetupCommand(connection);
+    const lead = connection.cloud.provider === 'aws'
+      ? `Run this where you use the AWS CLI. It prints a profile that re-mints`
+        + ` credentials for “${connection.name}” on every command — the vaulted keys stay here.`
+      : `Run this in the shell where your agent works. It exports a short-lived token`
+        + ` for “${connection.name}”; the vaulted credential stays here.`;
+    return <><p>{lead}</p>{snippet(command)}
+      <div className="start-actions">{copyButton(command, 'Copy setup command')}</div>
+      <p className="start-pane-next">
+        Sessions last about {Math.round(connection.cloud.session_ttl_secs / 60)} minutes.
+        Multitool cannot revoke one it has already minted, so the short lifetime is the
+        limit — run the command again when it expires.
+      </p></>;
+  }
+
   const client = connectClientById(connectMode);
   if (!client) return null;
   const env = connectClientEnv();
@@ -296,9 +324,14 @@ function StartWalkthrough(): ReactNode {
       )
     : null;
 
-  const seenAt = connectMode === 'direct' ? null : clientSeenAt(connectMode);
+  const localMode = connectMode === 'direct' || connectMode === 'cloud-cli';
+  const seenAt = localMode ? null : clientSeenAt(connectMode);
   const step1Done = progress.added;
-  const step2Done = connectMode === 'direct' ? Boolean(directEndpoint) : Boolean(seenAt);
+  const step2Done = connectMode === 'direct'
+    ? Boolean(directEndpoint)
+    : connectMode === 'cloud-cli'
+    ? cloudSessionMinted(progress.toolName, state.activity)
+    : Boolean(seenAt);
   const clientLabel = CONNECT_MODE_LABELS[connectMode];
 
   const task = connectMode === 'direct'
@@ -315,6 +348,8 @@ function StartWalkthrough(): ReactNode {
             }
           : null,
       )
+    : connectMode === 'cloud-cli'
+    ? cloudStartTask(option, progress, directConnection)
     : startTask(option, progress);
   const shownTask = redactedStartTask(task);
 
@@ -335,10 +370,16 @@ function StartWalkthrough(): ReactNode {
 
   const connectBody = <>
     <StartConnectPane mode={connectMode} option={option} progress={progress} />
-    {connectMode !== 'direct' && step1Done && !step2Done
+    {!localMode && step1Done && !step2Done
       ? <div className="start-waiting">
           <span className="start-pulse" aria-hidden="true"></span>
           Waiting for {clientLabel} to connect to Multitool…
+        </div>
+      : null}
+    {connectMode === 'cloud-cli' && step1Done && !step2Done
+      ? <div className="start-waiting">
+          <span className="start-pulse" aria-hidden="true"></span>
+          Waiting for the first session to be minted…
         </div>
       : null}
   </>;
@@ -355,10 +396,14 @@ function StartWalkthrough(): ReactNode {
         title={step2Done
           ? connectMode === 'direct'
             ? 'Direct address issued'
-            : <>{clientLabel} connected · seen {relTime(seenAt as string)}</>
+            : connectMode === 'cloud-cli'
+              ? 'Session minted'
+              : <>{clientLabel} connected · seen {relTime(seenAt as string)}</>
           : connectMode === 'direct'
             ? 'Connect your agent directly'
-            : `Connect ${clientLabel}`}
+            : connectMode === 'cloud-cli'
+              ? 'Point the CLI at this tool'
+              : `Connect ${clientLabel}`}
         body={connectBody} />
       <StartStep number={3} status={step1Done && step2Done ? 'now' : 'todo'}
         title="Ask for something useful"

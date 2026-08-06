@@ -231,6 +231,12 @@ pub trait DomainRepository: Send + Sync {
         value: SecretValue,
         spec: ConnectionSpec,
     ) -> Result<DomainCommit<(SecretMeta, Connection)>>;
+    async fn add_connection_with_secrets(
+        &self,
+        workspace: &WorkspaceContext,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> Result<DomainCommit<(Vec<SecretMeta>, Connection)>>;
 
     async fn update_connection(
         &self,
@@ -469,6 +475,27 @@ impl DomainRepository for LocalDomainRepository {
         let created = self
             .catalog
             .add_connection_with_secret(workspace, secret_name, value, spec)
+            .await?;
+        Ok(DomainCommit::one(
+            workspace,
+            created.clone(),
+            DomainOutboxEventKind::ConnectionCreated {
+                connection_id: created.1.id,
+                credential_created: true,
+            },
+        ))
+    }
+
+    async fn add_connection_with_secrets(
+        &self,
+        workspace: &WorkspaceContext,
+        secrets: Vec<(String, SecretValue)>,
+        spec: ConnectionSpec,
+    ) -> Result<DomainCommit<(Vec<SecretMeta>, Connection)>> {
+        let _gate = self.gate.lock().await;
+        let created = self
+            .catalog
+            .add_connection_with_secrets(workspace, secrets, spec)
             .await?;
         Ok(DomainCommit::one(
             workspace,

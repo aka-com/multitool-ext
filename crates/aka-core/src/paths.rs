@@ -142,6 +142,43 @@ impl Paths {
         }
     }
 
+    /// A stable id for this installation, minted on first read.
+    ///
+    /// Answers exactly one question: "are the files under this home the
+    /// ones the user was looking at?" A connection that names a local
+    /// `~/.aws` profile records the id of the install that enumerated it,
+    /// so a broker running anywhere else refuses to substitute its own
+    /// home directory — same profile name, different machine, very
+    /// different identity.
+    ///
+    /// Per *install root*, not per host, because the root is what fixes the
+    /// home directory a mint would read: `multitool serve` under
+    /// `~/.akaserver` gets a different id from the desktop under `~/.aka`
+    /// even on one machine. That is the safe direction — the two are told
+    /// apart rather than assumed identical — but it means "different id"
+    /// means "not this install", and messages about it should not promise
+    /// the user a different *computer*.
+    ///
+    /// Best-effort: an unwritable data dir yields a fresh id each call,
+    /// which fails closed (nothing matches) rather than opening the guard.
+    pub fn install_id(&self) -> String {
+        // File name predates the rename; changing it would re-mint every
+        // existing id and orphan the connections stamped with them.
+        let file = self.data_dir.join("machine-id");
+        if let Ok(existing) = std::fs::read_to_string(&file) {
+            let trimmed = existing.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        let mut buf = [0u8; 16];
+        getrandom::fill(&mut buf).expect("os rng");
+        let id = buf.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let _ = std::fs::create_dir_all(&self.data_dir);
+        let _ = std::fs::write(&file, &id);
+        id
+    }
+
     pub fn index_file(&self) -> PathBuf {
         self.data_dir.join("index.json")
     }

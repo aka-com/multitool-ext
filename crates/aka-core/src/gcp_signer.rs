@@ -40,7 +40,13 @@ fn default_token_uri() -> String {
 
 struct CachedToken {
     token: Zeroizing<String>,
-    expires: Instant,
+    refresh_after: Instant,
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub(crate) struct FreshBearer {
+    pub token: Zeroizing<String>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Minted tokens per (connection, key-ref, scope). Process-local: a restart
@@ -124,10 +130,13 @@ pub(crate) async fn fresh_bearer(
     key_json: &str,
     scope: &str,
     cache_key: &str,
-) -> Result<Zeroizing<String>, GcpTokenError> {
+) -> Result<FreshBearer, GcpTokenError> {
     if let Some(cached) = cache().lock().unwrap().get(cache_key) {
-        if cached.expires > Instant::now() {
-            return Ok(cached.token.clone());
+        if cached.refresh_after > Instant::now() {
+            return Ok(FreshBearer {
+                token: cached.token.clone(),
+                expires_at: cached.expires_at,
+            });
         }
     }
     let key: ServiceAccountKey = serde_json::from_str(key_json).map_err(|_| {
@@ -176,15 +185,18 @@ pub(crate) async fn fresh_bearer(
         .get("expires_in")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(3600);
-    let expires = Instant::now() + Duration::from_secs(lifetime).saturating_sub(EXPIRY_SLACK);
+    let refresh_after =
+        Instant::now() + Duration::from_secs(lifetime).saturating_sub(EXPIRY_SLACK);
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(lifetime as i64);
     cache().lock().unwrap().insert(
         cache_key.to_string(),
         CachedToken {
             token: token.clone(),
-            expires,
+            refresh_after,
+            expires_at,
         },
     );
-    Ok(token)
+    Ok(FreshBearer { token, expires_at })
 }
 
 #[cfg(test)]
@@ -286,12 +298,13 @@ mod tests {
             .await
             .map_err(|_| "exchange failed")
             .unwrap();
-        assert_eq!(&*first, "ya29.minted-token");
+        assert_eq!(&*first.token, "ya29.minted-token");
         let second = fresh_bearer(&client, &key_json, "scope", "test-cache-key")
             .await
             .map_err(|_| "exchange failed")
             .unwrap();
-        assert_eq!(&*second, "ya29.minted-token");
+        assert_eq!(&*second.token, "ya29.minted-token");
+        assert_eq!(first.expires_at, second.expires_at);
         assert_eq!(
             hits.load(Ordering::SeqCst),
             1,

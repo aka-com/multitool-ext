@@ -4,6 +4,7 @@ import type { HostKeyCandidate } from './connection-input';
 import type {
   ActivityEntry,
   Approval,
+  AwsProfileList,
   BrokerProfile,
   ConnectionSummary,
   ConnectionType,
@@ -166,6 +167,43 @@ export interface ConnectionDraft {
   // GCP service-account signer fields (authMode 'gcp').
   signerGcpKeyRef?: string | null;
   signerGcpScope?: string;
+  // Cloud CLI setup. Provider coordinates are ordinary metadata; credential
+  // values are write-only and become vault items in the atomic add request.
+  cloudProvider?: 'aws' | 'gcp' | 'azure';
+  cloudRegion?: string;
+  cloudAccessKeyRef?: string | null;
+  cloudAccessKeyValue?: string;
+  cloudSecretKeyRef?: string | null;
+  cloudSecretKeyValue?: string;
+  cloudSessionTokenRef?: string | null;
+  cloudSessionTokenValue?: string;
+  cloudRoleArn?: string;
+  cloudExternalId?: string;
+  cloudTenantId?: string;
+  cloudClientId?: string;
+  cloudClientSecretRef?: string | null;
+  cloudClientSecretValue?: string;
+  cloudSubscriptionId?: string;
+  cloudGcpKeyRef?: string | null;
+  cloudGcpKeyValue?: string;
+  cloudProject?: string;
+  cloudScope?: string;
+  cloudSessionTtl?: string;
+  cloudCredentialSources?: Record<string, 'existing' | 'new' | 'none'>;
+  // Guided cloud setup (add flow only). The one-shot form remains reachable
+  // via Skip; everything the wizard captures lands in the fields above.
+  cloudSetupStep?: number;
+  cloudSetupPath?: 'script' | 'console' | 'reuse';
+  /** Reuse: the local ~/.aws profile to mint from, and the AWS-enforced
+   * leash bounding every minted session. */
+  cloudSourceProfile?: string;
+  cloudSourceOrigin?: string;
+  cloudSourceOriginLabel?: string;
+  cloudAttenuation?: string;
+  cloudSetupSkipped?: boolean;
+  cloudScriptRole?: string;
+  cloudPasteRaw?: string;
+  cloudPasteSource?: string | null;
   // Upstream mTLS paths (Advanced section), both-or-neither.
   clientCertPath?: string | null;
   clientKeyPath?: string | null;
@@ -242,6 +280,9 @@ export interface AppState {
   onepasswordIntegrations: OnePasswordIntegration[];
   onepasswordFlow: OnePasswordFlowState | null;
   connections: ConnectionSummary[];
+  /** Local ~/.aws profiles for the cloud reuse picker: null until read,
+   * since it is fetched lazily when that path is first chosen. */
+  awsProfiles: AwsProfileList | null;
   identity: IdentityInfo | null;
   sessions: SessionSummary[];
   activity: ActivityEntry[];
@@ -349,6 +390,10 @@ export interface AppState {
   connTests: Record<string, ConnectionTestState>;
   draftTest: ConnectionTestState | null;
   draftTestOverride: boolean;
+  /** A connection save is in flight; saveConn refuses re-entry and the Add
+   * buttons disable, so a double-click cannot submit twice (the cloud add
+   * payload mints vault items, so a duplicate is worse than a stray toast). */
+  connSaving: boolean;
   mcpAuth: McpAuthState | null;
   mcpAuthDraft: McpAuthDraft | null;
   mcpAuthOpenedUrl: string | null;
@@ -412,6 +457,7 @@ function createInitialState(): AppState {
     onepasswordIntegrations: [],
     onepasswordFlow: null,
     connections: [],
+    awsProfiles: null,
     identity: null,
     sessions: [],
     activity: [],
@@ -483,6 +529,7 @@ function createInitialState(): AppState {
     connTests: {},
     draftTest: null,
     draftTestOverride: false,
+    connSaving: false,
     mcpAuth: null,
     mcpAuthDraft: null,
     mcpAuthOpenedUrl: null,

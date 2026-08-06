@@ -191,6 +191,7 @@ fn endpoint_for(kind: ConnectionKind) -> &'static str {
         ConnectionKind::Api => "/v1/http",
         ConnectionKind::Pg => "/v1/pg/open",
         ConnectionKind::Ssh => "/v1/ssh/open",
+        ConnectionKind::Cloud => "/v1/cloud/session",
     }
 }
 
@@ -573,6 +574,7 @@ pub fn router_for(broker: Arc<Broker>, transport: Transport) -> Router {
         .route("/v1/connect-requests", post(post_connect_request))
         .route("/v1/pg/open", post(post_pg_open))
         .route("/v1/ssh/open", post(post_ssh_open))
+        .route("/v1/cloud/session", post(post_cloud_session))
         // The in-process MCP endpoint, reverse-proxied so one address (and
         // one operator proxy rule) covers the whole broker. The MCP host
         // authorizes every request against the broker itself, so this
@@ -2598,6 +2600,163 @@ async fn post_pg_open(
         },
         // Opening a session is a short call whose answer is a small envelope;
         // there is nothing here to stream.
+        None,
+    )
+    .await
+}
+
+/* --------------------------- cloud session -------------------------------- */
+
+/// Mint short-lived cloud CLI credentials for a `cloud` connection.
+///
+/// Returns provider-shaped credentials (AWS process JSON under
+/// `credentials`, shell `env` pairs, expiry). Long-lived vault material never
+/// rides this response. Already-issued sessions are not revocable by Multitool;
+/// short TTL is the bound.
+async fn post_cloud_session(
+    State(state): State<AppState>,
+    authed: Authed,
+    ApiJson(body): ApiJson<OpenBody>,
+) -> Response {
+    let broker = &state.broker;
+    let client_id = authed.client_id;
+    let limiter_key = authed.client_id.to_string();
+    let client = authed.client;
+    if let Some(response) = http_rate_limit(broker, &limiter_key, &client) {
+        return response;
+    }
+    if let Some(response) = request_id_error(body.request_id.as_deref()) {
+        return response;
+    }
+    let Some(conn) = broker
+        .store
+        .connection_by_name(&broker.workspace, &body.connection)
+    else {
+        return err_unknown_connection(broker);
+    };
+    if conn.kind() != ConnectionKind::Cloud {
+        return err_detail(
+            StatusCode::BAD_REQUEST,
+            ErrorReason::WrongConnectionType,
+            format!(
+                "{} is a {} connection; use POST {}",
+                conn.name,
+                conn.kind().as_str(),
+                endpoint_for(conn.kind())
+            ),
+        );
+    }
+
+    let coalesce_key = body
+        .request_id
+        .as_ref()
+        .map(|rid| (client_id, conn.id, rid.clone()));
+    let payload_hash = coalesce_key.as_ref().map(|_| {
+        use sha2::{Digest as _, Sha256};
+        let digest = Sha256::digest(format!("cloud/session\0{}\0{}", client, conn.name).as_bytes());
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    });
+
+    // Build the approval description regardless of the switch's current
+    // value: `run_allowed` re-checks confirm mode at the execution boundary,
+    // and without a request ready there a mint admitted while confirmation
+    // was being switched on would execute silently.
+    let provider_label = match &conn.config {
+        ConnectionConfig::Cloud { provider } => provider.label(),
+        // The kind check above guarantees Cloud; stay total anyway.
+        _ => "cloud",
+    };
+    let approval = crate::approvals::ApprovalRequest::new(
+        &conn,
+        &client,
+        format!("New {provider_label} CLI session"),
+    )
+    .credentials_from(broker.store.as_ref(), &broker.workspace)
+    .consequence(crate::cloud::MINT_CONSEQUENCE);
+
+    let executor: crate::executions::Executor = {
+        let broker = broker.clone();
+        let conn = conn.clone();
+        let client_label = client.clone();
+        Box::pin(async move {
+            match crate::cloud::mint_session(
+                &broker.store,
+                &broker.workspace,
+                &broker.http_client,
+                &conn,
+                &client_label,
+                &broker.install_context(),
+            )
+            .await
+            {
+                Ok(session) => {
+                    // Handing an agent live cloud credentials is the most
+                    // sensitive thing this daemon does: record every mint,
+                    // like HttpExecuted records every relayed call.
+                    broker.audit.append(
+                        AuditEntry::new(
+                            AuditKind::CloudSessionMinted,
+                            format!("{} session minted: {}", session.provider, conn.name),
+                        )
+                        .agent(client_label.clone())
+                        .connection(conn.name.clone())
+                        .outcome("minted")
+                        .field("provider", session.provider.clone())
+                        .field("expires_in_seconds", session.expires_in_seconds),
+                    );
+                    let env_object: serde_json::Map<String, serde_json::Value> = session
+                        .env
+                        .iter()
+                        .map(|(k, v)| (k.clone(), json!(v)))
+                        .collect();
+                    ExecOutcome {
+                        status: 200,
+                        body: json!({
+                            "provider": session.provider,
+                            "connection": session.connection,
+                            "expires_at": session.expires_at,
+                            "expires_in_seconds": session.expires_in_seconds,
+                            "env": env_object,
+                            "credentials": session.credentials,
+                            "example": format!(
+                                "eval \"$(multitool cloud env {})\"",
+                                session.connection
+                            ),
+                        }),
+                    }
+                }
+                Err(crate::cloud::CloudMintError::Config(detail)) => ExecOutcome {
+                    status: 400,
+                    body: json!({
+                        "reason": ErrorReason::CredentialRenderFailed,
+                        "detail": detail,
+                    }),
+                },
+                Err(crate::cloud::CloudMintError::Upstream(detail)) => ExecOutcome {
+                    status: 502,
+                    body: json!({
+                        "reason": ErrorReason::CredentialRefreshUnavailable,
+                        "detail": detail,
+                    }),
+                },
+            }
+        })
+    };
+
+    run_allowed(
+        broker,
+        &client,
+        &conn,
+        Some(approval),
+        ExecRequest {
+            coalesce_key,
+            payload_hash,
+            executor,
+            abandon: None,
+        },
         None,
     )
     .await

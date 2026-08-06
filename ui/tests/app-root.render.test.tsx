@@ -194,7 +194,7 @@ test('the credential library always groups passwords apart from secrets', async 
   // The status bar reports one combined credential inventory.
   assert.match(
     document.querySelector('.sb-count')?.textContent ?? '',
-    /9 credentials/,
+    /13 credentials/,
   );
 
   // The live display is still a copy action when pressed.
@@ -382,7 +382,7 @@ test('the typed add sheet saves passwords with a 2FA seed', { timeout: 8_000 }, 
     }),
   );
   assert.ok(newDetail.querySelector('.totp-live'), 'the saved 2FA seed shows a desktop live code');
-  assert.match(document.querySelector('.sb-count')?.textContent ?? '', /10 credentials/);
+  assert.match(document.querySelector('.sb-count')?.textContent ?? '', /14 credentials/);
 
   testingLibrary.fireEvent.click(
     newDetail.querySelector<HTMLButtonElement>('button[data-act="setup-code"]')!,

@@ -91,6 +91,7 @@ import type {
   ActivityPage,
   Approval,
   ApprovalDecision,
+  AwsProfileList,
   BrokerProfile,
   CommandArgs,
   CommandName,
@@ -131,6 +132,39 @@ import { CredentialRowsList } from '/src/features/credential-rows';
 import { StartViewPage, startBlankId } from '/src/features/connect-agents-view';
 import { localSecretUse, noteSecretUsed } from '/src/recent-secrets';
 import { Sheet } from '/src/sheet';
+import {
+  CLOUD_NEW_CREDENTIAL,
+  CLOUD_NO_CREDENTIAL,
+  buildAwsCloudSetup,
+  buildAwsProfileCloudSetup,
+  buildAzureCloudSetup,
+  buildGcpCloudSetup,
+  cloudCredentialSource,
+  cloudSetupCommand,
+  gcpProjectFromKey,
+} from '/src/cloud-setup';
+import type { CloudCredentialSlot } from '/src/cloud-setup';
+import {
+  AWS_ATTENUATIONS,
+  AWS_GUIDE_POLICY,
+  CLOUD_ACCESS_LEVELS,
+  PROVIDER_CLI,
+  applyCloudPaste,
+  awsAttenuation,
+  awsProfileBlocker,
+  awsProfileNote,
+  azureRestExample,
+  cloudAgentName,
+  cloudCaptureComplete,
+  cloudCaptureSlots,
+  cloudConnectCommand,
+  cloudProvisionScript,
+  cloudSlotPresent,
+  defaultCloudAccessLevel,
+  gcpKeyEmail,
+  maskCredential,
+} from '/src/cloud-guide';
+import type { CloudCaptureSlot, CloudProvider } from '/src/cloud-guide';
 
 const EDIT_SECRET_MASK = '••••••••••••';
 
@@ -1501,11 +1535,12 @@ const liveCount = (c: ConnectionSummary): number =>
 /** The coarse kind a connection belongs to. Drives the muted per-kind
  * icon tint so a mixed list sorts itself visually without being
  * grouped. */
-type ConnKind = 'mcp' | 'db' | 'ssh' | 'api';
+type ConnKind = 'mcp' | 'db' | 'ssh' | 'api' | 'cloud';
 
 function connectionKind(c: ConnectionSummary): ConnKind {
   if (c.type === 'pg') return 'db';
   if (c.type === 'ssh') return 'ssh';
+  if (c.type === 'cloud') return 'cloud';
   return c.mcp_path ? 'mcp' : 'api';
 }
 
@@ -1516,6 +1551,7 @@ function kindLabel(c: ConnectionSummary): string {
     case 'ssh': return 'SSH';
     case 'mcp': return 'MCP server';
     case 'api': return 'HTTP API';
+    case 'cloud': return 'Cloud CLI';
   }
 }
 
@@ -1651,6 +1687,7 @@ function stripTargetParen(name: string, target: string): string {
 function confirmUnitLabel(c: ConnectionSummary): string {
   if (c.type === 'pg') return 'Ask before database sessions';
   if (c.type === 'ssh') return 'Ask before SSH logins';
+  if (c.type === 'cloud') return 'Ask before minting credentials';
   return c.mcp_path ? 'Confirm tool calls before sending' : 'Confirm requests before sending';
 }
 
@@ -1658,6 +1695,9 @@ function confirmUnitLabel(c: ConnectionSummary): string {
 function confirmScopeNote(c: ConnectionSummary): string {
   if (c.type === 'ssh' || c.type === 'pg') {
     return 'Agents will confirm before logging into each new session.';
+  }
+  if (c.type === 'cloud') {
+    return 'Agents will confirm before each short-lived credential mint.';
   }
   return c.mcp_path
     ? 'Agents will confirm each tool call with you before it’s sent.'
@@ -2006,8 +2046,26 @@ function OnePasswordMethodOptions(): ReactNode {
       description: 'Connect through your 1Password Connect server.' },
   ].filter((method) => state.broker.mode === 'local' || method.id !== 'desktop_app');
   return <div className="onepassword-methods" role="radiogroup" aria-label="Connection method">
-    {methods.map((method) => <button key={method.id} type="button" role="radio"
+    {methods.map((method, index) => <button key={method.id} type="button" role="radio"
+      id={`op-method-${method.id}`}
       aria-checked={flow.method === method.id}
+      // Roving tabindex + arrow keys, so the card group works like the
+      // native radio group it announces itself as.
+      tabIndex={flow.method === method.id ? 0 : -1}
+      onKeyDown={(event) => {
+        const delta = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
+          : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
+        if (!delta) return;
+        event.preventDefault();
+        const next = methods[(index + delta + methods.length) % methods.length];
+        // Mirrors the click handler above: switching methods drops a typed
+        // token and clears the error.
+        flow.method = next.id;
+        flow.token = '';
+        flow.error = null;
+        render();
+        focusField(`op-method-${next.id}`);
+      }}
       className={`onepassword-method ${flow.method === method.id ? 'selected' : ''}`}
       data-act="onepassword-method" data-method={method.id}>
       <span className="onepassword-method-icon"><Icon markup={ICONS[method.icon]} /></span>
@@ -2706,6 +2764,24 @@ function connectionFactRows(c: ConnectionSummary): Array<[string, string]> {
     if (c.port != null) rows.push(['Port', String(c.port)]);
     if (c.user) rows.push(['User', c.user]);
     rows.push(['Host key', c.host_key_fingerprint ? 'Pinned' : 'Not pinned yet']);
+  } else if (c.type === 'cloud' && c.cloud) {
+    if (c.cloud.provider === 'aws') {
+      rows.push(['Provider', 'AWS']);
+      if (c.cloud.region) rows.push(['Region', c.cloud.region]);
+      if (c.cloud.role_arn) rows.push(['Assumes role', c.cloud.role_arn]);
+      rows.push(['Session lifetime', `${Math.round(c.cloud.session_ttl_secs / 60)} minutes`]);
+    } else if (c.cloud.provider === 'gcp') {
+      rows.push(['Provider', 'Google Cloud']);
+      if (c.cloud.project) rows.push(['Project', c.cloud.project]);
+      if (c.cloud.scope) rows.push(['OAuth scope', c.cloud.scope]);
+      rows.push(['Token lifetime', 'Up to 1 hour (Google-controlled)']);
+    } else if (c.cloud.provider === 'azure') {
+      rows.push(['Provider', 'Azure']);
+      if (c.cloud.tenant_id) rows.push(['Tenant', c.cloud.tenant_id]);
+      if (c.cloud.subscription_id) rows.push(['Subscription', c.cloud.subscription_id]);
+      if (c.cloud.scope) rows.push(['Token scope', c.cloud.scope]);
+      rows.push(['Token lifetime', 'About 1 hour (Entra-controlled)']);
+    }
   } else if (c.host) {
     rows.push(['Upstream', c.target]);
   }
@@ -2752,6 +2828,64 @@ function ConnectionDetail({ connection: c }: {
         {ENDPOINTABLE[c.type] ? <EndpointStrip connection={c} /> : null}
       </div>
     : null;
+  // `cloudSetupCommand` is the shared renderer: AWS gets a profile install,
+  // the others a shell export. The tool panel and the Connect-agents
+  // walkthrough must not disagree about what to run.
+  const cloudCommand = cloudSetupCommand(c);
+  // A connection minted on another machine only works while that machine is
+  // supplying sessions, so say which state it is in rather than leaving the
+  // user to find out through an agent.
+  const pushedStatus = c.cloud?.minted_elsewhere
+    ? (() => {
+        const where = c.cloud.source_origin_label || 'the machine that owns it';
+        const left = c.cloud.pushed_expires_in_seconds ?? null;
+        return left === null
+          ? <div className="cd-pushed waiting">
+              <b>Waiting for {where}.</b> Sessions for this tool are minted there
+              and handed to your broker. Open Multitool on that machine to
+              supply one — agents cannot use this tool until it does.
+            </div>
+          : <div className="cd-pushed live">
+              <b>Session expires in {Math.max(1, Math.round(left / 60))} min.</b>{' '}
+              Multitool on {where} keeps this refreshed while it is running.
+            </div>;
+      })()
+    : null;
+  const cloudSection = enabled && c.type === 'cloud' && c.cloud
+    ? <div className="cd-sec cd-connect cd-cloud-connect">
+        <div className="cd-connect-lbl"><span>
+          {c.cloud.provider === 'aws' ? 'Connect the AWS CLI'
+            : c.cloud.provider === 'gcp' ? 'Connect Google Cloud CLI'
+            : 'Mint Azure tokens'}
+        </span></div>
+        <div className="cd-help">
+          {c.cloud.provider === 'aws'
+            ? <>Run this once, then append the profile it prints to <code>~/.aws/config</code>.
+                The AWS CLI will ask Multitool for fresh temporary credentials when needed.</>
+            : c.cloud.provider === 'gcp'
+            ? <>Run this in the shell where you’ll use <code>gcloud</code>. It exports only a
+                short-lived token and the selected project; the JSON key stays in Multitool.</>
+            : <>Run this in the shell where you’ll call Azure. It exports a short-lived
+                ARM bearer token and the subscription; the client secret stays in Multitool.</>}
+        </div>
+        {pushedStatus}
+        <CloudCommandBlock command={cloudCommand} />
+        {c.cloud.provider === 'azure'
+          ? <CloudCommandBlock command={azureRestExample(c.cloud.subscription_id)} stacked />
+          : null}
+        <div className="rule-note">
+          {c.cloud.provider === 'aws'
+            ? <>Export the <code>AWS_PROFILE</code> shown by that command, then verify with{' '}
+                <code>aws sts get-caller-identity</code>.</>
+            : c.cloud.provider === 'gcp'
+            ? <>Verify with <code>gcloud auth print-access-token</code>. Run the command again
+                when the token expires or when you open a new shell.</>
+            : <>The token rides the Authorization header via <code>az rest</code> or any
+                HTTP client. It does not sign in the Azure CLI itself — plain{' '}
+                <code>az</code> commands still need their own login.</>}
+        </div>
+      </div>
+    : null;
   return <>
     <div className="cd-head">
       <span className={`cat-ico kind-${connectionKind(c)}`} aria-hidden="true">
@@ -2773,6 +2907,7 @@ function ConnectionDetail({ connection: c }: {
       </div>
     </div>
     {!enabled ? <div className="cd-help cd-off-note">This tool is disabled.</div> : null}
+    {cloudSection}
     {c.mcp_path ? <>{mcpSection}{endpointSection}</> : <>{endpointSection}{mcpSection}</>}
     <ConfirmationSection connection={c} />
     <ConnectionAdvancedSection connection={c} />
@@ -2855,7 +2990,8 @@ function paletteGroups(query: string): PaletteGroup[] {
   const isConnected = (entry: CatalogEntry): boolean =>
     connectionsForEntry(entry, state.connections).length > 0;
   const alwaysAddable = (entry: CatalogEntry): boolean =>
-    entry.connType === 'pg' || entry.connType === 'ssh' || ['http', 'mcp'].includes(entry.id);
+    entry.connType === 'pg' || entry.connType === 'ssh' || entry.connType === 'cloud'
+      || ['http', 'mcp'].includes(entry.id);
   return PALETTE_SECTIONS.flatMap((section) => {
     const rows = entries.filter((entry) => entry.section === section
       && !entry.disabled
@@ -3063,7 +3199,8 @@ function ConnectionsView({ withReadyCard = true }: { withReadyCard?: boolean }):
   // moves to the palette and the list shows only what agents can reach.
   const showDirectory = !state.connections.length;
   const alwaysAddable = (entry: CatalogEntry): boolean =>
-    entry.connType === 'pg' || entry.connType === 'ssh' || ['http', 'mcp'].includes(entry.id);
+    entry.connType === 'pg' || entry.connType === 'ssh' || entry.connType === 'cloud'
+      || ['http', 'mcp'].includes(entry.id);
   const sections = !showDirectory ? [] : PALETTE_SECTIONS.flatMap((section) => {
     const sectionEntries = entries.filter(
       (entry) => entry.section === section && (!isConnected(entry) || alwaysAddable(entry)),
@@ -4919,7 +5056,8 @@ function Sheets(): ReactNode {
 function ConnectionSheets({ editing }: { editing: boolean }): ReactNode {
   return (
     <>
-      <Sheet titleId="conn-sheet-title" className="wide">
+      <Sheet titleId="conn-sheet-title"
+        className={`wide${cloudGuideSheetActive(editing) ? ' cloud-guided' : ''}`}>
         <ConnSheet editing={editing} />
       </Sheet>
       {state.confirmDiscard && (
@@ -5319,12 +5457,13 @@ const fieldCls = (key: string): string => (state.sheetErrors[key] ? 'err' : '');
  * button plus a fixed-position listbox portaled under #overlays so the
  * scrolling sheet cannot clip it (see positionFormMenu). Selection is
  * applied by the delegated select-pick handler writing the draft. */
-function CustomSelect({ id, options, selectedValue, errCls = '', ariaRequired }: {
+function CustomSelect({ id, options, selectedValue, errCls = '', ariaRequired, onSelect }: {
   id: string;
   options: Array<[string, string]>;
   selectedValue: string | null | undefined;
   errCls?: string;
   ariaRequired?: boolean;
+  onSelect?: (value: string) => void;
 }): ReactNode {
   const open = state.formMenuOpen === id;
   const selected = options.find(([value]) => value === selectedValue) ?? options[0];
@@ -5340,7 +5479,12 @@ function CustomSelect({ id, options, selectedValue, errCls = '', ariaRequired }:
         <div className="cred-menu" role="listbox">
           {options.map(([value, label]) => (
             <button type="button" key={value} className="cred-opt" role="option" data-act="select-pick"
-              data-menu={id} data-id={value} aria-selected={value === selected[0]}>
+              data-menu={id} data-id={value} aria-selected={value === selected[0]}
+              onClick={onSelect ? (event) => {
+                event.stopPropagation();
+                state.formMenuOpen = null;
+                onSelect(value);
+              } : undefined}>
               <span className="cred-opt-col"><span className="cred-name">{label}</span></span>
               {value === selected[0]
                 ? <span className="cred-opt-check"><Icon markup={ICONS.check} /></span> : null}
@@ -5841,6 +5985,956 @@ function CredentialChooser({ type, allowNew = true, valueHint }: {
   );
 }
 
+function CloudCredentialField({
+  id, label, slot, refKey, valueKey, errorKey, placeholder, optional = false,
+  multiline = false, onNewValue,
+}: {
+  id: string;
+  label: string;
+  slot: CloudCredentialSlot;
+  refKey: keyof ConnectionDraft;
+  valueKey: keyof ConnectionDraft;
+  errorKey: string;
+  placeholder: string;
+  optional?: boolean;
+  multiline?: boolean;
+  onNewValue?: (value: string) => void;
+}): ReactNode {
+  const d = state.draft;
+  const source = cloudCredentialSource(d, slot, optional);
+  const ref = d[refKey] as string | null | undefined;
+  const selected = source === 'new' ? CLOUD_NEW_CREDENTIAL
+    : source === 'none' ? CLOUD_NO_CREDENTIAL
+    : ref ?? '';
+  const select = (value: string): void => {
+    const sources = { ...(d.cloudCredentialSources ?? {}) };
+    if (value === CLOUD_NEW_CREDENTIAL) {
+      sources[slot] = 'new';
+      (d as Record<string, unknown>)[refKey] = null;
+    } else if (value === CLOUD_NO_CREDENTIAL) {
+      sources[slot] = 'none';
+      (d as Record<string, unknown>)[refKey] = null;
+      (d as Record<string, unknown>)[valueKey] = '';
+    } else {
+      sources[slot] = 'existing';
+      (d as Record<string, unknown>)[refKey] = value;
+      (d as Record<string, unknown>)[valueKey] = '';
+    }
+    d.cloudCredentialSources = sources;
+    delete state.sheetErrors[errorKey];
+    disarmDraftTestOverride();
+    render();
+    focusField(id);
+  };
+  const options: Array<[string, string]> = [
+    [CLOUD_NEW_CREDENTIAL, 'Save as new credential'],
+    ...state.secrets.map((secret) => [secret.name, secret.name] as [string, string]),
+    ...(optional ? [[CLOUD_NO_CREDENTIAL, 'None'] as [string, string]] : []),
+  ];
+  const chooser = <CustomSelect id={id} options={options} selectedValue={selected}
+    errCls={fieldCls(errorKey)} onSelect={select} />;
+  const valueField = source !== 'new' ? null
+    : multiline
+    ? <textarea id={`${id}-value`} className={fieldCls(errorKey)} rows={5}
+        autoComplete="off" spellCheck={false} placeholder={placeholder}
+        value={(d[valueKey] as string | undefined) ?? ''}
+        onChange={(event) => onNewValue
+          ? onNewValue(event.currentTarget.value)
+          : setDraftField(
+            valueKey as keyof ConnectionDraft & string,
+            errorKey,
+            event.currentTarget.value,
+          )} />
+    : <input id={`${id}-value`} className={fieldCls(errorKey)} type="password"
+        autoComplete="off" spellCheck={false} placeholder={placeholder}
+        value={(d[valueKey] as string | undefined) ?? ''}
+        onChange={(event) => setDraftField(
+          valueKey as keyof ConnectionDraft & string,
+          errorKey,
+          event.currentTarget.value,
+        )} />;
+  // The value being entered is the field's body, so it sits directly under
+  // the label and the chooser rides underneath as the "or use a saved one"
+  // alternative. With no value field (an existing credential, or none), the
+  // chooser is the field.
+  const valueLeads = source === 'new';
+  return <div className="f-row cloud-credential" key={id}>
+    <label htmlFor={valueLeads ? `${id}-value` : id}>{label}{optional
+      ? <span className="label-detail"> (optional)</span> : null}</label>
+    {valueLeads
+      ? <>{valueField}{chooser}</>
+      : <>{chooser}{valueField}</>}
+    <FieldError k={errorKey} />
+  </div>;
+}
+
+/** Whether the add sheet is currently the guided cloud flow, whose step-1
+ * row of choices wants more width than an ordinary form. */
+function cloudGuideSheetActive(editing: boolean): boolean {
+  return !editing
+    && state.connType === 'cloud'
+    && Boolean(state.draft.cloudProvider)
+    && !state.draft.cloudSetupSkipped;
+}
+
+/** A paste-ready command with its Copy button.
+ *
+ * Two shapes, chosen by how much there is to read: a one-liner keeps the
+ * button beside it, where the eye already is. A multi-line block puts the
+ * button underneath and right-aligned instead — beside a wrapped block it
+ * ends up floating against the middle of the text, pointing at nothing. */
+function CloudCommandBlock(
+  { command, stacked = false }: { command: string; stacked?: boolean },
+): ReactNode {
+  return (
+    <div className={`cloud-install-command${stacked ? ' stacked' : ''}`}>
+      <pre className="setup-instructions"><code>{command}</code></pre>
+      <button className="btn sm" data-act="copy-text" data-text={command}>Copy</button>
+    </div>
+  );
+}
+
+/* ------------------------- guided cloud setup ----------------------------- */
+// The add flow for cloud connections is a three-step sheet: create the
+// identity (script or console walkthrough), capture its credentials (smart
+// paste + checklist), then name the tool and hook up the CLI. Skip drops to
+// the one-shot form below for people who know exactly what they're pasting.
+
+const CLOUD_GUIDE_STEP_LABELS = ['Identity', 'Credentials', 'Connect'];
+/** Reusing a sign-in captures no credential, so that step is not shown. */
+const CLOUD_REUSE_STEP_LABELS = ['Identity', 'Connect'];
+
+function cloudGuideStep(d: ConnectionDraft): number {
+  return Math.min(3, Math.max(1, d.cloudSetupStep ?? 1));
+}
+
+/** Whether "use my aws sign-in" is on offer.
+ *
+ * It reads this machine's `~/.aws`, which the app can always do. A hosted
+ * broker cannot, so it is served sessions minted here instead — the same
+ * connection either way, with a different machine doing the minting. */
+function cloudReuseAvailable(d: ConnectionDraft): boolean {
+  return d.cloudProvider === 'aws';
+}
+
+/** Whether this connection's sessions will be minted here and pushed,
+ * rather than minted by the broker on demand. */
+function cloudReuseIsPushed(): boolean {
+  return state.broker.mode !== 'local';
+}
+
+/** The chosen path, falling back when a stale 'reuse' pick outlives the
+ * provider that offered it. */
+function cloudGuidePath(d: ConnectionDraft): 'script' | 'console' | 'reuse' {
+  const path = d.cloudSetupPath ?? 'script';
+  return path === 'reuse' && !cloudReuseAvailable(d) ? 'script' : path;
+}
+
+function setCloudGuideStep(step: number, focusId?: string): void {
+  state.draft.cloudSetupStep = step;
+  render();
+  if (focusId) focusField(focusId);
+}
+
+function CloudGuideSteps(): ReactNode {
+  const reuse = cloudGuidePath(state.draft) === 'reuse';
+  const labels = reuse ? CLOUD_REUSE_STEP_LABELS : CLOUD_GUIDE_STEP_LABELS;
+  const raw = cloudGuideStep(state.draft);
+  // Step 3 is the second dot when the capture step is skipped.
+  const current = reuse && raw === 3 ? 2 : raw;
+  const parts: ReactNode[] = [];
+  labels.forEach((label, index) => {
+    const n = index + 1;
+    const cls = n < current ? 'done' : n === current ? 'on' : '';
+    if (index) parts.push(<span className="cloud-steps-line" key={`line-${label}`} aria-hidden="true" />);
+    parts.push(
+      <span className={`cloud-step ${cls}`} key={label}
+        aria-current={n === current ? 'step' : undefined}>
+        <span className="cloud-step-dot" aria-hidden="true">{n < current ? '✓' : n}</span>
+        <b>{label}</b>
+      </span>,
+    );
+  });
+  return <div className="cloud-steps" aria-label={`Step ${current} of ${labels.length}`}>{parts}</div>;
+}
+
+function CloudGuidePathCards(): ReactNode {
+  const d = state.draft;
+  const provider = d.cloudProvider as CloudProvider;
+  const path = cloudGuidePath(d);
+  const identity = provider === 'aws' ? 'IAM user'
+    : provider === 'gcp' ? 'service account' : 'service principal';
+  const cli = PROVIDER_CLI[provider];
+  const cards: Array<{ id: 'script' | 'console' | 'reuse'; title: string; detail: string }> = [
+    { id: 'script', title: 'Use shell commands',
+      detail: `Create a least-privileged ${identity} from Cloud Shell.` },
+    { id: 'console',
+      title: provider === 'azure' ? 'Use web portal' : 'Use web console',
+      detail: provider === 'aws' ? 'Follow step-by-step IAM instructions.'
+        : provider === 'gcp' ? 'Follow step-by-step service account instructions.'
+        : 'Follow step-by-step app registration instructions.' },
+  ];
+  if (cloudReuseAvailable(d)) {
+    cards.push({ id: 'reuse', title: `Use my ${cli.command} sign-in`,
+      detail: `Use my existing CLI login in ${cli.config}.` });
+  }
+  const select = (index: number): void => {
+    const picked = cards[index].id;
+    d.cloudSetupPath = picked;
+    // Read ~/.aws only when the path that needs it is actually chosen.
+    if (picked === 'reuse' && state.awsProfiles === null) void loadAwsProfiles();
+    render();
+    focusField(`c-cloud-path-${picked}`);
+  };
+  return (
+    <div className="cloud-path-cards" role="radiogroup" aria-label="How to create the identity">
+      {cards.map((card, index) => (
+        <button key={card.id} type="button" role="radio" id={`c-cloud-path-${card.id}`}
+          aria-checked={path === card.id}
+          // Roving tabindex + arrow keys: the group is one tab stop, like a
+          // native radio group.
+          tabIndex={path === card.id ? 0 : -1}
+          onKeyDown={(event) => {
+            const delta = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
+              : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
+            if (!delta) return;
+            event.preventDefault();
+            select((index + delta + cards.length) % cards.length);
+          }}
+          className={`cloud-path-card ${path === card.id ? 'selected' : ''}`}
+          onClick={() => select(index)}>
+          <span className="cloud-path-radio" aria-hidden="true" />
+          <b>{card.title}</b>
+          <small>{card.detail}</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CloudGuideScriptPath(): ReactNode[] {
+  const d = state.draft;
+  const provider = d.cloudProvider as CloudProvider;
+  const selected = d.cloudScriptRole ?? defaultCloudAccessLevel(provider);
+  const script = cloudProvisionScript(provider, selected, cloudAgentName(d.name));
+  const orgNote = provider === 'aws'
+    ? 'Organizations on IAM Identity Center often disallow new IAM users. If the first command is refused, ask an admin, or try another method.'
+    : provider === 'gcp'
+    ? 'Some organizations block service-account key creation. If the last command is refused, ask an admin for a key, or try another method.'
+    : 'Creating an app registration needs directory permissions. If the command is refused, ask an admin to run it and send you what it printed.';
+  return [
+    <div className="f-row" key="access-level">
+      <label id="c-cloud-access-label" htmlFor="c-cloud-access-0">Access level</label>
+      <div className="cloud-access-radios" role="radiogroup" aria-labelledby="c-cloud-access-label">
+        {CLOUD_ACCESS_LEVELS[provider].map(([value, label], index) => (
+          <label key={value}>
+            <input type="radio" name="c-cloud-access" id={`c-cloud-access-${index}`}
+              value={value} checked={selected === value}
+              onChange={() => { d.cloudScriptRole = value; render(); }} />
+            {label}
+          </label>
+        ))}
+      </div>
+    </div>,
+    <div className="rule-note" key="run-note">
+      Run this in <span className="note-strong">Cloud Shell (already signed in,
+      in your browser)</span> or a <span className="note-strong">signed-in admin
+      terminal</span>:
+    </div>,
+    // Open by default so the commands are visible without an extra click;
+    // the step's job is to run them. Copy still sits on the summary so it
+    // stays one click either way.
+    <details className="cloud-policy cloud-script" key="script" open>
+      <summary>
+        <span className="cloud-policy-chevron" aria-hidden="true">
+          <Icon markup={ICONS.chevronRight} />
+        </span>
+        {/* What the commands will create, the way the policy disclosure
+            names what the policy grants. */}
+        <span>{cloudAgentName(d.name)} · {selected}</span>
+        {/* Copying is the point of the step, so it must not depend on
+            unfolding first. */}
+        <button className="btn sm" data-act="copy-text" data-text={script}
+          onClick={(event) => event.preventDefault()}>Copy</button>
+      </summary>
+      <pre className="setup-instructions"><code>{script}</code></pre>
+    </details>,
+    <div className="rule-note" key="org-note">{orgNote}</div>,
+  ];
+}
+
+/** Read the broker host's ~/.aws once per sheet. An unreadable home (or a
+ * broker that moved) reads as "no profiles", which the picker states. The
+ * cache is cleared when a cloud sheet opens, so each sheet re-reads and
+ * stamps its own draft — a listing left over from an earlier sheet would
+ * skip the load and leave the fresh draft with no machine stamp. */
+async function loadAwsProfiles(): Promise<void> {
+  const d = state.draft;
+  let listing: AwsProfileList;
+  try {
+    listing = await invoke('list_aws_profiles');
+  } catch {
+    listing = { origin: '', origin_label: '', profiles: [] };
+  }
+  state.awsProfiles = listing;
+  // The sheet may have closed (or been replaced) while the read was in
+  // flight; the listing is still current, but the draft it was for is gone.
+  if (state.draft !== d) return;
+  // The connection records which machine's files it means, taken from the
+  // same read that produced the list.
+  d.cloudSourceOrigin = listing.origin;
+  d.cloudSourceOriginLabel = listing.origin_label;
+  // Preselect the first usable profile so the common case is one click.
+  if (!d.cloudSourceProfile) {
+    const usable = listing.profiles.find((profile) => !awsProfileBlocker(profile));
+    if (usable) d.cloudSourceProfile = usable.name;
+  }
+  render();
+}
+
+/** Pick which local sign-in to broker from, and how much of it agents get.
+ * Nothing is vaulted: the broker reads the profile at mint time and asks STS
+ * for a session bounded by the chosen policy, so an administrator profile
+ * can safely back a read-only connection. */
+function CloudGuideReusePath(): ReactNode[] {
+  const d = state.draft;
+  const listing = state.awsProfiles;
+  if (listing === null) {
+    return [<div className="rule-note" key="loading">Reading your AWS profiles…</div>];
+  }
+  const profiles = listing.profiles;
+  if (!profiles.length) {
+    return [
+      <div className="rule-note warn" key="empty">
+        No profiles found in <code>~/.aws</code>. Sign in with the AWS CLI first, or
+        create a dedicated identity with one of the other options.
+      </div>,
+    ];
+  }
+  const selected = d.cloudSourceProfile ?? '';
+  const attenuation = awsAttenuation(d.cloudAttenuation);
+  const chosen = profiles.find((profile) => profile.name === selected);
+  const note = chosen ? awsProfileNote(chosen) : null;
+  return [
+    <div className="f-row" key="profile">
+      <label id="c-cloud-profile-label">Profile</label>
+      <div className="cloud-profile-list" role="radiogroup" aria-labelledby="c-cloud-profile-label">
+        {profiles.map((profile) => {
+          const blocker = awsProfileBlocker(profile);
+          const on = profile.name === selected;
+          return (
+            <button key={profile.name} type="button" role="radio" aria-checked={on}
+              id={`c-cloud-profile-${profile.name}`} disabled={Boolean(blocker)}
+              className={`cloud-profile-row ${on ? 'selected' : ''}`}
+              onClick={() => {
+                d.cloudSourceProfile = profile.name;
+                // The profile's own region is the sensible default; a blank
+                // draft region means "whatever the profile names".
+                delete state.sheetErrors.cloudSourceProfile;
+                render();
+              }}>
+              <span className="cloud-path-radio" aria-hidden="true" />
+              <span className="cloud-profile-name">{profile.name}</span>
+              <span className="cloud-profile-detail">
+                {blocker ?? [profile.region, profile.kind === 'temporary' ? 'temporary' : null]
+                  .filter(Boolean).join(' · ')}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <FieldError k="cloudSourceProfile" />
+    </div>,
+    note ? <div className="rule-note warn" key="profile-note">{note}</div> : null,
+    <div className="f-row" key="attenuation">
+      <label id="c-cloud-atten-label">What agents get from it</label>
+      <div className="cloud-access-radios" role="radiogroup" aria-labelledby="c-cloud-atten-label">
+        {AWS_ATTENUATIONS.map((option) => (
+          <label key={option.id}>
+            <input type="radio" name="c-cloud-attenuation" value={option.id}
+              checked={attenuation.id === option.id}
+              onChange={() => {
+                d.cloudAttenuation = option.id;
+                render();
+              }} />
+            {option.label}
+          </label>
+        ))}
+      </div>
+      <div className="rule-note">{attenuation.detail}</div>
+    </div>,
+    attenuation.policyArn
+      ? <div className="rule-note" key="enforced">
+          AWS enforces this bound on every minted session (a session policy on{' '}
+          <code>GetFederationToken</code>), so the profile keeps its own access
+          while agents never exceed the leash.
+        </div>
+      : <div className="rule-note warn" key="unbounded">
+          Agents will be able to do anything this profile can. Prefer a bounded
+          option unless you know you need the rest.
+        </div>,
+    cloudReuseIsPushed()
+      ? <div className="rule-note warn" key="pushed">
+          Your broker runs elsewhere and can’t read this Mac’s{' '}
+          <code>~/.aws</code>. Multitool will mint sessions here and hand the
+          broker each one — your keys stay on this Mac, but agents lose the
+          connection while this Mac is asleep or Multitool is closed.
+        </div>
+      : null,
+  ];
+}
+
+function CloudGuideConsolePath(): ReactNode {
+  const provider = state.draft.cloudProvider as CloudProvider;
+  if (provider === 'aws') {
+    const consoleUrl = 'https://console.aws.amazon.com/iam/home#/users/create';
+    return (
+      <ol className="cloud-howto">
+        <li>
+          Open <a className="external-doc-link" href={consoleUrl} data-act="open-external-url"
+            data-url={consoleUrl}>IAM → Users → Create user</a>, and create a user with a
+          recognizable name, like <code>{cloudAgentName(state.draft.name)}</code>.
+        </li>
+        <li>
+          Choose <b>Attach policies directly</b> and paste this policy. You can trim
+          to what your agents need:
+          <details className="cloud-policy" open>
+            <summary>
+              <span className="cloud-policy-chevron" aria-hidden="true">
+                <Icon markup={ICONS.chevronRight} />
+              </span>
+              <span>{AWS_GUIDE_POLICY.label}</span>
+              <button className="btn sm" data-act="copy-text" data-text={AWS_GUIDE_POLICY.json}
+                onClick={(event) => event.preventDefault()}>Copy JSON</button>
+            </summary>
+            <pre className="setup-instructions"><code>{AWS_GUIDE_POLICY.json}</code></pre>
+          </details>
+        </li>
+        <li>
+          After creating the user, open it → <b>Security credentials</b> →{' '}
+          <b>Create access key</b> → “Application running outside AWS”. Keep that
+          tab open for the next step.
+        </li>
+      </ol>
+    );
+  }
+  if (provider === 'gcp') {
+    return (
+      <ol className="cloud-howto">
+        <li>Open <b>IAM &amp; Admin → Service accounts → Create</b>. Name it{' '}
+          <code>{cloudAgentName(state.draft.name)}</code>.</li>
+        <li>Grant a least-privileged role, e.g. Viewer.</li>
+        <li>Open the account → <b>Keys → Add key → JSON</b>. The key downloads once;
+          the next step captures it.</li>
+      </ol>
+    );
+  }
+  return (
+    <ol className="cloud-howto">
+      <li>In Entra admin center, open <b>App registrations → New registration</b>{' '}
+        and give it a name.</li>
+      <li>Open the app → <b>Certificates &amp; secrets → New client secret</b>. Copy
+        and save the Value (it’s only shown once).</li>
+      <li>In your subscription’s <b>Access control (IAM)</b>, assign the app a
+        least-privileged role, e.g. Reader.</li>
+    </ol>
+  );
+}
+
+// Once one of these lands, the paste box is holding secret material in
+// cleartext; the capture rows show it masked, so the box itself can clear.
+const CLOUD_SECRET_ERROR_KEYS = ['cloudSecretKeyRef', 'cloudGcpKeyRef', 'cloudClientSecretRef'];
+
+function applyCloudGuidePaste(text: string): void {
+  const d = state.draft;
+  const applied = applyCloudPaste(d, d.cloudProvider as CloudProvider, text);
+  const capturedSecret = applied.clearedErrorKeys
+    .some((key) => CLOUD_SECRET_ERROR_KEYS.includes(key));
+  d.cloudPasteRaw = capturedSecret ? '' : text;
+  d.cloudPasteSource = applied.source
+    ? applied.source + (capturedSecret ? ' — captured below' : '')
+    : null;
+  for (const key of applied.clearedErrorKeys) delete state.sheetErrors[key];
+  render();
+}
+
+function CloudGuideSlotRow({ slot }: { slot: CloudCaptureSlot }): ReactNode {
+  const d = state.draft;
+  const present = cloudSlotPresent(d, slot);
+  const inputId = `c-cloud-slot-${slot.key}`;
+  // A secret slot collapses to its masked view only once the user leaves the
+  // field: collapsing on the first typed character would unmount the input
+  // mid-word, drop focus, and green-tick a one-character "secret".
+  const [editing, setEditing] = useState(false);
+  let control: ReactNode;
+  if (slot.editable || !present || editing) {
+    control = (
+      <input id={inputId} className={fieldCls(slot.errorKey)}
+        type={slot.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false}
+        placeholder={slot.placeholder}
+        value={(d[slot.valueKey] as string | undefined) ?? ''}
+        onBlur={() => setEditing(false)}
+        onChange={(event) => {
+          const record = d as Record<string, unknown>;
+          record[slot.valueKey] = event.currentTarget.value;
+          if (slot.refKey) record[slot.refKey] = null;
+          if (slot.credentialSlot) {
+            d.cloudCredentialSources = {
+              ...(d.cloudCredentialSources ?? {}),
+              [slot.credentialSlot]: 'new',
+            };
+          }
+          delete state.sheetErrors[slot.errorKey];
+          setEditing(true);
+          render();
+        }} />
+    );
+  } else {
+    // Captured: show enough to confirm what landed, never the whole secret —
+    // with a way back in, so a mis-capture is not locked behind the mask.
+    const value = String((d[slot.valueKey] as string | undefined) ?? '');
+    const ref = slot.refKey ? (d[slot.refKey] as string | null | undefined) : null;
+    const display = ref ? ref
+      : slot.key === 'gcp-key' ? (gcpKeyEmail(value) ?? '••••••••')
+      : slot.key === 'aws-access' ? maskCredential(value)
+      : '••••••••';
+    control = (
+      <>
+        <span className="cloud-parsed-value">{display}</span>
+        <button type="button" className="btn sm" onClick={() => {
+          setEditing(true);
+          focusField(inputId);
+        }}>Change</button>
+      </>
+    );
+  }
+  return (
+    <div className={`cloud-parsed-row ${present ? 'ok' : 'todo'}`}>
+      <span className="cloud-parsed-tick" aria-hidden="true">{present ? '✓' : '!'}</span>
+      <label className="cloud-parsed-label" htmlFor={inputId}>{slot.label}</label>
+      <span className="cloud-parsed-control">
+        {control}
+        <FieldError k={slot.errorKey} />
+      </span>
+    </div>
+  );
+}
+
+function CloudGuideCapture(): ReactNode[] {
+  const d = state.draft;
+  const provider = d.cloudProvider as CloudProvider;
+  const placeholder = provider === 'aws'
+    ? 'Paste the access-key CSV, export AWS_… lines, a credentials-file profile, or create-access-key output'
+    : provider === 'gcp'
+    ? 'Paste the downloaded service-account JSON key'
+    : 'Paste the az ad sp create-for-rbac output — add az account show output to fill the subscription too';
+  const raw = d.cloudPasteRaw ?? '';
+  const unrecognized = Boolean(raw.trim()) && !d.cloudPasteSource;
+  const slots = cloudCaptureSlots(provider);
+  // ASIA-prefixed keys are STS session keys: short-lived, and unmintable
+  // without their session token and a role. Warn now, not after saving.
+  const temporaryKey = provider === 'aws'
+    && (d.cloudAccessKeyValue ?? '').trim().startsWith('ASIA');
+  const advancedError = temporaryKey
+    || ['cloudRoleArn', 'cloudSessionTtl'].some((key) => state.sheetErrors[key]);
+  return [
+    <div className="f-row" key="paste">
+      <label htmlFor="c-cloud-paste">Paste credentials</label>
+      <textarea id="c-cloud-paste" className="cloud-paste-zone" rows={5}
+        autoComplete="off" spellCheck={false} placeholder={placeholder} value={raw}
+        onChange={(event) => applyCloudGuidePaste(event.currentTarget.value)} />
+      {d.cloudPasteSource
+        ? <div className="cloud-paste-source">Recognized: {d.cloudPasteSource}</div>
+        : unrecognized
+        ? <div className="rule-note">Didn’t recognize a credential in that paste —
+            fill the fields below instead.</div>
+        : <div className="rule-note">Nothing is stored until you add the connection.</div>}
+    </div>,
+    provider === 'gcp'
+      ? <div className="f-row" key="gcp-file">
+          <label htmlFor="c-cloud-gcp-file">Or load the downloaded JSON file</label>
+          <input id="c-cloud-gcp-file" className="cloud-file-input" type="file"
+            accept="application/json,.json" onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (!file) return;
+              void file.text().then(applyCloudGuidePaste).catch(() => {
+                state.sheetErrors.cloudGcpKeyRef = 'Couldn’t read that JSON file.';
+                render();
+              });
+            }} />
+        </div>
+      : null,
+    <div className="cloud-parsed" key="slots">
+      {slots.map((slot) => <CloudGuideSlotRow slot={slot} key={slot.key} />)}
+    </div>,
+    temporaryKey
+      ? <div className="rule-note warn" key="temp-key">
+          This looks like a temporary session key (ASIA…): it expires soon and can’t
+          mint sessions on its own. Prefer a durable key for a dedicated identity, or
+          use Skip to enter this key with its session token and a role to assume.
+        </div>
+      : null,
+    provider === 'aws'
+      ? <details className="set-collapse" key="aws-advanced" open={advancedError || undefined}>
+          <summary>Advanced</summary>
+          <div className="set-panel">
+            <div className="rule-note">Assume a role, or change the session lifetime:</div>
+            <div className="f-row">
+              <label htmlFor="c-cloud-role-arn">Role ARN <span className="label-detail">(optional)</span></label>
+              <input id="c-cloud-role-arn" className={fieldCls('cloudRoleArn')}
+                placeholder="arn:aws:iam::123456789012:role/MultitoolRole"
+                autoComplete="off" spellCheck={false} value={d.cloudRoleArn ?? ''}
+                onChange={(event) => setDraftField('cloudRoleArn', 'cloudRoleArn', event.currentTarget.value)} />
+              <FieldError k="cloudRoleArn" />
+            </div>
+            <div className="f-row">
+              <label htmlFor="c-cloud-session-ttl">Temporary session lifetime</label>
+              <CustomSelect id="c-cloud-session-ttl"
+                options={[['900', '15 minutes'], ['1800', '30 minutes'], ['3600', '60 minutes']]}
+                selectedValue={d.cloudSessionTtl ?? '900'} errCls={fieldCls('cloudSessionTtl')}
+                onSelect={(value) => setDraftField('cloudSessionTtl', 'cloudSessionTtl', value)} />
+              <FieldError k="cloudSessionTtl" />
+            </div>
+          </div>
+        </details>
+      : null,
+  ];
+}
+
+function CloudGuideConnect(): ReactNode[] {
+  const d = state.draft;
+  const provider = d.cloudProvider as CloudProvider;
+  const nameTaken = toolNameIsTaken(d.name ?? '');
+  const commandName = (d.name || '').trim() || 'this-connection';
+  const cloudCommand = cloudConnectCommand(provider, commandName);
+  const reuse = cloudGuidePath(d) === 'reuse';
+  const attenuation = awsAttenuation(d.cloudAttenuation);
+  return [
+    <div className="f-row" key="name">
+      <label htmlFor="f-cname">Name</label>
+      <input id="f-cname" className={`${fieldCls('name')} ${nameTaken ? 'name-conflict-warning' : ''}`}
+        aria-describedby="tool-name-warning"
+        placeholder={state.connEntryName || catalogNameForType('cloud')} value={d.name ?? ''}
+        onChange={(event) => {
+          d.nameIsAutomatic = false;
+          setDraftField('name', 'name', event.currentTarget.value);
+        }} />
+      <FieldError k="name" />
+      <div id="tool-name-warning" className="field-warning" role="status" aria-live="polite"
+        hidden={!nameTaken}>Name used by an existing tool</div>
+    </div>,
+    reuse
+      ? <div className="rule-note" key="reuse-summary">
+          Sessions come from your <code>{d.cloudSourceProfile}</code> profile,{' '}
+          {attenuation.policyArn
+            ? <>bounded by <b>{attenuation.label.toLowerCase()}</b> access</>
+            : <>with everything that profile can do</>}
+          {cloudReuseIsPushed()
+            ? <>, minted on this Mac and refreshed for the broker while Multitool
+                is running</>
+            : <>, minted when an agent asks</>}
+          . Nothing is copied into the vault, so revoking is a matter of deleting
+          this tool.
+        </div>
+      : null,
+    <div className="f-row" key="connect">
+      <label>{provider === 'aws' ? 'Connect the AWS CLI'
+        : provider === 'gcp' ? 'Connect Google Cloud CLI' : 'Mint Azure tokens'}</label>
+      <CloudCommandBlock command={cloudCommand} />
+      <div className="rule-note">
+        {provider === 'aws'
+          ? <>Run this once after adding, then append the profile it prints to{' '}
+              <code>~/.aws/config</code>. The AWS CLI will ask Multitool for fresh
+              temporary credentials when needed.</>
+          : provider === 'gcp'
+          ? <>Run this in the shell where you’ll use <code>gcloud</code>. It exports
+              only a short-lived access token; the key stays in the vault.</>
+          : <>Run this in the shell where you’ll call Azure. It exports a short-lived
+              ARM token.</>}
+      </div>
+    </div>,
+    provider === 'azure'
+      ? <div className="f-row" key="azure-verify">
+          <label>Then call Azure with the token</label>
+          <CloudCommandBlock command={azureRestExample(d.cloudSubscriptionId)} stacked />
+          <div className="rule-note">
+            The token rides the Authorization header via <code>az rest</code> or any
+            HTTP client. It does not sign in the Azure CLI itself — plain{' '}
+            <code>az</code> commands still need their own login.
+          </div>
+        </div>
+      : null,
+  ];
+}
+
+function CloudGuidedConnSheet({ label }: { label: string }): ReactNode {
+  const d = state.draft;
+  const provider = d.cloudProvider as CloudProvider;
+  const step = cloudGuideStep(d);
+  const path = cloudGuidePath(d);
+  // Reusing a sign-in creates no credential, so there is nothing to capture:
+  // the leash is chosen on step 1 and step 2 drops out of the flow.
+  const reuse = path === 'reuse';
+  let body: ReactNode[];
+  if (step === 1) {
+    body = [
+      <CloudGuidePathCards key="cards" />,
+      ...(reuse
+        ? CloudGuideReusePath()
+        : path === 'script'
+        ? CloudGuideScriptPath()
+        : [<CloudGuideConsolePath key="howto" />]),
+    ];
+  } else if (step === 2) {
+    body = CloudGuideCapture();
+  } else {
+    body = CloudGuideConnect();
+  }
+  const canContinue = reuse
+    ? Boolean((d.cloudSourceProfile ?? '').trim())
+    : step !== 2 || cloudCaptureComplete(d, provider);
+  // Continue out of the capture step runs the real builder validation, so a
+  // malformed region or project bounces here, not after the final Add.
+  const continueStep = (): void => {
+    if (reuse) {
+      const built = buildAwsProfileCloudSetup(d);
+      if (Object.keys(built.errors).length) {
+        Object.assign(state.sheetErrors, built.errors);
+        render();
+        return;
+      }
+      setCloudGuideStep(3, 'f-cname');
+      return;
+    }
+    if (step === 2) {
+      const built = d.cloudProvider === 'aws'
+        ? buildAwsCloudSetup(d, state.secrets.map((secret) => secret.name))
+        : d.cloudProvider === 'gcp'
+        ? buildGcpCloudSetup(d, state.secrets.map((secret) => secret.name))
+        : buildAzureCloudSetup(d, state.secrets.map((secret) => secret.name));
+      if (Object.keys(built.errors).length) {
+        Object.assign(state.sheetErrors, built.errors);
+        render();
+        return;
+      }
+    }
+    setCloudGuideStep(step + 1, step === 1 ? 'c-cloud-paste' : 'f-cname');
+  };
+  return (
+    <>
+      <h3 id="conn-sheet-title">Add {label}</h3>
+      <CloudGuideSteps />
+      {body}
+      <FormGlobalError />
+      <div className="sheet-actions">
+        {step > 1
+          ? <button className="btn cloud-guide-left"
+              onClick={() => setCloudGuideStep(reuse ? 1 : step - 1)}>Back</button>
+          : <button className="btn ghost cloud-guide-left"
+              onClick={() => { d.cloudSetupSkipped = true; render(); }}>Manual setup</button>}
+        <button className="btn" data-act="sheet-cancel">Cancel</button>
+        {step < 3
+          ? <button className="btn primary" disabled={!canContinue}
+              onClick={continueStep}>Continue</button>
+          : <button className="btn primary" data-act="save-conn"
+              disabled={state.connSaving}>Add {label}</button>}
+      </div>
+    </>
+  );
+}
+
+function AwsCloudSetupFields(): ReactNode[] {
+  const d = state.draft;
+  const docs = 'https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html';
+  // Force the collapse open when one of its fields has a validation error,
+  // so the inline message (and the focused input) is visible.
+  const advancedError = ['cloudRoleArn', 'cloudExternalId', 'cloudSessionTokenRef']
+    .some((key) => state.sheetErrors[key]);
+  return [
+    <div className="rule-note cloud-setup-note" key="aws-note">
+      Create a dedicated, least-privilege IAM identity and copy its access key
+      pair here. It will be used to issue temporary STS credentials.{' '}
+      <a className="external-doc-link" href={docs} data-act="open-external-url"
+        data-url={docs}>AWS setup guide</a>
+    </div>,
+    <div className="f-row" key="aws-region">
+      <label htmlFor="c-cloud-region">Region</label>
+      <input id="c-cloud-region" className={fieldCls('cloudRegion')}
+        placeholder="us-west-2" autoComplete="off" spellCheck={false}
+        value={d.cloudRegion ?? ''}
+        onChange={(event) => setDraftField('cloudRegion', 'cloudRegion', event.currentTarget.value)} />
+      <FieldError k="cloudRegion" />
+    </div>,
+    <CloudCredentialField key="aws-access" id="c-cloud-aws-access"
+      label="Access key ID" slot="awsAccessKey"
+      refKey="cloudAccessKeyRef" valueKey="cloudAccessKeyValue"
+      errorKey="cloudAccessKeyRef" placeholder="AKIA…" />,
+    <CloudCredentialField key="aws-secret" id="c-cloud-aws-secret"
+      label="Secret access key" slot="awsSecretKey"
+      refKey="cloudSecretKeyRef" valueKey="cloudSecretKeyValue"
+      errorKey="cloudSecretKeyRef" placeholder="Paste the secret access key" />,
+    <div className="f-row" key="aws-ttl">
+      <label htmlFor="c-cloud-session-ttl">Temporary session lifetime</label>
+      <CustomSelect id="c-cloud-session-ttl"
+        options={[["900", "15 minutes"], ["1800", "30 minutes"], ["3600", "60 minutes"]]}
+        selectedValue={d.cloudSessionTtl ?? '900'} errCls={fieldCls('cloudSessionTtl')}
+        onSelect={(value) => setDraftField('cloudSessionTtl', 'cloudSessionTtl', value)} />
+      <FieldError k="cloudSessionTtl" />
+    </div>,
+    <details className="set-collapse" key="aws-advanced" open={advancedError || undefined}>
+      <summary>Advanced</summary>
+      <div className="set-panel">
+        <div className="rule-note">Assume a role or use temporary source credentials:</div>
+        <div className="f-row">
+          <label htmlFor="c-cloud-role-arn">Role ARN <span className="label-detail">(optional)</span></label>
+          <input id="c-cloud-role-arn" className={fieldCls('cloudRoleArn')}
+            placeholder="arn:aws:iam::123456789012:role/MultitoolRole"
+            autoComplete="off" spellCheck={false} value={d.cloudRoleArn ?? ''}
+            onChange={(event) => setDraftField('cloudRoleArn', 'cloudRoleArn', event.currentTarget.value)} />
+          <FieldError k="cloudRoleArn" />
+        </div>
+        <div className="f-row">
+          <label htmlFor="c-cloud-external-id">External ID <span className="label-detail">(optional)</span></label>
+          <input id="c-cloud-external-id" className={fieldCls('cloudExternalId')}
+            autoComplete="off" spellCheck={false} value={d.cloudExternalId ?? ''}
+            onChange={(event) => setDraftField('cloudExternalId', 'cloudExternalId', event.currentTarget.value)} />
+          <FieldError k="cloudExternalId" />
+        </div>
+        <CloudCredentialField id="c-cloud-aws-session" label="Source session token"
+          slot="awsSessionToken" refKey="cloudSessionTokenRef"
+          valueKey="cloudSessionTokenValue" errorKey="cloudSessionTokenRef"
+          placeholder="Paste the source session token" optional />
+        <div className="rule-note">
+          External ID and a source session token are only sent when Multitool assumes the role above.
+        </div>
+      </div>
+    </details>,
+  ];
+}
+
+function setGcpKeyValue(value: string): void {
+  state.draft.cloudGcpKeyValue = value;
+  const project = gcpProjectFromKey(value);
+  if (project && !(state.draft.cloudProject || '').trim()) state.draft.cloudProject = project;
+  delete state.sheetErrors.cloudGcpKeyRef;
+  delete state.sheetErrors.cloudProject;
+  disarmDraftTestOverride();
+  render();
+}
+
+function GcpCloudSetupFields(): ReactNode[] {
+  const d = state.draft;
+  const docs = 'https://cloud.google.com/iam/docs/keys-create-delete';
+  const source = cloudCredentialSource(d, 'gcpKey');
+  return [
+    <div className="rule-note cloud-setup-note" key="gcp-note">
+      Create a dedicated, least-privileged service account and download its JSON key.
+      Multitool stores the key in the vault and only gives gcloud a short-lived access token.{' '}
+      <a className="external-doc-link" href={docs} data-act="open-external-url"
+        data-url={docs}>Google Cloud setup guide</a>
+    </div>,
+    <CloudCredentialField key="gcp-key" id="c-cloud-gcp-key"
+      label="Service-account JSON key" slot="gcpKey"
+      refKey="cloudGcpKeyRef" valueKey="cloudGcpKeyValue"
+      errorKey="cloudGcpKeyRef" placeholder="Paste the downloaded JSON key"
+      multiline onNewValue={setGcpKeyValue} />,
+    source === 'new'
+      ? <div className="f-row" key="gcp-file">
+          <label htmlFor="c-cloud-gcp-file">Or load the downloaded JSON file</label>
+          <input id="c-cloud-gcp-file" className="cloud-file-input" type="file"
+            accept="application/json,.json" onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (!file) return;
+              void file.text().then(setGcpKeyValue).catch(() => {
+                state.sheetErrors.cloudGcpKeyRef = 'Couldn’t read that JSON file.';
+                render();
+              });
+            }} />
+        </div>
+      : null,
+    <div className="f-row" key="gcp-project">
+      <label htmlFor="c-cloud-project">Project ID</label>
+      <input id="c-cloud-project" className={fieldCls('cloudProject')}
+        placeholder="my-production-project" autoComplete="off" spellCheck={false}
+        value={d.cloudProject ?? ''}
+        onChange={(event) => setDraftField('cloudProject', 'cloudProject', event.currentTarget.value)} />
+      <FieldError k="cloudProject" />
+    </div>,
+    <details className="set-collapse" key="gcp-advanced">
+      <summary>OAuth scope</summary>
+      <div className="set-panel">
+        <div className="f-row">
+          <label htmlFor="c-cloud-scope">Scope</label>
+          <input id="c-cloud-scope" className={fieldCls('cloudScope')}
+            autoComplete="off" spellCheck={false} value={d.cloudScope ?? ''}
+            onChange={(event) => setDraftField('cloudScope', 'cloudScope', event.currentTarget.value)} />
+          <FieldError k="cloudScope" />
+          <div className="rule-note">Use the cloud-platform scope unless you need a narrower one.</div>
+        </div>
+      </div>
+    </details>,
+  ];
+}
+
+function AzureCloudSetupFields(): ReactNode[] {
+  const d = state.draft;
+  const docs = 'https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal';
+  return [
+    <div className="rule-note cloud-setup-note" key="azure-note">
+      Create an app registration with a client secret and give its service principal
+      an Azure RBAC role. Multitool will use it to mint short-lived ARM tokens
+      for <code>az rest</code> and API calls — it does not sign in the full Azure CLI.{' '}
+      <a className="external-doc-link" href={docs} data-act="open-external-url"
+        data-url={docs}>Azure setup guide</a>
+    </div>,
+    <div className="f-row" key="azure-tenant">
+      <label htmlFor="c-cloud-tenant">Tenant ID</label>
+      <input id="c-cloud-tenant" className={fieldCls('cloudTenantId')}
+        placeholder="11111111-… or contoso.onmicrosoft.com"
+        autoComplete="off" spellCheck={false} value={d.cloudTenantId ?? ''}
+        onChange={(event) => setDraftField('cloudTenantId', 'cloudTenantId', event.currentTarget.value)} />
+      <FieldError k="cloudTenantId" />
+    </div>,
+    <div className="f-row" key="azure-client">
+      <label htmlFor="c-cloud-client">Application (client) ID</label>
+      <input id="c-cloud-client" className={fieldCls('cloudClientId')}
+        placeholder="22222222-…" autoComplete="off" spellCheck={false}
+        value={d.cloudClientId ?? ''}
+        onChange={(event) => setDraftField('cloudClientId', 'cloudClientId', event.currentTarget.value)} />
+      <FieldError k="cloudClientId" />
+    </div>,
+    <CloudCredentialField key="azure-secret" id="c-cloud-azure-secret"
+      label="Client secret" slot="azureClientSecret"
+      refKey="cloudClientSecretRef" valueKey="cloudClientSecretValue"
+      errorKey="cloudClientSecretRef" placeholder="Paste the client secret value" />,
+    <div className="f-row" key="azure-subscription">
+      <label htmlFor="c-cloud-subscription">Subscription ID</label>
+      <input id="c-cloud-subscription" className={fieldCls('cloudSubscriptionId')}
+        placeholder="33333333-…" autoComplete="off" spellCheck={false}
+        value={d.cloudSubscriptionId ?? ''}
+        onChange={(event) => setDraftField(
+          'cloudSubscriptionId', 'cloudSubscriptionId', event.currentTarget.value)} />
+      <FieldError k="cloudSubscriptionId" />
+    </div>,
+    <details className="set-collapse" key="azure-advanced">
+      <summary>OAuth scope</summary>
+      <div className="set-panel">
+        <div className="f-row">
+          <label htmlFor="c-cloud-scope">Scope</label>
+          <input id="c-cloud-scope" className={fieldCls('cloudScope')}
+            autoComplete="off" spellCheck={false} value={d.cloudScope ?? ''}
+            onChange={(event) => setDraftField('cloudScope', 'cloudScope', event.currentTarget.value)} />
+          <FieldError k="cloudScope" />
+          <div className="rule-note">
+            Use the ARM <code>.default</code> scope unless you need tokens for a
+            different resource, such as Microsoft Graph.
+          </div>
+        </div>
+      </div>
+    </details>,
+  ];
+}
+
 async function connectionDraftFromImport(
   source: string,
   currentDraft: ConnectionDraft = {},
@@ -5909,6 +7003,11 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
   const editPresentation = conn ? connectionEditPresentation(conn) : null;
   const managedMcpOAuth = Boolean(editPresentation?.managedMcpOAuth);
   const renameOnlyOAuth = Boolean(editPresentation?.renameOnlyOAuth);
+  // Adding a cloud connection is a guided, stepped sheet; the one-shot form
+  // below stays reachable through its Skip action (and is all editing needs).
+  if (cloudGuideSheetActive(editing)) {
+    return <CloudGuidedConnSheet label={state.connEntryName || catalogNameForType(t)} />;
+  }
   let draftTarget = null;
   if (editing && conn) {
     if (t === 'pg' || t === 'ssh') {
@@ -6242,7 +7341,37 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
   // OAuth authentication belongs to the sign-in flow. Keep its generated
   // secret name and injection template out of the ordinary editor: reconnect
   // is the only supported way to replace that grant.
-  if (renameOnlyOAuth) {
+  if (t === 'cloud') {
+    if (editing && conn?.cloud) {
+      const provider = conn.cloud.provider === 'aws' ? 'AWS'
+        : conn.cloud.provider === 'gcp' ? 'Google Cloud' : 'Azure REST / ARM';
+      const renamed = (d.name ?? '').trim() && (d.name ?? '').trim() !== conn.name;
+      fields.push(
+        <div className="f-row" key="cloud-provider">
+          <label>Provider</label>
+          <input value={provider} readOnly aria-readonly="true" />
+          <div className="rule-note">
+            Cloud identity settings are recreate-only. Rename this tool here,
+            or add a new connection to change its provider or credentials.
+          </div>
+          {renamed
+            ? <div className="rule-note warn">
+                The CLI hookup references this tool by its name. After renaming, run{' '}
+                <code>{cloudConnectCommand(conn.cloud.provider, (d.name ?? '').trim())}</code>{' '}
+                again wherever the old name was installed — sessions under the old
+                name stop minting.
+              </div>
+            : null}
+        </div>,
+      );
+    } else if (!editing && d.cloudProvider === 'aws') {
+      fields.push(...AwsCloudSetupFields());
+    } else if (!editing && d.cloudProvider === 'gcp') {
+      fields.push(...GcpCloudSetupFields());
+    } else if (!editing && d.cloudProvider === 'azure') {
+      fields.push(...AzureCloudSetupFields());
+    }
+  } else if (renameOnlyOAuth) {
     fields.push(
       <div className="f-row" key="auth">
         <label>Authentication</label>
@@ -6627,8 +7756,13 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
               : null}
           </>
         )}
+        {!editing && t === 'cloud' && d.cloudSetupSkipped
+          ? <button className="btn ghost cloud-guide-left"
+              onClick={() => { d.cloudSetupSkipped = false; render(); }}>Guided setup</button>
+          : null}
         <button className="btn" data-act="sheet-cancel">Cancel</button>
-        <button className="btn primary" data-act="save-conn" disabled={dt?.running}>
+        <button className="btn primary" data-act="save-conn"
+          disabled={dt?.running || state.connSaving}>
           {editing ? 'Save' : oauthSelected ? 'Sign in & connect' : `Add ${label}`}</button>
       </div>
     </>
@@ -7351,6 +8485,29 @@ function initializeCatalogConnectionDraft(
     state.draft.authDetail = entry.preset.authDetail;
     state.draft.testPath = entry.preset.testPath;
   }
+  if (entry.cloudProvider) {
+    state.draft.entryId = entry.id;
+    state.draft.cloudProvider = entry.cloudProvider;
+    state.draft.cloudSessionTtl = '900';
+    // Each sheet re-reads ~/.aws and stamps this draft: a listing cached
+    // from an earlier sheet would skip the load, leaving the draft with no
+    // machine stamp — and would pin a transient read failure for the whole
+    // app run.
+    state.awsProfiles = null;
+    state.draft.cloudCredentialSources = entry.cloudProvider === 'aws'
+      ? { awsAccessKey: 'new', awsSecretKey: 'new', awsSessionToken: 'none' }
+      : entry.cloudProvider === 'gcp' ? { gcpKey: 'new' }
+      : { azureClientSecret: 'new' };
+    if (entry.cloudProvider === 'aws') state.draft.cloudRegion = 'us-east-1';
+    if (entry.cloudProvider === 'gcp') {
+      state.draft.cloudScope = 'https://www.googleapis.com/auth/cloud-platform';
+      state.draft.cloudSessionTtl = '3600';
+    }
+    if (entry.cloudProvider === 'azure') {
+      state.draft.cloudScope = 'https://management.azure.com/.default';
+      state.draft.cloudSessionTtl = '3600';
+    }
+  }
   if (entry.connType === 'pg') state.draft.port = '5432';
   if (entry.connType === 'ssh') state.draft.port = '22';
   state.draft.name = automaticConnectionName();
@@ -7368,6 +8525,8 @@ function credentialFocusTarget(draft: ConnectionDraft = state.draft): string {
 }
 
 function initialCatalogConnectionFocusTarget(entry: CatalogEntry): string {
+  // Cloud connections open on the guided sheet's path choice.
+  if (entry.cloudProvider) return 'c-cloud-path-script';
   const prefilledApiRoot = entry.connType === 'api' && Boolean(state.draft.origin?.trim());
   if (prefilledApiRoot && state.draft.authMode !== 'oauth') return credentialFocusTarget();
   if (entry.connType === 'api' && (state.draft.name || '').trim()) return 'f-origin';
@@ -7538,9 +8697,20 @@ async function saveSecret(): Promise<void> {
 }
 
 async function saveConn(): Promise<void> {
-  if (state.draftTest?.running) return;
+  if (state.connSaving || state.draftTest?.running) return;
   const sheet = state.sheet;
   if (!sheet || (sheet.kind !== 'add-conn' && sheet.kind !== 'edit-conn')) return;
+  state.connSaving = true;
+  render();
+  try {
+    await saveConnInner(sheet);
+  } finally {
+    state.connSaving = false;
+    render();
+  }
+}
+
+async function saveConnInner(sheet: SheetState): Promise<void> {
   const epoch = brokerEpoch;
   const d = state.draft;
   const name = (d.name || '').trim();
@@ -7565,6 +8735,21 @@ async function saveConn(): Promise<void> {
   const oauthPreset = adding && t === 'api' && !mcpAdd && d.entryId
     ? catalogEntryById(d.entryId)?.oauthPreset : undefined;
   const byoOauth = !!oauthPreset && authMode === 'oauth';
+  // A guided reuse connection mints from the operator's own ~/.aws profile:
+  // no vault item is created, so it takes its own builder.
+  const cloudReuse = adding && t === 'cloud' && !d.cloudSetupSkipped
+    && cloudGuidePath(d) === 'reuse';
+  const cloudSetup = adding && t === 'cloud'
+    ? cloudReuse
+      ? buildAwsProfileCloudSetup(d)
+      : d.cloudProvider === 'aws'
+      ? buildAwsCloudSetup(d, state.secrets.map((secret) => secret.name))
+      : d.cloudProvider === 'gcp'
+      ? buildGcpCloudSetup(d, state.secrets.map((secret) => secret.name))
+      : d.cloudProvider === 'azure'
+      ? buildAzureCloudSetup(d, state.secrets.map((secret) => secret.name))
+      : null
+    : null;
   const errs: Record<string, string> = {};
   let apiOrigin: { scheme: string; host: string; port: number | null } | null = null;
   let mcpPath: string | null = null;
@@ -7589,7 +8774,7 @@ async function saveConn(): Promise<void> {
     && !existingConnection?.oauth
     && !existingConnection?.oauth_spec
     && (existingConnection?.secret_names.length ?? 0) <= 1;
-  const needsCredentialChoice = !usesOauth && !byoOauth && !signed && (
+  const needsCredentialChoice = t !== 'cloud' && !usesOauth && !byoOauth && !signed && (
     (adding && !(t === 'api' && authMode === 'advanced')) ||
     (!adding && t !== 'api') ||
     editingApiCredential);
@@ -7645,6 +8830,10 @@ async function saveConn(): Promise<void> {
           || d.template !== existingConnection?.template),
   });
   Object.assign(errs, validation.errors);
+  if (adding && t === 'cloud' && !cloudSetup) {
+    errs.cloudProvider = 'Choose a supported cloud provider.';
+  }
+  if (cloudSetup) Object.assign(errs, cloudSetup.errors);
   if (sigv4) {
     if (!(d.signerRegion || '').trim()) errs.signerRegion = 'Enter the signing region.';
     if (!(d.signerService || '').trim()) errs.signerService = 'Enter the signing service.';
@@ -7668,6 +8857,12 @@ async function saveConn(): Promise<void> {
   const port = validation.port;
   if (Object.keys(errs).length || toolNameTaken || newSecretNameTaken) {
     state.sheetErrors = errs;
+    // The guided cloud sheet spreads its fields across steps; land on the
+    // step whose field failed so the inline message is actually visible.
+    if (adding && t === 'cloud' && d.cloudProvider && !d.cloudSetupSkipped) {
+      const cloudError = Object.keys(errs).some((key) => key.startsWith('cloud'));
+      d.cloudSetupStep = !cloudError ? 3 : cloudGuidePath(d) === 'reuse' ? 1 : 2;
+    }
     render();
     if (toolNameTaken) focusField('f-cname');
     else if (newSecretNameTaken) focusField('c-new-secret-name');
@@ -7771,6 +8966,11 @@ async function saveConn(): Promise<void> {
     input.user = user;
     input.host_key_fingerprint = (d.hostKeyFingerprint || '').trim();
     if (selectedSecret) input.secret_id = selectedSecret.id;
+  } else if (t === 'cloud') {
+    if (adding && cloudSetup) {
+      Object.assign(input, cloudSetup.input);
+      input.new_secrets = cloudSetup.newSecrets;
+    }
   } else {
     input.url = (d.url || '').trim();
     input.template = injectionTemplate || null;
@@ -7899,6 +9099,12 @@ const DIRTY_DRAFT_FIELDS: Array<keyof ConnectionDraft> = [
   'name', 'origin', 'host', 'port', 'dbname', 'user', 'url', 'template',
   'hostKeyFingerprint', 'sslmode', 'pgCaBundlePath', 'testPath', 'secretId', 'secretSource',
   'newSecretName', 'newSecretValue', 'authMode', 'authDetail', 'identityFile',
+  'cloudRegion', 'cloudAccessKeyRef', 'cloudAccessKeyValue',
+  'cloudSecretKeyRef', 'cloudSecretKeyValue', 'cloudSessionTokenRef',
+  'cloudSessionTokenValue', 'cloudRoleArn', 'cloudExternalId', 'cloudSessionTtl',
+  'cloudGcpKeyRef', 'cloudGcpKeyValue', 'cloudProject', 'cloudScope',
+  'cloudTenantId', 'cloudClientId', 'cloudClientSecretRef', 'cloudClientSecretValue',
+  'cloudSubscriptionId', 'cloudCredentialSources',
 ];
 
 function connDraftSignature(): string {

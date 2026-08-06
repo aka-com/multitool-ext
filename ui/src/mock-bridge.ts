@@ -68,6 +68,7 @@ const MOCK_ACTIVITY_META = {
   tokenRevoked: { icon: 'unplug', tone: 'danger' },
   inputProvided: { icon: 'circleCheck', tone: 'success' },
   inputRefused: { icon: 'circleX', tone: 'danger' },
+  cloudSessionMinted: { icon: 'cloud', tone: 'neutral' },
   approvalRequested: { icon: 'bell', tone: 'warning' },
   approvalTimeout: { icon: 'clockAlert', tone: 'danger' },
 };
@@ -165,6 +166,7 @@ interface MockConnection {
   } | null;
   client_cert_path?: string | null;
   client_key_path?: string | null;
+  cloud?: ConnectionSummary['cloud'];
 }
 
 /** Per-connection agent access; a missing record means the default
@@ -326,6 +328,13 @@ const db: MockDatabase = {
     mkSecret('SERVICE_PASSWORD', 'basic-pw-demo-8841'),
     mkSecret('DEPLOY_SSH_KEY', '-----BEGIN OPENSSH PRIVATE KEY-----demo'),
     mkSecret('NOTION_MCP_TOKEN', 'ntn_demo_2f81c4a9b3e7'),
+    // Cloud identity, named the way the add form generates it, so the
+    // credential rows read as they will in a real vault.
+    mkSecret('MULTITOOL_AWS_PROD_AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE'),
+    mkSecret('MULTITOOL_AWS_PROD_AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI-demo-secret-key'),
+    mkSecret('MULTITOOL_GCP_PROD_GCP_SERVICE_ACCOUNT_JSON',
+      '{"type":"service_account","project_id":"aka-prod","client_email":"agent@aka-prod.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----demo"}'),
+    mkSecret('MULTITOOL_AZURE_PROD_AZURE_CLIENT_SECRET', 'azure-client-secret-demo'),
   ],
   onepasswordIntegrations: [],
   connections: [],
@@ -492,6 +501,39 @@ function seedConnections() {
       destination: 'prod', host: 'prod.example.com', port: 22, user: 'deploy',
       host_key_fingerprint: 'SHA256:vdZ5N8kNxU7J4W2WYa6qK0sJYv8oXb8s2H7n3jE5q1A',
     }),
+    // One per cloud provider, because the three render differently: AWS shows
+    // a region and an assumed role and a TTL we choose, while GCP and Azure
+    // show provider-controlled token lifetimes and different id fields. A
+    // single fixture would leave two of those layouts unexercised.
+    mkConn('aws-prod', 'cloud', [
+      'MULTITOOL_AWS_PROD_AWS_ACCESS_KEY_ID',
+      'MULTITOOL_AWS_PROD_AWS_SECRET_ACCESS_KEY',
+    ], {
+      cloud: {
+        provider: 'aws',
+        region: 'us-east-1',
+        role_arn: 'arn:aws:iam::123456789012:role/AgentReadOnly',
+        session_ttl_secs: 900,
+      },
+    }),
+    mkConn('gcp-prod', 'cloud', ['MULTITOOL_GCP_PROD_GCP_SERVICE_ACCOUNT_JSON'], {
+      cloud: {
+        provider: 'gcp',
+        project: 'aka-prod',
+        scope: 'https://www.googleapis.com/auth/cloud-platform',
+        session_ttl_secs: 3600,
+      },
+    }),
+    mkConn('azure-prod', 'cloud', ['MULTITOOL_AZURE_PROD_AZURE_CLIENT_SECRET'], {
+      cloud: {
+        provider: 'azure',
+        tenant_id: '8f2c1d40-1111-2222-3333-abcdefabcdef',
+        client_id: '4b1e7c92-aaaa-bbbb-cccc-1234567890ab',
+        subscription_id: 'e91b7a55-dddd-eeee-ffff-0987654321fe',
+        scope: 'https://management.azure.com/.default',
+        session_ttl_secs: 3600,
+      },
+    }),
   ];
   function mkConn(
     name: string,
@@ -543,6 +585,20 @@ function seedFixtures() {
   ];
   fixtures.forEach(([kind, text, detail, minutes, agent]) =>
     db.activity.push({ ...MOCK_ACTIVITY_META[kind], text, detail, agent, at: t(minutes) }));
+  // The only fixture that needs the broker's audit `kind` on the wire: the
+  // Connect-agents walkthrough reads it to tell whether a cloud session has
+  // ever been minted, which is how its second step finishes.
+  db.activity.push({
+    ...MOCK_ACTIVITY_META.cloudSessionMinted,
+    kind: 'cloud_session_minted',
+    text: 'aws session minted: aws-prod',
+    detail: 'expires in 900s',
+    agent: 'claude-code',
+    connection: 'aws-prod',
+    outcome: 'minted',
+    at: t(48),
+  });
+  db.activity.sort((a, b) => (a.at < b.at ? 1 : -1));
   // Mock fixture for a real SEP-2322 tool call paused on user input. It keeps
   // the trusted-UI answering flow usable in standalone browser development.
   const elicitation: ElicitationRequest = {
@@ -797,6 +853,7 @@ function connDto(c: MockConnection): ConnectionSummary {
     signer: c.signer || null,
     client_cert_path: c.client_cert_path || null,
     client_key_path: c.client_key_path || null,
+    cloud: c.cloud || null,
   };
 }
 function connTarget(c: MockConnection): string {
@@ -807,6 +864,13 @@ function connTarget(c: MockConnection): string {
   }
   if (c.type === 'pg') return `${c.user}@${c.host}:${c.port}/${c.dbname}`;
   if (c.type === 'ssh') return c.port && c.port !== 22 ? `${c.user}@${c.host}:${c.port}` : `${c.user}@${c.host}`;
+  if (c.type === 'cloud') {
+    if (c.cloud?.provider === 'aws') return `aws:${c.cloud.region}`;
+    if (c.cloud?.provider === 'gcp') return `gcp:${c.cloud.project}`;
+    if (c.cloud?.provider === 'azure') {
+      return `azure:${c.cloud.tenant_id}:${c.cloud.subscription_id}`;
+    }
+  }
   return c.url ?? '';
 }
 /* --------------------------- mock MCP sign-in ----------------------------- */
@@ -1093,6 +1157,18 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
     case 'list_connections':
       if (mockFault('partial_load')) throw 'the mock connection index could not be read';
       return db.connections.map(connDto);
+    // A plausible ~/.aws: an admin SSO profile the broker can't mint from, a
+    // static-key default, and a temporary one — so the picker's three
+    // presentations are all exercisable in mock mode.
+    case 'list_aws_profiles': return {
+      origin: 'mock-machine-id',
+      origin_label: '/Users/mock',
+      profiles: [
+        { name: 'default', kind: 'keys', region: 'us-east-1' },
+        { name: 'acme-prod', kind: 'sso', region: 'us-west-2' },
+        { name: 'acme-dev', kind: 'temporary', region: 'eu-central-1' },
+      ],
+    };
     case 'get_identity': return { ...db.identity };
     case 'list_sessions': return db.sessions.slice();
     case 'list_activity': {
@@ -1322,6 +1398,12 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       if (db.connections.some((c) => c.name === i.name)) {
         throw formError('conflict', 'connection_name_taken', 'name', 'That tool name is already in use');
       }
+      for (const pending of i.new_secrets ?? []) {
+        if (db.secrets.some((s) => s.name === pending.name)) {
+          throw formError('conflict', 'secret_name_taken', 'newSecretName', 'That credential name is already in use');
+        }
+        db.secrets.push(mkSecret(pending.name, pending.value));
+      }
       if (i.new_secret_name && (i.new_secret_value || (i.ssh_import_id && i.identity_file))) {
         if (db.secrets.some((s) => s.name === i.new_secret_name)) {
           throw formError('conflict', 'secret_name_taken', 'newSecretName', 'That credential name is already in use');
@@ -1360,7 +1442,43 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
             key_ref: i.signer_gcp_key_ref, scope: i.signer_gcp_scope,
           }
         : null;
-      const secret_names = signer
+      const cloud = i.type === 'cloud' && i.cloud_provider
+        ? {
+            provider: i.cloud_provider,
+            region: i.cloud_region ?? null,
+            role_arn: i.cloud_role_arn ?? null,
+            external_id: i.cloud_external_id ?? null,
+            tenant_id: i.cloud_tenant_id ?? null,
+            client_id: i.cloud_client_id ?? null,
+            subscription_id: i.cloud_subscription_id ?? null,
+            project: i.cloud_project ?? null,
+            scope: i.cloud_scope ?? null,
+            session_ttl_secs: i.cloud_session_ttl ?? 900,
+            source_profile: i.cloud_source_profile ?? null,
+            source_origin: i.cloud_source_origin ?? null,
+            source_origin_label: i.cloud_source_origin_label ?? null,
+            session_policy_arn: i.cloud_session_policy_arn ?? null,
+            // Mirrors the real rule: a broker that is not this machine
+            // cannot read its ~/.aws and depends on pushed sessions. Switch
+            // the mock to a remote broker to see those states.
+            ...(i.cloud_source_profile && mockBroker.mode !== 'local'
+              ? {
+                  minted_elsewhere: true,
+                  // A connection named with "waiting" in it shows the
+                  // no-session state; anything else looks supplied.
+                  pushed_expires_in_seconds: /waiting/i.test(i.name) ? null : 780,
+                }
+              : { minted_elsewhere: false }),
+          }
+        : null;
+      const cloudRefs = i.cloud_provider === 'aws'
+        ? [i.cloud_access_key_ref, i.cloud_secret_key_ref, i.cloud_session_token_ref]
+        : i.cloud_provider === 'gcp' ? [i.cloud_gcp_key_ref]
+        : i.cloud_provider === 'azure' ? [i.cloud_client_secret_ref]
+        : [];
+      const secret_names = cloud
+        ? cloudRefs.filter((name): name is string => Boolean(name))
+        : signer
         ? signer.algorithm === 'gcp_service_account'
           ? [signer.key_ref as string]
           : [signer.access_key_ref as string, signer.secret_key_ref as string,
@@ -1377,7 +1495,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
         trusted_ca_bundle_path: i.trusted_ca_bundle_path, url: i.url,
         mcp_path: i.mcp_path, test_path: i.test_path,
         signer, client_cert_path: i.client_cert_path ?? null,
-        client_key_path: i.client_key_path ?? null });
+        client_key_path: i.client_key_path ?? null, cloud });
       audit('connectionAdded', `Tool added: ${i.name}`); return;
     }
     case 'edit_connection': {
@@ -1396,6 +1514,15 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       }
       if (db.connections.some((other) => other.id !== c.id && other.name === i.name)) {
         throw formError('conflict', 'connection_name_taken', 'name', 'That tool name is already in use');
+      }
+      // Cloud provider identity is recreate-only in the native bridge. Its
+      // editor sends only the new display name, so preserve every coordinate
+      // and bound credential in the browser mock too.
+      if (c.type === 'cloud') {
+        c.name = i.name;
+        c.updated_at = nextVersion(c.updated_at);
+        audit('connectionUpdated', `Tool updated: ${i.name}`);
+        return;
       }
       const retargeted = i.type === 'api' && (c.host !== i.host || c.scheme !== i.scheme
         || (c.port ?? null) !== (i.port ?? null));

@@ -1080,6 +1080,9 @@
   max-height: calc(100% - 60px); overflow-y: auto;
 }
   .sheet.wide{ left: 50%; right: auto; transform: translateX(-50%); width: 460px; max-width: calc(100% - 28px); }
+  /* The guided cloud flow puts three choices in a row; the ordinary form
+     width leaves them too narrow to read. */
+  .sheet.wide.cloud-guided{ width: 520px; }
   .sheet.confirm-sheet{ width: 360px; }
   .sheet.confirm-sheet:not(.discard-confirm){ top: 64px; max-height: calc(100% - 78px); }
   .sheet h3{ font-size: 0.9375rem; margin-bottom: 12px; }
@@ -1087,7 +1090,7 @@
   .f-row label{ display: block; font-size: 0.78125rem; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
   /* Text fields only — checkboxes/radios keep native chrome (driven by
      color-scheme above) so they are not stretched into full-width wells. */
-  .f-row input:not([type="checkbox"]):not([type="radio"]){
+  .f-row input:not([type="checkbox"]):not([type="radio"]), .f-row textarea{
     width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--line-field);
     border-radius: 7px; font-size: 0.875rem; font-family: inherit;
     background-color: var(--field-bg); color: var(--ink);
@@ -1095,12 +1098,17 @@
   .f-row input:not([type="checkbox"]):not([type="radio"])[readonly]{
     background-color: var(--chip-bg); color: var(--muted-ink); cursor: default;
   }
-  .f-row input:not([type="checkbox"]):not([type="radio"]):focus{
+  .f-row input:not([type="checkbox"]):not([type="radio"]):focus, .f-row textarea:focus{
     outline: 2px solid rgba(10,124,255,.45); border-color: var(--accent);
   }
-  .f-row input:not([type="checkbox"]):not([type="radio"]).err{
+  .f-row input:not([type="checkbox"]):not([type="radio"]).err, .f-row textarea.err{
     border-color: var(--danger); outline: none;
   }
+  .cloud-credential .cred-select + input, .cloud-credential .cred-select + textarea,
+  .cloud-credential textarea + .cred-select{
+    margin-top: 6px;
+  }
+  .cloud-credential textarea{ resize: vertical; font-family: ui-monospace, Menlo, monospace; }
   .field-error{ margin-top: 4px; color: var(--danger-ink); font-size: 0.78125rem; font-weight: 400; }
   .f-row input.name-conflict-warning, .f-row input.name-conflict-warning:focus{
   border-color: var(--amber-strong); outline: none;
@@ -1179,6 +1187,8 @@
   .cred-menu-divider{ height: 1px; margin: 4px 6px; background: var(--line-soft); }.sheet-actions{ display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .confirm-sheet p{ margin-top: 8px; color: var(--muted); font-size: 0.84375rem; line-height: 1.45; }
   .rule-note{ font-size: 0.78125rem; color: var(--muted); margin: 4px 0 8px; line-height: 1.4; }
+  /* Lift one phrase inside a note without the shout of bold body text. */
+  .note-strong{ font-weight: 500; color: var(--ink-3); }
   /* A note that reports a limitation rather than describing a field: it has to
      read as something to act on, not as more imported detail. */
   .rule-note.warn{ color: var(--amber-ink); }
@@ -1628,7 +1638,211 @@
   padding: 6px 9px 4px; font-size: 0.75rem; color: var(--muted);
   cursor: default; -webkit-user-select: none; user-select: none;
 }
-.cd-help { margin-top: 8px; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
+/* Match .rule-note / .cd-confirm-sub: 1.5 on 0.75rem body copy reads as
+   double-spaced next to the denser notes in the same panel. */
+.cd-help { margin-top: 8px; color: var(--muted); font-size: 0.75rem; line-height: 1.4; }
+.cloud-install-command {
+  display: flex; align-items: flex-end; gap: 8px; margin-top: 8px;
+}
+.cloud-install-command .setup-instructions { flex: 1; min-width: 0; margin: 0; }
+/* Multi-line commands wrap, which leaves a beside-the-block button pointing
+   at the middle of nothing. Put it under the block, on the right. */
+.cloud-install-command.stacked { flex-direction: column; align-items: stretch; gap: 6px; }
+.cloud-install-command.stacked .btn { align-self: flex-end; }
+.cd-cloud-connect .rule-note { margin-top: 7px; }
+
+/* The provisioning script reuses the policy disclosure, so a step reads as
+   its instruction with the wall of commands one click away. */
+.cloud-script { margin: 2px 0 10px; }
+.cloud-script > summary { font-size: 0.78125rem; }
+.cloud-script > summary span:not(.cloud-policy-chevron) {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cloud-script > .setup-instructions { margin-top: 7px; }
+
+/* ---- guided cloud setup (add sheet) ---- */
+/* Step breadcrumb: Identity — Credentials — Connect. */
+.cloud-steps { display: flex; align-items: center; margin: 2px 0 16px; }
+.cloud-step { display: flex; align-items: center; gap: 7px; font-size: 0.75rem; color: var(--muted); }
+.cloud-step b { font-weight: 600; }
+.cloud-step-dot {
+  width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.68rem; font-weight: 700; background: var(--chip-bg); color: var(--chip-ink);
+}
+.cloud-step.on { color: var(--accent-ink); }
+.cloud-step.on .cloud-step-dot { background: var(--accent); color: #fff; }
+.cloud-step.done { color: var(--ok-ink); }
+.cloud-step.done .cloud-step-dot {
+  background: var(--ok-wash); color: var(--ok-ink); border: 1px solid var(--ok-border);
+}
+.cloud-steps-line { flex: 1; height: 1px; background: var(--line-mid); margin: 0 9px; min-width: 14px; }
+/* Step 1: the ways to an identity, in one row so the choice reads as a
+   choice. They stack only when the surface genuinely cannot hold them —
+   the menu-bar dropdown — rather than wrapping into an orphan. */
+.cloud-path-cards { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 12px; }
+.cloud-path-card {
+  flex: 1 1 0; min-width: 8.5rem;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 6px; padding: 11px 12px; text-align: left; font: inherit; color: var(--ink);
+  background: var(--card-bg); border: 1px solid var(--line-mid); border-radius: 10px; cursor: pointer;
+}
+.cloud-path-card:hover { border-color: var(--line-strong); }
+.cloud-path-card.selected { border-color: var(--accent-border); background: var(--accent-wash); }
+.cloud-path-card b { font-size: 0.84375rem; }
+.cloud-path-card small { font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+.cloud-path-radio {
+  width: 15px; height: 15px; border-radius: 50%; position: relative;
+  border: 1.5px solid var(--line-strong); flex: 0 0 auto;
+}
+.cloud-path-card.selected .cloud-path-radio { border-color: var(--accent); }
+.cloud-path-card.selected .cloud-path-radio::after {
+  content: ""; position: absolute; inset: 2.5px; border-radius: 50%; background: var(--accent);
+}
+/* Access level for the provisioning script. */
+.cloud-access-radios { display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
+.cloud-access-radios label {
+  display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer;
+  font-size: 0.84375rem; font-weight: 400; color: var(--ink);
+}
+.cloud-access-radios input[type="radio"] { accent-color: var(--accent); margin: 0; }
+/* Whether a connection minted on another machine currently has a session
+   here. "Waiting" is the state where agents cannot use the tool at all, so
+   it carries the warning tint; a live session is ordinary information. */
+.cd-pushed {
+  margin: 8px 0 0; padding: 8px 11px; border-radius: 9px;
+  font-size: 0.78125rem; line-height: 1.45; color: var(--muted);
+}
+.cd-pushed b { font-weight: 600; }
+.cd-pushed.live { background: var(--wash-2); }
+.cd-pushed.live b { color: var(--ink-2); }
+.cd-pushed.waiting {
+  background: var(--amber-wash); border: 1px solid var(--amber-border); color: var(--amber-ink);
+}
+.cd-pushed.waiting b { color: var(--amber-ink); }
+
+/* Reuse: the local ~/.aws profiles to broker from. */
+.cloud-profile-list {
+  display: flex; flex-direction: column; border: 1px solid var(--line-mid);
+  border-radius: 10px; overflow: hidden;
+}
+.cloud-profile-row {
+  display: flex; align-items: center; gap: 9px; padding: 8px 11px; text-align: left;
+  font: inherit; font-size: 0.8125rem; color: var(--ink); cursor: pointer;
+  background: var(--card-bg); border: 0; border-top: 1px solid var(--line-soft);
+}
+.cloud-profile-row:first-child { border-top: 0; }
+.cloud-profile-row:hover:not(:disabled) { background: var(--hover); }
+.cloud-profile-row.selected { background: var(--accent-wash); }
+/* A profile the broker cannot mint from is struck through and greyed with
+   its radio hollowed out, so "unavailable" reads before the reason does —
+   dimming alone left these looking merely unselected. */
+.cloud-profile-row:disabled {
+  cursor: default; color: var(--faint); background: var(--wash);
+}
+.cloud-profile-row:disabled .cloud-profile-name {
+  text-decoration: line-through; text-decoration-color: var(--line-strong);
+}
+.cloud-profile-row:disabled .cloud-path-radio {
+  border-style: dashed; border-color: var(--line-mid);
+}
+.cloud-profile-row:disabled .cloud-profile-detail { color: var(--faint); font-style: italic; }
+.cloud-profile-row.selected .cloud-path-radio { border-color: var(--accent); }
+.cloud-profile-row.selected .cloud-path-radio::after {
+  content: ""; position: absolute; inset: 2.5px; border-radius: 50%; background: var(--accent);
+}
+.cloud-profile-name { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78125rem; }
+.cloud-profile-detail {
+  margin-left: auto; padding-left: 10px; text-align: right; color: var(--muted);
+  font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis;
+}
+/* Console/portal walkthrough. */
+.cloud-howto { margin: 2px 0 6px; padding: 0 0 0 2px; list-style: none; counter-reset: cloud-howto; }
+.cloud-howto li {
+  counter-increment: cloud-howto; position: relative; padding: 2px 0 10px 27px;
+  font-size: 0.8125rem; color: var(--ink-2); line-height: 1.5;
+}
+.cloud-howto li::before {
+  content: counter(cloud-howto); position: absolute; left: 0; top: 3px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--chip-bg); color: var(--chip-ink);
+  font-size: 0.68rem; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.cloud-howto li:not(:last-child)::after {
+  content: ""; position: absolute; left: 9px; top: 24px; bottom: 2px; width: 1px;
+  background: var(--line-soft);
+}
+/* Inline chips only — pre > code already sits in .setup-instructions and
+   must not re-chip each line on top of the block background. */
+.cloud-howto code {
+  font-size: 0.75rem; background: var(--wash-2); border: 1px solid var(--line-soft);
+  border-radius: 5px; padding: 0 4px;
+}
+.cloud-howto .setup-instructions code {
+  background: none; border: none; border-radius: 0; padding: 0; font-size: inherit;
+}
+.cloud-howto a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+.cloud-howto a:hover { color: var(--ink-2); }
+/* The starter policy: what it grants as the summary, JSON one toggle away. */
+.cloud-policy { margin: 7px 0 2px; }
+.cloud-policy summary {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  font-size: 0.75rem; font-weight: 500; color: var(--muted);
+}
+.cloud-policy summary:hover { color: var(--ink-2); }
+.cloud-policy summary::-webkit-details-marker { display: none; }
+.cloud-policy-chevron {
+  display: flex; align-items: center; color: var(--muted-2);
+  transition: transform 0.12s ease;
+}
+.cloud-policy-chevron svg { width: 13px; height: 13px; }
+.cloud-policy[open] .cloud-policy-chevron { transform: rotate(90deg); }
+.cloud-policy summary .btn { margin-left: auto; }
+.cloud-policy .setup-instructions { margin-top: 6px; }
+/* Step 2: smart paste + capture checklist. */
+textarea.cloud-paste-zone {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem; line-height: 1.5;
+}
+.cloud-paste-source { font-size: 0.72rem; color: var(--ok-ink); margin-top: 4px; }
+.cloud-parsed { border: 1px solid var(--line-mid); border-radius: 10px; overflow: hidden; margin: 2px 0 12px; }
+.cloud-parsed-row {
+  display: flex; align-items: center; gap: 9px; padding: 7px 11px; font-size: 0.8125rem;
+  border-top: 1px solid var(--line-soft); background: var(--card-bg);
+}
+.cloud-parsed-row:first-child { border-top: 0; }
+.cloud-parsed-tick {
+  flex: 0 0 auto; width: 16px; height: 16px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 0.62rem; font-weight: 800;
+}
+.cloud-parsed-row.ok .cloud-parsed-tick {
+  background: var(--ok-wash); color: var(--ok-ink); border: 1px solid var(--ok-border);
+}
+.cloud-parsed-row.todo .cloud-parsed-tick {
+  background: var(--amber-wash); color: var(--amber-ink); border: 1px solid var(--amber-border);
+}
+.cloud-parsed-label {
+  color: var(--muted); font-size: 0.75rem; font-weight: 600; width: 34%; flex: 0 0 auto; margin: 0;
+}
+.cloud-parsed-control {
+  flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.cloud-parsed-control input {
+  width: 100%; font: inherit; font-size: 0.78125rem; color: var(--ink);
+  background: var(--field-bg); border: 1px solid var(--line-field); border-radius: 5px;
+  padding: 2px 6px; outline: none;
+}
+.cloud-parsed-control input:focus {
+  border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.cloud-parsed-value {
+  flex: 1; min-width: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.72rem;
+  color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cloud-parsed-value + .btn { flex: 0 0 auto; }
+.cloud-parsed-control .field-error { flex: 1 0 100%; margin-top: 0; }
+/* Bottom-left slot in the action row: Skip / Back / return to guided. */
+.sheet-actions .cloud-guide-left { margin-right: auto; }
 /* Traffic confirmation: a labelled switch row, so the promise ("Confirm
    each request") sits beside the control that makes it rather than in a
    tooltip. The sub-line names the unit, which differs per kind. */
@@ -1650,7 +1864,7 @@
 /* A denial's cooldown is a refusal state, not an approval one. */
 .cd-confirm-cooldown { background: var(--danger-wash); border-color: var(--danger-border); }
 .cd-confirm-cooldown svg { color: var(--danger-ink); }
-.cd-confirm-note { margin-top: 8px; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
+.cd-confirm-note { margin-top: 8px; color: var(--muted); font-size: 0.75rem; line-height: 1.4; }
 /* Advanced continues the settings group the confirm row starts: no hairline
    of its own, just the group's 12px row spacing (see the rows inside it). */
 .cd-advanced { margin-top: 12px; padding-top: 0; }
@@ -1779,7 +1993,7 @@
    so it breaks mid-token rather than overflowing the attention card. */
 .cc-issue-body {
   display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
-  min-width: 0; overflow-wrap: anywhere;
+  min-width: 0; overflow-wrap: anywhere; margin-top: 1px;
 }
 /* When an issue carries a detail line, the first line reads as its
    headline; single-line issues keep the plain weight they had. */
@@ -2334,7 +2548,13 @@ label.totp-remove-check {
 .onepassword-form .f-row { max-width: 520px; }
 /* Only the height is the user's to change — widening would break out of the
    form column. */
-.onepassword-token { resize: vertical; font-family: ui-monospace, Menlo, monospace; }
+.onepassword-token {
+  resize: vertical;
+  font-family: ui-monospace, Menlo, monospace;
+  /* A textarea (for wrapping) instead of an input, but still a long-lived
+     vault-read credential: mask it like the password inputs around it. */
+  -webkit-text-security: disc;
+}
 .onepassword-form--with-guide {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(168px, 210px);

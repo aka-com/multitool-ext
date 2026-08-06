@@ -7,6 +7,8 @@ import {
   CONNECT_MODE_LABELS,
   START_OPTIONS,
   clientMatchesLabel,
+  cloudSessionMinted,
+  cloudStartTask,
   connectClientById, connectGuideSteps,
   connectModeSentenceLabel,
   connectModesFor,
@@ -27,6 +29,7 @@ import {
 } from '../src/connect-agents';
 import type { ConnectClientEnv } from '../src/connect-agents';
 import { catalogEntryById } from '../src/catalog';
+import { cloudSetupCommand } from '../src/cloud-setup';
 import type { ConnectionSummary, ConnectionType } from '../src/types';
 
 function conn(
@@ -463,4 +466,104 @@ test('a branded option is satisfied only by its own connection', () => {
   };
   assert.equal(startProgress(notion, [githubServer]).added, false);
   assert.equal(startProgress(notion, [notionServer]).added, true);
+});
+
+/* ---- cloud rows --------------------------------------------------------- */
+
+function cloudConn(
+  name: string,
+  cloud: NonNullable<ConnectionSummary['cloud']>,
+): ConnectionSummary {
+  return { ...conn('cloud', name, true), cloud, target: `${cloud.provider}:${name}` };
+}
+
+const AWS = cloudConn('aws-prod', {
+  provider: 'aws',
+  region: 'us-east-1',
+  role_arn: 'arn:aws:iam::123456789012:role/AgentReadOnly',
+  session_ttl_secs: 900,
+});
+const GCP = cloudConn('gcp-prod', {
+  provider: 'gcp', project: 'aka-prod', scope: 'https://www.googleapis.com/auth/cloud-platform',
+  session_ttl_secs: 3600,
+});
+const AZURE = cloudConn('azure-prod', {
+  provider: 'azure', tenant_id: 'tenant', subscription_id: 'sub',
+  scope: 'https://management.azure.com/.default', session_ttl_secs: 3600,
+});
+
+test('every cloud provider has a walkthrough row of its own', () => {
+  const cloudOptions = START_OPTIONS.filter((option) => option.connType === 'cloud');
+  assert.deepEqual(cloudOptions.map((option) => option.id), ['aws-cli', 'gcp-cli', 'azure']);
+  for (const option of cloudOptions) {
+    // The three providers differ in what they ask for and what they mint, so
+    // each needs its own row rather than one shared "Cloud" entry.
+    assert.equal(catalogEntryById(option.catalogId!)?.connType, 'cloud', option.id);
+    assert.ok(option.unit && !option.unit.includes('CLI'), `${option.id} names an account`);
+    assert.ok(option.taskBody.length > 20, option.id);
+  }
+});
+
+test('cloud offers a local-shell mode instead of a direct endpoint', () => {
+  for (const option of START_OPTIONS.filter((o) => o.connType === 'cloud')) {
+    const modes = connectModesFor(option);
+    // The broker refuses to issue a cloud endpoint, so 'direct' must not appear;
+    // the minted session still needs a local route, which is what leads.
+    assert.equal(modes[0], 'cloud-cli', option.id);
+    assert.equal(modes.includes('direct'), false, option.id);
+    assert.ok(modes.includes('claude-code'), option.id);
+    // A mode carried over from another tool falls back to the offered one.
+    assert.equal(resolveConnectMode('direct', option), 'cloud-cli', option.id);
+  }
+});
+
+test('the hero sentence never names the cloud CLI twice', () => {
+  for (const option of START_OPTIONS.filter((o) => o.connType === 'cloud')) {
+    const from = connectModeSentenceLabel('cloud-cli', option);
+    assert.equal(from, 'a local shell', option.id);
+    // "Connect to AWS CLI from the AWS CLI" said the same thing twice.
+    assert.equal(from.toLowerCase().includes(option.label.toLowerCase()), false, option.id);
+  }
+});
+
+test('only AWS gets a durable profile; the others re-export per shell', () => {
+  assert.equal(cloudSetupCommand(AWS), "multitool cloud install 'aws-prod'");
+  assert.equal(cloudSetupCommand(GCP), `eval "$(multitool cloud env 'gcp-prod')"`);
+  assert.equal(cloudSetupCommand(AZURE), `eval "$(multitool cloud env 'azure-prod')"`);
+  // The name reaches a shell, so a quote in it must not end the argument.
+  assert.equal(
+    cloudSetupCommand({ name: "it's prod", cloud: GCP.cloud }),
+    `eval "$(multitool cloud env 'it'"'"'s prod')"`,
+  );
+});
+
+test('the cloud prompt hands over the command, the expiry, and the tool', () => {
+  const progress = startProgress(startOptionById('aws-cli'), [AWS]);
+  const task = cloudStartTask(startOptionById('aws-cli'), progress, AWS);
+  assert.ok(task.includes(cloudSetupCommand(AWS)), 'the command mints the session');
+  assert.ok(task.includes('15 minutes'), 'the credential dies while the agent works');
+  assert.ok(task.includes('"aws-prod"'), 'the tool is named for the broker');
+  assert.ok(task.includes('EC2'), 'the ask itself survives');
+  // Azure and GCP mint for an hour, and say so.
+  assert.ok(cloudStartTask(startOptionById('azure'), progress, AZURE).includes('60 minutes'));
+  // Without a connection there is no command to hand over, so it degrades to
+  // the ordinary broker-tool prompt rather than inventing one.
+  assert.equal(
+    cloudStartTask(startOptionById('aws-cli'), progress, null),
+    startTask(startOptionById('aws-cli'), progress),
+  );
+});
+
+test('a cloud step finishes on a real mint, not on the command being shown', () => {
+  const minted = [{ kind: 'cloud_session_minted', connection: 'aws-prod' }];
+  assert.equal(cloudSessionMinted('aws-prod', minted), true);
+  // Another tool's mint, another kind of event, and no tool at all are all
+  // "not yet" — running a shell command is not observable, so the mint is
+  // the only honest signal.
+  assert.equal(cloudSessionMinted('gcp-prod', minted), false);
+  assert.equal(cloudSessionMinted('aws-prod', [
+    { kind: 'session_opened', connection: 'aws-prod' },
+  ]), false);
+  assert.equal(cloudSessionMinted(null, minted), false);
+  assert.equal(cloudSessionMinted('aws-prod', []), false);
 });

@@ -87,8 +87,22 @@ test('setup-required apps lead the disconnected rows', () => {
   assert.deepEqual(displayed.slice(0, 2).map((entry) => entry.id), ['slack', 'gmail']);
   assert.deepEqual(
     CATALOG.filter((entry) => entry.requiresSetup).map((entry) => entry.id),
-    ['slack', 'gmail'],
+    ['slack', 'gmail', 'aws-cli', 'gcp-cli', 'azure'],
   );
+});
+
+test('cloud connections map to their provider-specific setup row', () => {
+  const aws = conn('cloud', null, 'production-aws');
+  aws.cloud = { provider: 'aws', region: 'us-west-2', session_ttl_secs: 900 };
+  assert.equal(entryForConnection(aws)?.id, 'aws-cli');
+  const gcp = conn('cloud', null, 'production-gcp');
+  gcp.cloud = { provider: 'gcp', project: 'project-id', session_ttl_secs: 3600 };
+  assert.equal(entryForConnection(gcp)?.id, 'gcp-cli');
+  const azure = conn('cloud', null, 'production-azure');
+  azure.cloud = {
+    provider: 'azure', tenant_id: 'contoso.onmicrosoft.com', session_ttl_secs: 3600,
+  };
+  assert.equal(entryForConnection(azure)?.id, 'azure');
 });
 
 test('branded apps are added as MCP servers, not raw API origins', () => {

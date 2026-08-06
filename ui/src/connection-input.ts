@@ -1,7 +1,7 @@
 // Pure connection-form helpers. Kept separate from app.tsx so the security-
 // relevant normalization rules can be exercised without a browser/Tauri.
 
-export type ConnectionType = 'api' | 'pg' | 'ssh';
+export type ConnectionType = 'api' | 'pg' | 'ssh' | 'cloud';
 export type SecretSource = 'existing' | 'new' | 'none';
 
 /** Initial credential selection for a connection form. MCP OAuth mints its
@@ -28,6 +28,7 @@ const QUICK_SETUP_PLACEHOLDERS: Record<ConnectionType, string> = {
   pg: 'postgresql://app@db.example.com/production',
   ssh: 'ssh deploy@prod.example.com',
   api: 'https://api.github.com',
+  cloud: 'aws us-east-1',
 };
 
 export function quickSetupPlaceholder(type: ConnectionType): string {

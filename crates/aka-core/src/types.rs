@@ -67,7 +67,7 @@ pub enum SecretSource {
     },
 }
 
-/// The wire vocabulary is `api` / `pg` / `ssh`, the same taxonomy the
+/// The wire vocabulary is `api` / `pg` / `ssh` / `cloud`, the same taxonomy the
 /// UI type badges and `GET /v1/connections` share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,6 +75,10 @@ pub enum ConnectionKind {
     Api,
     Pg,
     Ssh,
+    /// Short-lived cloud CLI sessions (AWS / Azure / GCP). Agents mint
+    /// temporary credentials through `/v1/cloud/session`; long-lived vault
+    /// material never leaves the broker.
+    Cloud,
 }
 
 impl ConnectionKind {
@@ -83,6 +87,7 @@ impl ConnectionKind {
             ConnectionKind::Api => "api",
             ConnectionKind::Pg => "pg",
             ConnectionKind::Ssh => "ssh",
+            ConnectionKind::Cloud => "cloud",
         }
     }
     /// UI badge label.
@@ -91,7 +96,257 @@ impl ConnectionKind {
             ConnectionKind::Api => "API",
             ConnectionKind::Pg => "PG",
             ConnectionKind::Ssh => "SSH",
+            ConnectionKind::Cloud => "Cloud",
         }
+    }
+}
+
+/// Default requested cloud session lifetime (15 minutes). Short enough that
+/// exfil of minted material is time-bounded; long enough for interactive CLI use.
+pub const DEFAULT_CLOUD_SESSION_TTL_SECS: u64 = 900;
+/// Hard ceiling on requested cloud session lifetime (1 hour).
+pub const MAX_CLOUD_SESSION_TTL_SECS: u64 = 3600;
+/// Floor matching AWS STS GetSessionToken / AssumeRole minimums.
+pub const MIN_CLOUD_SESSION_TTL_SECS: u64 = 900;
+
+fn default_cloud_session_ttl() -> u64 {
+    DEFAULT_CLOUD_SESSION_TTL_SECS
+}
+
+/// Provider-specific identity for a [`ConnectionConfig::Cloud`] connection.
+/// Only vault *references* appear here; key material stays in the vault until
+/// mint time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum CloudProvider {
+    /// AWS IAM user or role. Multitool calls STS (`GetSessionToken` or
+    /// `AssumeRole`) with vaulted long-lived keys and returns temporary
+    /// credentials for `credential_process` / the AWS CLI.
+    Aws {
+        /// Default region exported as `AWS_DEFAULT_REGION` / profile region.
+        region: String,
+        /// Vault secret name holding the access key ID.
+        access_key_ref: String,
+        /// Vault secret name holding the secret access key.
+        secret_key_ref: String,
+        /// Optional vault secret name holding a session token (when the
+        /// vaulted material is itself temporary). Used only as the calling
+        /// identity for `AssumeRole`; plain re-export is refused because it
+        /// would hand long-lived-or-unbounded material to the agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_token_ref: Option<String>,
+        /// When set, Multitool calls `AssumeRole` into this role instead of
+        /// `GetSessionToken` on the vaulted identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role_arn: Option<String>,
+        /// Optional external ID for the AssumeRole call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_id: Option<String>,
+        /// Requested session lifetime in seconds (clamped to
+        /// [`MIN_CLOUD_SESSION_TTL_SECS`]..=[`MAX_CLOUD_SESSION_TTL_SECS`]).
+        #[serde(default = "default_cloud_session_ttl")]
+        session_ttl_secs: u64,
+    },
+    /// AWS via an existing `~/.aws` sign-in: nothing is vaulted.
+    ///
+    /// Attenuation is enforced by AWS itself, not by the broker: a
+    /// managed-policy ARN or an inline session policy bounds every
+    /// `AssumeRole` / `GetFederationToken` session, so agents never hold
+    /// more than the leash allows even though the source sign-in may be an
+    /// administrator.
+    ///
+    /// A profile name means nothing without the machine it lives on, which
+    /// is what `origin` records. Where the mint happens follows from it:
+    ///
+    /// - The broker running on that machine reads the files and mints
+    ///   directly. This is the local case.
+    /// - Any other broker — a hosted one, notably — must never read its own
+    ///   `~/.aws`, which is a different account entirely. It serves
+    ///   sessions minted on the origin machine and pushed to it instead
+    ///   (`push_cloud_session`), so long-lived keys still never leave the
+    ///   machine that holds them, and the broker only ever holds material
+    ///   that expires on its own.
+    AwsProfile {
+        /// Default region exported to the CLI; falls back to the profile's
+        /// own `region` when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+        /// Profile name in `~/.aws/credentials` / `~/.aws/config`.
+        profile: String,
+        /// [`crate::paths::Paths::install_id`] of the install whose `~/.aws`
+        /// this names. Empty means unknown, which is treated as "not this
+        /// machine": the guard fails closed rather than reading whatever
+        /// home directory the running broker happens to have.
+        #[serde(default)]
+        origin: String,
+        /// How to name that machine when asking the user to go start the
+        /// app on it. Display only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_label: Option<String>,
+        /// When set, AssumeRole into this role instead of federating the
+        /// profile identity directly.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role_arn: Option<String>,
+        /// Optional external ID for the AssumeRole call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_id: Option<String>,
+        /// Managed policy ARN bounding minted sessions (the preset leashes:
+        /// ReadOnlyAccess, PowerUserAccess).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_policy_arn: Option<String>,
+        /// Inline session-policy JSON bounding minted sessions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_policy: Option<String>,
+        #[serde(default = "default_cloud_session_ttl")]
+        session_ttl_secs: u64,
+    },
+    /// Microsoft Entra app (service principal). Multitool exchanges the
+    /// vaulted client secret for a short-lived access token via the client
+    /// credentials grant; the secret never leaves the broker.
+    Azure {
+        /// Entra tenant ID (GUID) or domain.
+        tenant_id: String,
+        /// Application (client) ID.
+        client_id: String,
+        /// Vault secret name holding the client secret.
+        client_secret_ref: String,
+        /// Optional default subscription ID for ARM tools.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subscription_id: Option<String>,
+        /// OAuth scope for the minted token (default ARM:
+        /// `https://management.azure.com/.default`).
+        #[serde(default = "default_azure_scope")]
+        scope: String,
+        #[serde(default = "default_cloud_session_ttl")]
+        session_ttl_secs: u64,
+    },
+    /// GCP service account. Multitool mints a short-lived OAuth access token
+    /// from the vaulted JSON key (same path as the API `gcp_service_account`
+    /// signer); the private key never leaves the broker.
+    Gcp {
+        /// Vault secret name holding the service-account JSON key document.
+        key_ref: String,
+        /// Space-separated OAuth scopes for minted tokens.
+        scope: String,
+        /// Optional default project id for gcloud / client libraries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default = "default_cloud_session_ttl")]
+        session_ttl_secs: u64,
+    },
+}
+
+fn default_azure_scope() -> String {
+    "https://management.azure.com/.default".into()
+}
+
+impl CloudProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Aws { .. } => "aws",
+            Self::AwsProfile { .. } => "aws",
+            Self::Azure { .. } => "azure",
+            Self::Gcp { .. } => "gcp",
+        }
+    }
+
+    /// Human-facing provider name, for confirmation prompts and activity text.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Aws { .. } | Self::AwsProfile { .. } => "AWS",
+            Self::Azure { .. } => "Azure",
+            Self::Gcp { .. } => "Google Cloud",
+        }
+    }
+
+    /// Vault secret names this provider reads.
+    pub fn refs(&self) -> Vec<&str> {
+        match self {
+            Self::Aws {
+                access_key_ref,
+                secret_key_ref,
+                session_token_ref,
+                ..
+            } => {
+                let mut refs = vec![access_key_ref.as_str(), secret_key_ref.as_str()];
+                if let Some(token) = session_token_ref {
+                    refs.push(token.as_str());
+                }
+                refs
+            }
+            // A profile connection reads the operator's ~/.aws at mint
+            // time; nothing lives in the vault.
+            Self::AwsProfile { .. } => Vec::new(),
+            Self::Azure {
+                client_secret_ref, ..
+            } => vec![client_secret_ref.as_str()],
+            Self::Gcp { key_ref, .. } => vec![key_ref.as_str()],
+        }
+    }
+
+    /// Rewrite any reference to a renamed secret.
+    pub fn rename_ref(&mut self, old: &str, new: &str) -> bool {
+        match self {
+            Self::Aws {
+                access_key_ref,
+                secret_key_ref,
+                session_token_ref,
+                ..
+            } => {
+                let mut renamed = false;
+                for field in [access_key_ref, secret_key_ref]
+                    .into_iter()
+                    .chain(session_token_ref.as_mut())
+                {
+                    if field == old {
+                        *field = new.to_string();
+                        renamed = true;
+                    }
+                }
+                renamed
+            }
+            Self::Azure {
+                client_secret_ref, ..
+            } => {
+                if client_secret_ref == old {
+                    *client_secret_ref = new.to_string();
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Gcp { key_ref, .. } => {
+                if key_ref == old {
+                    *key_ref = new.to_string();
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::AwsProfile { .. } => false,
+        }
+    }
+
+    /// Requested session TTL, clamped to the broker's allowed window.
+    ///
+    /// Azure/GCP ignore this when minting: the IdP sets `expires_in` on the
+    /// token. The field still documents operator intent and is used for AWS.
+    pub fn session_ttl_secs(&self) -> u64 {
+        let raw = match self {
+            Self::Aws {
+                session_ttl_secs, ..
+            }
+            | Self::AwsProfile {
+                session_ttl_secs, ..
+            }
+            | Self::Azure {
+                session_ttl_secs, ..
+            }
+            | Self::Gcp {
+                session_ttl_secs, ..
+            } => *session_ttl_secs,
+        };
+        raw.clamp(MIN_CLOUD_SESSION_TTL_SECS, MAX_CLOUD_SESSION_TTL_SECS)
     }
 }
 
@@ -311,6 +566,12 @@ pub enum ConnectionConfig {
         #[serde(default)]
         host_key_fingerprint: String,
     },
+    /// Cloud CLI sessions: Multitool holds long-lived cloud identity and mints
+    /// short-lived credentials for stock CLIs (`aws`, and later `az` / `gcloud`).
+    Cloud {
+        #[serde(flatten)]
+        provider: CloudProvider,
+    },
 }
 
 fn default_scheme() -> String {
@@ -331,13 +592,15 @@ impl ConnectionConfig {
             ConnectionConfig::Api { .. } => ConnectionKind::Api,
             ConnectionConfig::Pg { .. } => ConnectionKind::Pg,
             ConnectionConfig::Ssh { .. } => ConnectionKind::Ssh,
+            ConnectionConfig::Cloud { .. } => ConnectionKind::Cloud,
         }
     }
 
     /// The human-readable pinned destination, what `GET /v1/connections`
     /// returns and what the approval window shows:
     /// api → origin, pg → `user@host:port/dbname`,
-    /// ssh → `user@host[:port]` (port shown only when non-default).
+    /// ssh → `user@host[:port]` (port shown only when non-default),
+    /// cloud → `aws:region` (and later azure/gcp forms).
     pub fn target(&self) -> String {
         match self {
             ConnectionConfig::Api {
@@ -369,6 +632,44 @@ impl ConnectionConfig {
                     format!("{user}@{host}:{port}")
                 }
             }
+            ConnectionConfig::Cloud { provider } => match provider {
+                CloudProvider::Aws {
+                    region, role_arn, ..
+                } => match role_arn {
+                    Some(role) => format!("aws:{region}:{role}"),
+                    None => format!("aws:{region}"),
+                },
+                CloudProvider::AwsProfile {
+                    region,
+                    profile,
+                    origin,
+                    role_arn,
+                    ..
+                } => {
+                    // The origin is part of the destination: the same
+                    // profile name on another machine is another account.
+                    let region = region.as_deref().unwrap_or("profile");
+                    let machine = if origin.is_empty() { "?" } else { origin.as_str() };
+                    match role_arn {
+                        Some(role) => format!("aws:{region}:{machine}:{profile}:{role}"),
+                        None => format!("aws:{region}:{machine}:{profile}"),
+                    }
+                }
+                CloudProvider::Azure {
+                    tenant_id,
+                    subscription_id,
+                    ..
+                } => match subscription_id {
+                    Some(sub) => format!("azure:{tenant_id}:{sub}"),
+                    None => format!("azure:{tenant_id}"),
+                },
+                CloudProvider::Gcp {
+                    project, scope, ..
+                } => match project {
+                    Some(project) => format!("gcp:{project}"),
+                    None => format!("gcp:{}", scope.split_whitespace().next().unwrap_or("sa")),
+                },
+            },
         }
     }
 
@@ -439,6 +740,7 @@ impl ConnectionConfig {
                     ..
                 },
             ) => host_key(a_host) == host_key(b_host) && a_port == b_port && a_user == b_user,
+            (Self::Cloud { provider: a }, Self::Cloud { provider: b }) => a == b,
             _ => false,
         }
     }
