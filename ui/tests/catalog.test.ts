@@ -339,10 +339,10 @@ test('the registry tail follows the curated rows of its domain and is searchable
   }
   const dev = all.filter((entry) => entry.section === 'Developer Tools').map((entry) => entry.id);
   const lastCuratedDev = CATALOG.filter((entry) => entry.section === 'Developer Tools').at(-1)!.id;
-  assert.ok(dev.indexOf(lastCuratedDev) < dev.indexOf('mcp-vercel'));
-  assert.equal(dev.indexOf('mcp-neon'), dev.indexOf('mcp-vercel') + 1);
+  assert.ok(dev.indexOf(lastCuratedDev) < dev.indexOf('mcp-neon'));
   assert.equal(dev.indexOf('mcp-semgrep'), dev.indexOf('mcp-neon') + 1);
   assert.equal(dev.indexOf('mcp-globalping'), dev.indexOf('mcp-semgrep') + 1);
+  assert.ok(!dev.includes('mcp-vercel'));
 
   const hits = visibleCatalog('paypal');
   assert.ok(hits.some((entry) => entry.id === 'mcp-paypal'));

@@ -368,8 +368,7 @@ export const CATALOG: CatalogEntry[] = [
     name: 'Vercel',
     icon: 'vercel',
     // Vercel's hosted MCP (mcp.vercel.com) only accepts Vercel-approved
-    // clients, so the API key stays the reliable path; the MCP row lives in
-    // the registry tail for anyone allowlisted.
+    // clients, so this catalog row is the API-token path only.
     description: 'Deployments, projects & domains',
     section: 'Developer Tools',
     via: 'connection',
@@ -473,7 +472,6 @@ export const CATALOG_SECTIONS: CatalogSection[] = [
  * synced server lands in Developer Tools until someone places it.
  */
 const REGISTRY_SECTION_BY_ID: Record<string, CatalogSection> = {
-  'mcp-vercel': 'Developer Tools',
   'mcp-figma': 'Productivity',
   'mcp-atlassian': 'Productivity',
   'mcp-asana': 'Productivity',

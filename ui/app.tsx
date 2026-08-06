@@ -6654,7 +6654,7 @@ function McpAuthSheet(): ReactNode {
   if (auth.phase === 'awaiting_authorization') {
     body = <>
       <div className="auth-note">Your browser should have opened. Approve the request there,
-        then come back — this dialog follows along by itself.</div>
+        then come back - this dialog should auto-update.</div>
       <div className="auth-url"><code title={auth.authorization_url}>{auth.authorization_url}</code></div>
     </>;
     actions = <>
@@ -6686,7 +6686,7 @@ function McpAuthSheet(): ReactNode {
         : null}
     </>;
   } else if (auth.phase === 'cancelled') {
-    body = <div className="auth-note">Sign-in cancelled. Nothing was saved.</div>;
+    body = <div className="auth-note">Sign-in cancelled. No changes saved.</div>;
     actions = <>
       <button className="btn" data-act="sheet-cancel">Close</button>
       {state.mcpAuthDraft
