@@ -90,6 +90,37 @@ const DEFAULT_MANAGE_TOKEN_TTL_DAYS: u64 = 30;
 /// Env override for `multitool serve`'s default root when `--root` is omitted.
 const SERVER_ROOT_ENV: &str = "AKA_SERVER_ROOT";
 
+/// Footer for bare `multitool` / `--help`: short workflows first, then stable exit codes.
+const AFTER_HELP: &str = "\
+COMMAND GROUPS
+  Agent   skill  instructions  mcp  run
+  Open    dsn  ssh  cloud  ssh-agent
+  Vault   secret  conn
+  Broker  serve  status  sessions  requests  settings  key  activity  manage
+  Shell   completions
+
+  Commands stay top-level (multitool <command> …); groups are for orientation only.
+
+COMMON WORKFLOWS
+  Agent setup      multitool skill --write
+  MCP client       multitool mcp
+  Headless broker  multitool serve [--listen …]
+  Postgres         eval \"$(multitool dsn <conn>)\" && psql
+  SSH              export SSH_AUTH_SOCK=\"$(multitool ssh <conn>)\"
+  Ops              multitool status | key | activity | requests
+
+See also: multitool <command> --help
+
+EXIT CODES
+  1  generic/internal failure
+  2  invalid command usage or input
+  3  broker is not running
+  4  authentication or confirmation failed
+  5  requested object was not found
+  6  state conflict
+  7  remote broker is unreachable
+  8  connection test failed";
+
 fn parse_positive_seconds(value: &str) -> Result<u64, String> {
     let secs: u64 = value
         .parse()
@@ -119,11 +150,11 @@ fn parse_field_value(value: &str) -> Result<String, String> {
 #[command(
     name = "multitool",
     version,
-    about = "Multitool broker CLI",
-    after_help = "EXIT CODES:\n  1  generic/internal failure\n  2  invalid command usage or input\n  3  broker is not running\n  4  authentication or confirmation failed\n  5  requested object was not found\n  6  state conflict\n  7  remote broker is unreachable\n  8  connection test failed"
+    about = "Secrets broker CLI for AI agents",
+    after_help = AFTER_HELP
 )]
 struct Cli {
-    /// Emit one machine-readable JSON document for commands with bounded output.
+    /// Emit machine-readable JSON for commands with bounded output.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -133,9 +164,10 @@ struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // one short-lived instance per invocation
 enum Command {
-    /// Emit broker instructions as a skill file. With --broker, fetches that
-    /// broker's authoritative setup. Prints to stdout by default; `--write`
-    /// writes .claude/skills/multitool/SKILL.md.
+    /// Write or print the agent skill file.
+    ///
+    /// With --broker, fetches that broker's authoritative setup. Prints to
+    /// stdout by default; `--write` writes .claude/skills/multitool/SKILL.md.
     Skill {
         /// Write the file to `path` (default .claude/skills/multitool/SKILL.md)
         /// instead of printing to stdout.
@@ -163,7 +195,7 @@ enum Command {
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Print a shell completion script to stdout.
+    /// Print shell completions.
     ///
     /// `multitool completions zsh > "${fpath[1]}/_multitool"`, or source it from your
     /// shell's rc file. The script is generated from this CLI's own command
@@ -172,8 +204,10 @@ enum Command {
         /// The shell to generate for.
         shell: clap_complete::Shell,
     },
-    /// Print local /instructions markdown, or a hosted broker's authoritative
-    /// agent setup with --broker.
+    /// Print agent setup markdown (/instructions).
+    ///
+    /// Local defaults by default; with --broker, fetches that hosted broker's
+    /// authoritative agent setup (requires its management token).
     Instructions {
         /// Render for a broker rooted here instead of the production layout.
         #[arg(long)]
@@ -183,12 +217,13 @@ enum Command {
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Run a headless broker under its own root (not the desktop app store).
+    /// Run a headless broker.
     ///
-    /// Default root is `~/.akaserver` (data + socket under it). Override with
-    /// `--root` or `AKA_SERVER_ROOT` (`--root` wins). The Multitool desktop app
-    /// keeps using the production layout (`~/.aka`); agents against this
-    /// process need this root's token or `--listen` + the shared agent key.
+    /// Uses its own root (not the desktop app store). Default root is
+    /// `~/.akaserver` (data + socket under it). Override with `--root` or
+    /// `AKA_SERVER_ROOT` (`--root` wins). The Multitool desktop app keeps
+    /// using the production layout (`~/.aka`); agents against this process
+    /// need this root's token or `--listen` + the shared agent key.
     Serve {
         /// Broker root (data + socket under it). Overrides `AKA_SERVER_ROOT`
         /// and the default `~/.akaserver`.
@@ -240,9 +275,10 @@ enum Command {
         #[arg(long, alias = "no-sidecar")]
         no_mcp: bool,
     },
-    /// Bridge stdio MCP to the local Multitool broker's MCP host. Point any
-    /// MCP client at `multitool mcp` — it reads this computer's shared key and
-    /// discovers the MCP endpoint itself, so configs stay static.
+    /// Stdio bridge to the local MCP host.
+    ///
+    /// Point any MCP client at `multitool mcp` — it reads this computer's
+    /// shared key and discovers the MCP endpoint itself, so configs stay static.
     Mcp {
         /// Bridge to a broker rooted here instead of the default layout.
         #[arg(long)]
@@ -252,8 +288,10 @@ enum Command {
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
     },
-    /// Open a Postgres session on a running broker. By default this prints
-    /// shell-safe PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD/PGSSLMODE exports:
+    /// Open Postgres (prints PG* exports).
+    ///
+    /// By default prints shell-safe PG* exports (PGHOST, PGPORT, PGDATABASE,
+    /// PGUSER, PGPASSWORD, PGSSLMODE):
     /// `eval "$(multitool dsn analytics)" && psql`. The ticket stays out of argv.
     Dsn {
         /// The pg connection's name.
@@ -274,8 +312,9 @@ enum Command {
         #[arg(long, conflicts_with = "format")]
         password_only: bool,
     },
-    /// Open an SSH session on a running broker and print the agent socket
-    /// path: `export SSH_AUTH_SOCK="$(multitool ssh production)"` — then stock
+    /// Open SSH (prints SSH_AUTH_SOCK).
+    ///
+    /// `export SSH_AUTH_SOCK="$(multitool ssh production)"` — then stock
     /// `ssh`/`git`/`scp`/`rsync` work while the broker signs only for the
     /// connection's pinned user and server host key. The command prints the
     /// destination, the pinned fingerprint, the absolute deadline, and the
@@ -292,9 +331,10 @@ enum Command {
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
     },
-    /// Run a local ssh-agent socket that speaks for a connection's *direct
-    /// endpoint*, presenting the endpoint secret the agent protocol gives
-    /// stock `ssh` no way to send.
+    /// Agent socket for auth-required direct endpoints.
+    ///
+    /// Speaks for a connection's *direct endpoint*, presenting the endpoint
+    /// secret the agent protocol gives stock `ssh` no way to send.
     ///
     /// Only needed for an endpoint issued with `--require-auth`: an
     /// unauthenticated endpoint socket can be used directly as
@@ -324,24 +364,26 @@ enum Command {
         #[arg(last = true)]
         command: Vec<String>,
     },
-    /// Manage secrets from the terminal (dev/headless use; the desktop app
-    /// is the primary interface).
+    /// Manage secrets (dev/headless).
+    ///
+    /// The desktop app is the primary interface.
     Secret {
         #[command(subcommand)]
         command: SecretCommand,
     },
-    /// The broker's management plane (the desktop app's remote-management
-    /// API).
+    /// Management tokens / remote manage API.
+    ///
+    /// The broker's management plane (the desktop app's remote-management API).
     Manage {
         #[command(subcommand)]
         command: ManageCommand,
     },
-    /// Manage connections from the terminal (dev/headless use).
+    /// Manage connections (dev/headless).
     Conn {
         #[command(subcommand)]
         command: ConnCommand,
     },
-    /// List live data-plane sessions, or close one by id.
+    /// List or close live sessions.
     Sessions {
         /// Close this session instead of listing sessions.
         #[arg(long)]
@@ -354,6 +396,8 @@ enum Command {
         #[arg(long)]
         broker: Option<String>,
     },
+    /// Approvals and elicitations.
+    ///
     /// List pending and recent approval/elicitation decision records.
     Requests {
         /// Attach a polling request inbox until Ctrl-C. Use another terminal
@@ -386,8 +430,10 @@ enum Command {
         #[command(subcommand)]
         command: SettingsCommand,
     },
-    /// Print this computer's shared agent key — what agents send as their
-    /// Bearer token, and what remote agents need from the operator.
+    /// Show or rotate the shared agent key.
+    ///
+    /// Agents send this as their Bearer token; remote agents need it from the
+    /// operator.
     Key {
         /// Rotate the key instead: agents' old keys stop working, and
         /// agents that read the token file reconnect on their own.
@@ -402,8 +448,10 @@ enum Command {
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Report whether a broker is running on this layout and what it
-    /// serves (MCP host, tools, key file). Exits nonzero when none is up.
+    /// Broker health and surface.
+    ///
+    /// Reports whether a broker is running on this layout and what it serves
+    /// (MCP host, tools, key file). Exits nonzero when none is up.
     Status {
         /// Check a broker rooted here instead of the default layout.
         #[arg(long)]
@@ -413,8 +461,10 @@ enum Command {
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Show the broker's audit trail, newest last. Local reads project the
-    /// append-only log onto the same schema returned by a remote broker.
+    /// Audit trail (newest last).
+    ///
+    /// Local reads project the append-only log onto the same schema returned
+    /// by a remote broker.
     Activity {
         /// Show only the last N entries; 0 shows everything.
         #[arg(long, default_value_t = 20)]
@@ -4668,9 +4718,22 @@ mod tests {
             Ok(_) => panic!("--help unexpectedly parsed as a command"),
             Err(error) => error.to_string(),
         };
+        assert!(
+            help.contains("COMMAND GROUPS"),
+            "bare help should orient with command groups:\n{help}"
+        );
+        assert!(
+            help.contains("COMMON WORKFLOWS"),
+            "bare help should orient with workflows:\n{help}"
+        );
         for code in 1..=8 {
             assert!(help.contains(&format!("  {code}  ")), "{help}");
         }
+        // Stable exit-code table lives in AFTER_HELP (not free-form prose).
+        assert!(
+            AFTER_HELP.contains("EXIT CODES"),
+            "AFTER_HELP must document exit codes"
+        );
     }
 
     #[test]
