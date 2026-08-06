@@ -1089,12 +1089,14 @@ function credentialInitial(secret: SecretSummary): string {
   return label.trim().charAt(0).toUpperCase() || '•';
 }
 
-/** A row's one-line description under its title. */
-function credentialSubtitle(secret: SecretSummary): string {
+/** A row's one-line description under its title, or null when the row has
+ * nothing to say — an unused secret stays a single line rather than carrying
+ * a "Not in use" note on every row. */
+function credentialSubtitle(secret: SecretSummary): string | null {
   if (secret.kind === 'password') return secret.username || 'No username';
   return secret.used_by_names.length
     ? `Used by ${secret.used_by_names.join(', ')}`
-    : 'Not in use';
+    : null;
 }
 
 /** The tray's Recent scope: the newest use per credential, merging direct UI
@@ -1188,6 +1190,7 @@ function CredentialRow({ secret, selected }: {
 }): ReactNode {
   const password = secret.kind === 'password';
   const displayName = credentialDisplayName(secret);
+  const subtitle = credentialSubtitle(secret);
   return (
     // data-secret-row is what the right-click handler reads; the whole row
     // is the target, so the reveal menu opens wherever it is pressed.
@@ -1197,7 +1200,7 @@ function CredentialRow({ secret, selected }: {
       <span className="cred-mono" aria-hidden="true">{credentialInitial(secret)}</span>
       <span className="cred-row-tx">
         <b className={password ? 'site-host' : 's-name'} title={displayName}>{displayName}</b>
-        <small dir="auto">{credentialSubtitle(secret)}</small>
+        {subtitle ? <small dir="auto">{subtitle}</small> : null}
       </span>
       <span className="cred-row-badges">
         {secret.totp ? <span className="cred-chip" title="Has a 2FA code">2FA</span> : null}
@@ -1411,6 +1414,7 @@ function DropdownCredentialRow({ secret, subtitle, scope }: {
   const password = secret.kind === 'password';
   const displayName = credentialDisplayName(secret);
   const noun = credentialNoun(secret);
+  const rowSubtitle = subtitle ?? credentialSubtitle(secret);
   const revealed = state.reveal[secret.id];
   return (
     <div className={`dd-cred ${open ? 'open' : ''}`} data-secret-row={secret.id}>
@@ -1421,7 +1425,7 @@ function DropdownCredentialRow({ secret, subtitle, scope }: {
           <span className="cred-mono" aria-hidden="true">{credentialInitial(secret)}</span>
           <span className="cred-row-tx">
             <b className={password ? 'site-host' : 's-name'} title={displayName}>{displayName}</b>
-            <small dir="auto">{subtitle ?? credentialSubtitle(secret)}</small>
+            {rowSubtitle ? <small dir="auto">{rowSubtitle}</small> : null}
           </span>
           <span className="cred-row-badges">
             {secret.totp ? <span className="cred-chip" title="Has a 2FA code">2FA</span> : null}
@@ -2065,7 +2069,10 @@ function OnePasswordConnectStep(): ReactNode {
         {flow.method === 'service_account' ? <>
           <div className="f-row">
             <label htmlFor="op-token">Service account token</label>
-            <input id="op-token" type="password" autoComplete="off" value={flow.token}
+            {/* Service account tokens run long, so they get two wrapped rows
+                rather than a single line that scrolls out from under itself. */}
+            <textarea id="op-token" className="onepassword-token" rows={2}
+              autoComplete="off" spellCheck={false} value={flow.token}
               placeholder="ops_..."
               onChange={(event) => { flow.token = event.currentTarget.value; flow.error = null; render(); }} />
           </div>
@@ -3012,6 +3019,19 @@ function SamplesCard(): ReactNode {
   );
 }
 
+/** The tools search filters linked tools, so it only earns its place once
+ * there are some: with none linked the page is the catalog directory, which
+ * the Add-a-tool palette searches on its own. */
+function toolSearchShown(): boolean {
+  return state.connections.length > 0;
+}
+
+/** The needle goes with the field. Deleting the last tool mid-search would
+ * otherwise strand a live query behind a hidden input. */
+function toolSearchQuery(): string {
+  return toolSearchShown() ? state.toolSearch : '';
+}
+
 function ConnectionsView({ withReadyCard = true }: { withReadyCard?: boolean }): ReactNode {
   const byId = new Map(state.connections.map((connection) => [connection.id, connection] as const));
   const orderedConnections = dragConnOrder
@@ -3022,10 +3042,10 @@ function ConnectionsView({ withReadyCard = true }: { withReadyCard?: boolean }):
         ...state.connections.filter((connection) => !dragConnOrder!.includes(connection.id)),
       ]
     : state.connections;
-  const entries = visibleCatalog(state.toolSearch);
+  const entries = visibleCatalog(toolSearchQuery());
   const isConnected = (entry: CatalogEntry): boolean =>
     connectionsForEntry(entry, state.connections).length > 0;
-  const needle = state.toolSearch.trim().toLowerCase();
+  const needle = toolSearchQuery().trim().toLowerCase();
   const matching = orderedConnections.filter((c) => {
     const entry = entryForConnection(c);
     const entryMatches = Boolean(entry) && [
@@ -3050,7 +3070,7 @@ function ConnectionsView({ withReadyCard = true }: { withReadyCard?: boolean }):
     );
     if (!sectionEntries.length) return [];
     const ordered = connectedCatalogFirst(sectionEntries, state.connections);
-    const collapsible = COLLAPSIBLE_SECTIONS.includes(section) && !state.toolSearch.trim();
+    const collapsible = COLLAPSIBLE_SECTIONS.includes(section) && !toolSearchQuery().trim();
     const expanded = state.sectionsExpanded.includes(section);
     const collapsed = collapsible
       ? collapsedCatalogGroup(sectionEntries, state.connections)
@@ -3229,12 +3249,15 @@ function SecretsView(): ReactNode {
               keepMountedId={state.dropdownSecretOpen?.startsWith('recent:')
                 ? null : state.dropdownSecretOpen}
               renderRow={(secret) => <DropdownCredentialRow key={secret.id} secret={secret} />} />
-          : <div className="muted-note">
+          : <div className="muted-note dd-cred-empty">
               {state.secrets.length
                 ? 'No saved credentials match your search.'
                 : 'No saved credentials yet.'}
             </div>}
-        <button className="credential-group-add" data-act="open-add-secret">＋ Add credential</button>
+        {/* With no rows to hang off, the add link joins the centred empty
+            note as one block instead of drifting to the right edge. */}
+        <button className={`credential-group-add${ordered.length ? '' : ' centered'}`}
+          data-act="open-add-secret">＋ Add credential</button>
       </div>
     );
   }
@@ -3356,7 +3379,7 @@ function VaultRow({ integration }: { integration: OnePasswordIntegration }): Rea
       </span>
       <span className="onepassword-integration-actions">
         <button className="btn sm" data-act="onepassword-browse"
-          data-id={integration.id}>Link credentials</button>
+          data-id={integration.id}>Edit linked credentials</button>
         <button className={`btn sm vault-menu-btn ${menuOpen ? 'on' : ''}`}
           data-act="toggle-vault-menu" data-id={integration.id}
           title={`Options for ${integration.label}`}
@@ -3387,22 +3410,18 @@ function VaultRow({ integration }: { integration: OnePasswordIntegration }): Rea
 function SecretsStatusBar(): ReactNode {
   const available = supportsOnePassword(state.broker);
   const integrations = state.onepasswordIntegrations;
-  const linked = state.secrets.filter((secret) => secret.source?.kind === 'one_password').length;
   const credentialCount = state.secrets.length;
   const open = state.vaultsPanelOpen && integrations.length > 0;
   const inventory = `${credentialCount} ${credentialCount === 1 ? 'credential' : 'credentials'}`;
   return (
     <footer className="secrets-statusbar">
-      <span className="sb-count">
-        {inventory}
-        {linked ? ` · ${linked} linked from 1Password` : ''}
-      </span>
+      <span className="sb-count">{inventory}</span>
       <span className="sb-spacer"></span>
       {integrations.length
         ? <button className={`sb-vaults ${open ? 'on' : ''}`} data-act="toggle-vaults-panel"
             aria-expanded={open} aria-haspopup="true" title="Manage 1Password vaults">
             <span className="sb-1p" aria-hidden="true"><Icon markup={ICONS.onepassword} /></span>
-            Connected {integrations.length} {integrations.length === 1 ? 'vault' : 'vaults'}
+            {integrations.length} external {integrations.length === 1 ? 'vault' : 'vaults'}
             <span className={`sb-chev ${open ? 'open' : ''}`} aria-hidden="true">
               <Icon markup={ICONS.chevronDown} /></span>
           </button>
@@ -3416,7 +3435,7 @@ function SecretsStatusBar(): ReactNode {
             {integrations.map((integration) =>
               <VaultRow key={integration.id} integration={integration} />)}
             <button className="vaults-connect-more" data-act="onepassword-open">
-              ＋ Connect another vault
+              ＋ Connect external vault
             </button>
           </div>
         : null}
@@ -3832,6 +3851,7 @@ async function receiveActivity(entry: ActivityEntry | null | undefined): Promise
  * action row. */
 function DropdownCatalogSearch({ kind }: { kind: 'tool' | 'secret' }): ReactNode {
   const isTool = kind === 'tool';
+  if (isTool && !toolSearchShown()) return null;
   return (
     <input className="cat-search dd-cat-search" type="search"
       placeholder={isTool ? 'Search tools…' : 'Search credentials…'}
@@ -4081,9 +4101,11 @@ function MainWindow(): ReactNode {
   // ride the detail column.
   const splitHead = state.tab === 'connections' || state.tab === 'secrets';
   const pageSearch = state.tab === 'connections'
-    ? <input id="tool-search" className="cat-search" type="search" placeholder="Search tools…"
-        aria-label="Search tools" value={state.toolSearch}
-        onChange={(e) => { state.toolSearch = e.currentTarget.value; render(); }} />
+    ? toolSearchShown()
+      ? <input id="tool-search" className="cat-search" type="search" placeholder="Search tools…"
+          aria-label="Search tools" value={state.toolSearch}
+          onChange={(e) => { state.toolSearch = e.currentTarget.value; render(); }} />
+      : null
     : state.tab === 'secrets'
       ? <input id="secret-search" className="cat-search" type="search" placeholder="Search credentials…"
           aria-label="Search credentials" value={state.secretSearch}

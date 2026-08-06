@@ -1991,7 +1991,12 @@
 .cdet-source-icon { display: inline-flex; color: var(--muted); }
 .cdet-source-tx { min-width: 0; }
 .cdet-source-tx b { display: block; font-size: 0.78125rem; }
-.cdet-source-tx small { color: var(--muted); font-size: 0.71875rem; overflow-wrap: anywhere; }
+/* Tight leading so a wrapped reference path stays one visual block under
+   the heading. */
+.cdet-source-tx small {
+  display: block; color: var(--muted); font-size: 0.71875rem;
+  line-height: 1.25; overflow-wrap: anywhere;
+}
 
 .cred-detail-backdrop { display: none; }
 @media (max-width: 720px) {
@@ -2062,6 +2067,10 @@
 }
 .dd-cred-exp .cdet-lbl { width: 5.5rem; }
 .dd-creds > .credential-group-add { align-self: flex-end; }
+/* Empty tray: the note and the add link read as one centred block, so the
+   note gives up the padding that would otherwise strand the link below it. */
+.dd-creds > .credential-group-add.centered { align-self: center; margin-left: 0; text-align: center; }
+.dd-creds > .muted-note.dd-cred-empty { padding-bottom: 12px; }
 .dropdown-surface .catalog { gap: 12px; }
 .dropdown-surface .cat-search { width: 100%; }
 /* The menu-bar 2FA chip is an action beside the masked password. */
@@ -2141,8 +2150,9 @@
 .field-hint { margin-top: 4px; color: var(--muted); font-size: 0.71875rem; line-height: 1.45; }
 /* The QR-image picker under the 2FA input: a hidden real <input type=file>
    supplies the native chooser; the styled button forwards its click. Its
-   own block keeps it off the remove-checkbox's line. */
-.totp-qr-row { margin-top: 7px; }
+   own block keeps it off the remove-checkbox's line, right-aligned like the
+   Generate row above so both under-field buttons hang off the same edge. */
+.totp-qr-row { display: flex; justify-content: flex-end; margin-top: 7px; }
 .totp-qr-input { display: none; }
 .totp-qr-btn { display: inline-flex; align-items: center; gap: 6px; }
 .totp-qr-btn svg { color: var(--muted); }
@@ -2322,6 +2332,9 @@ label.totp-remove-check {
 }
 .onepassword-form { padding: 0 18px 4px; }
 .onepassword-form .f-row { max-width: 520px; }
+/* Only the height is the user's to change — widening would break out of the
+   form column. */
+.onepassword-token { resize: vertical; font-family: ui-monospace, Menlo, monospace; }
 .onepassword-form--with-guide {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(168px, 210px);
