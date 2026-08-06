@@ -4,7 +4,10 @@ set -euo pipefail
 # Build the signed macOS bundle (.app + .dmg), by reading the
 # APPLE_SIGNING_IDENTITY environment variable, or auto-detecting
 # the machine's single Developer ID Application identity as a fallback.
-# Notarization is not included. Use scripts/release.sh to also notarize.
+#
+#   pnpm run build              signs only (no notarization)
+#   pnpm run build:release      signs, notarizes, staples, and validates
+#   bash scripts/build.sh --release
 #
 # The signature is also what decides whether the app can read its own secrets
 # without an OS dialog: the entitlements this signs with carry a
@@ -30,10 +33,27 @@ set -euo pipefail
 # identical either way — the app probes what it can actually reach and falls
 # back to the login keychain — so the only thing at stake here is whether the
 # entitlement is honoured at all. DEVELOPING.md has the whole story.
+#
+# Release (--release) notarization credentials, either form:
+#   NOTARYTOOL_KEYCHAIN_PROFILE   profile stored once via
+#                                 `xcrun notarytool store-credentials`
+#   APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID
+#                                 Apple ID with an app-specific password
+#
+# APPLE_SIGNING_IDENTITY is auto-detected when unset.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 repo_root="$(cd "$script_dir/.." >/dev/null && pwd)"
 cd "$repo_root"
+
+release=0
+tauri_args=()
+for arg in "$@"; do
+  case "$arg" in
+    --release) release=1 ;;
+    *) tauri_args+=("$arg") ;;
+  esac
+done
 
 # Load ignored, machine-local build settings when present. Preserve variables
 # the caller explicitly exported so CI and one-off command-line overrides take
@@ -58,10 +78,34 @@ if [[ -f "$repo_root/.env" ]]; then
   unset inherited_names inherited_values name i
 fi
 
-# build.sh deliberately signs but does not notarize. Do not let credentials
-# loaded from .env activate Tauri's separate automatic notarization path;
-# release.sh owns submission and stapling.
-unset APPLE_ID APPLE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+notary_args=()
+if [[ "$release" -eq 1 ]]; then
+  if [[ "$(uname)" != "Darwin" ]]; then
+    echo "build.sh --release builds and notarizes macOS bundles; run it on macOS." >&2
+    exit 1
+  fi
+
+  if [[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
+    notary_args=(--keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE")
+  elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+    notary_args=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID")
+  else
+    echo "Set NOTARYTOOL_KEYCHAIN_PROFILE, or APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID." >&2
+    exit 1
+  fi
+fi
+
+# Sign but do not let Tauri auto-notarize. Keep notary credentials in this
+# shell for the post-build notarytool path (and APPLE_TEAM_ID for
+# entitlements); strip them only for the Tauri invocation below.
+tauri_env=(
+  env
+  -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID
+  -u APPLE_API_ISSUER -u APPLE_API_KEY -u APPLE_API_KEY_PATH
+)
+if [[ "$release" -eq 0 ]]; then
+  unset APPLE_ID APPLE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+fi
 
 target_args=()
 bundle_config="src-tauri/tauri.bundle.conf.json"
@@ -198,6 +242,29 @@ fi
 # CI=true skips. Style only from an interactive terminal; a caller-set CI
 # always wins.
 if [[ -z "${CI:-}" && -t 1 ]]; then
-  exec "$repo_root/node_modules/.bin/tauri" build --config "$bundle_config" --bundles app,dmg "${target_args[@]}" "$@"
+  "${tauri_env[@]}" "$repo_root/node_modules/.bin/tauri" build --config "$bundle_config" --bundles app,dmg "${target_args[@]}" "${tauri_args[@]}"
+else
+  CI=true "${tauri_env[@]}" "$repo_root/node_modules/.bin/tauri" build --config "$bundle_config" --bundles app,dmg "${target_args[@]}" "${tauri_args[@]}"
 fi
-exec env CI=true "$repo_root/node_modules/.bin/tauri" build --config "$bundle_config" --bundles app,dmg "${target_args[@]}" "$@"
+
+if [[ "$release" -eq 0 ]]; then
+  exit 0
+fi
+
+# Notarizing the DMG covers the nested .app; staple both so each artifact
+# passes Gatekeeper offline whether distributed as a DMG or a bare .app.
+bundle_dir="$repo_root/target/universal-apple-darwin/release/bundle"
+app="$bundle_dir/macos/Multitool.app"
+dmg="$(ls "$bundle_dir"/dmg/Multitool_*.dmg)"
+
+xcrun notarytool submit "$dmg" --wait "${notary_args[@]}"
+xcrun stapler staple "$dmg"
+xcrun stapler staple "$app"
+
+xcrun stapler validate "$dmg"
+xcrun stapler validate "$app"
+spctl --assess --type open --context context:primary-signature -v "$dmg"
+
+echo "Release artifacts ready:"
+echo "  $dmg"
+echo "  $app"

@@ -258,7 +258,7 @@ Prerequisites: one-time macOS cross-linker setup: `brew install zig`
 
    ```sh
    pnpm run build          # signed universal .app + .dmg (auto-detects identity)
-   pnpm run build:release  # will also notarize, staple, and validate
+   pnpm run build:release  # same as build, plus notarize, staple, and validate
 
    gh release create v0.2.0 \
      target/universal-apple-darwin/release/bundle/dmg/Multitool_0.2.0_universal.dmg \

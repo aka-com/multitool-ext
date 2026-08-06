@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.15.1",
   "scripts": {
     "build": "bash scripts/build.sh",
-    "build:release": "bash scripts/release.sh",
+    "build:release": "bash scripts/build.sh --release",
     "lint": "cargo clippy --workspace --all-targets",
     "start": "tauri dev",
     "frontend:dev": "vite",
