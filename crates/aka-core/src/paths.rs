@@ -130,7 +130,11 @@ impl Paths {
         })
     }
 
-    /// Everything under one root, used by tests and the dev harness.
+    /// Everything under one root: `root/data` and `root/sock`.
+    ///
+    /// Used by tests, throwaway harnesses, and `multitool serve` (default
+    /// `~/.akaserver`, or `--root` / `AKA_SERVER_ROOT`). The desktop app uses
+    /// [`Self::default_locations`] instead and never shares this layout.
     pub fn under(root: &Path) -> Self {
         Self {
             data_dir: root.join("data"),

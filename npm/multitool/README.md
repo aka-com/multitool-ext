@@ -35,79 +35,76 @@ Windows is not supported.
 
 ## Quick start
 
-Run a broker headless (the desktop app is the primary interface; the
-CLI is its dev/headless counterpart):
+The **desktop app** owns the local production store (`~/.aka` and the
+per-user data directory). **`multitool serve`** runs a separate headless
+broker under `~/.akaserver` by default so it can sit beside the app
+without colliding. Override with `--root` or `AKA_SERVER_ROOT` (`--root`
+wins). Add `--listen` when you want the remote/hosted TCP control plane.
 
 ```sh
-multitool serve
-```
+# Headless broker (default root ~/.akaserver). Same machine as the app is fine.
+multitool serve --listen 127.0.0.1:4780 --public-url http://127.0.0.1:4780
 
-Seed the running broker from another terminal:
+# First start writes ~/.akaserver/sock/manage-token (0600). Rotate while live:
+multitool manage token --root ~/.akaserver
 
-```sh
-printf '%s' "$GITHUB_TOKEN" | multitool secret add GITHUB_TOKEN
+# Seed / manage that root (always pass the same --root, or use --broker):
+printf '%s' "$GITHUB_TOKEN" | multitool secret add GITHUB_TOKEN --root ~/.akaserver
 multitool conn add github --kind api --host api.github.com \
-    --template 'Authorization: Bearer {{GITHUB_TOKEN}}'
-multitool conn list
+    --template 'Authorization: Bearer {{GITHUB_TOKEN}}' --root ~/.akaserver
+multitool conn list --root ~/.akaserver
 ```
 
-The rest of the lifecycle is headless too: `multitool secret
-list|rename|replace|rm`, `multitool conn update|rename|rm`, per-tool agent
-access with `multitool conn enable|disable`, and `multitool conn test` to check a
-connection against its pinned destination. These edits run through the
-broker's own management layer, so audit entries and side effects (a
-retarget revoking direct endpoints, for example) match the app exactly.
-
-With a local broker running, management commands use its manage API
-automatically — no stop/start needed — authorized by the management token
-(never the agent key):
+CLI mutations without `--root` still target the **desktop production store**
+(online against Multitool, or offline against its files). They do not aim at
+`~/.akaserver` unless you pass `--root` (or manage over `--broker <url>`).
 
 ```sh
-multitool serve                       # first start writes ~/.aka/manage-token (0600)
-multitool manage token                # rotate it online and store the replacement
-multitool conn disable github         # edits the live broker over its socket
-multitool conn list --broker https://broker.example.dev   # hosted brokers too
+multitool conn list --broker https://broker.example.dev   # hosted / remote
+multitool manage login --broker https://broker.example.dev
 ```
 
-`multitool manage login --broker <url>` stores a token for a hosted broker
+`multitool manage login --broker <url>` stores a token for a remote broker
 (macOS: the Keychain; elsewhere a 0600 file), and `AKA_MANAGE_TOKEN`
-overrides for CI. `multitool manage token --broker <url>` rotates a hosted
-broker using that current credential. With no local broker running,
-commands fall back to editing the local files offline, exactly as before.
+overrides for CI. `multitool manage token --broker <url>` rotates using that
+credential. With no broker running, bare commands fall back to editing the
+production store offline.
 
 The operator's view is covered by `multitool key` (print the shared agent
 key; `--rotate` disconnects every agent at once), `multitool status` (is a
 broker up, and what does it serve), and `multitool activity` (the audit
-trail, readable while the broker runs).
+trail, readable while the broker runs). Point them at a headless root with
+`--root`.
 
-Open Postgres and SSH sessions straight from the shell — each command
-prints the one value a stock client needs, minted by the running broker
-(the DSN embeds a short-lived session ticket):
-
-```sh
-psql "$(multitool dsn analytics)"
-export SSH_AUTH_SOCK="$(multitool ssh production)"
-git push production main
-```
-
-Teach the agents in a repository about the broker:
+Open Postgres and SSH sessions from a running broker — each command prints
+the one value a stock client needs (the DSN embeds a short-lived session
+ticket). Use Multitool for the local store, or `--root` / the headless token:
 
 ```sh
-multitool skill --write          # writes .claude/skills/multitool/SKILL.md
-multitool skill --write --user   # or ~/.claude/skills/multitool/SKILL.md for all repos
-multitool skill --write --broker https://broker.example.dev  # hosted setup
+psql "$(multitool dsn analytics)"                          # local app broker
+export SSH_AUTH_SOCK="$(multitool ssh production --root ~/.akaserver)"
 ```
 
-Local agents discover the live contract from the broker itself; hosted skill
-generation fetches the selected broker's authoritative setup text:
+Teach agents about a broker:
+
+```sh
+multitool skill --write          # production / local Multitool layout
+multitool skill --write --user
+multitool skill --write --root ~/.akaserver
+multitool skill --write --broker https://broker.example.dev
+```
+
+Local agents on the desktop broker discover the contract from its socket;
+headless / hosted agents use that root's token or the TCP URL:
 
 ```sh
 curl --unix-socket ~/.aka/broker.sock http://localhost/instructions
+curl --unix-socket ~/.akaserver/sock/broker.sock http://localhost/instructions
 ```
 
-Every command accepts `--root <dir>` to run against an isolated directory
-(data and socket under it) instead of the per-user defaults — handy for
-demos, tests, and CI.
+Every command accepts `--root <dir>` for an isolated directory (data and
+socket under it). `multitool serve` defaults to `~/.akaserver`; other
+commands default to the production layout unless `--root` is set.
 
 ## Platform notes
 

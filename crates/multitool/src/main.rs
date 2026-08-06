@@ -3,9 +3,10 @@
 //! - `multitool skill` emits the `/instructions` content as a checked-in
 //!   skill file, the same content the daemon serves, so the convention
 //!   layer can't drift from the daemon.
-//! - `multitool serve` runs the broker headless, so the whole control plane +
-//!   the PG data plane can be exercised without the desktop UI (useful for
-//!   agent integration and CI).
+//! - `multitool serve` runs a headless broker under its own root (default
+//!   `~/.akaserver`, overridable with `--root` or `AKA_SERVER_ROOT`) so it
+//!   never shares the desktop app's production store. Use `--listen` for the
+//!   remote/hosted control plane.
 //! - `multitool secret add|list|rename|replace|rm` and
 //!   `multitool conn add|list|show|update|rename|rm|enable|disable|test` manage the
 //!   store from the terminal — the dev/headless counterpart of the app's
@@ -85,6 +86,9 @@ fn parse_manage_ttl_days(value: &str) -> Result<u64, String> {
 }
 
 const DEFAULT_MANAGE_TOKEN_TTL_DAYS: u64 = 30;
+
+/// Env override for `multitool serve`'s default root when `--root` is omitted.
+const SERVER_ROOT_ENV: &str = "AKA_SERVER_ROOT";
 
 fn parse_positive_seconds(value: &str) -> Result<u64, String> {
     let secs: u64 = value
@@ -179,13 +183,15 @@ enum Command {
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Run the broker headless (no desktop UI). Every local agent shares
-    /// one key (~/.aka/token under the root); tools are enabled for agents
-    /// by default and managed remotely via the manage API (`multitool manage
-    /// token`) or locally from the desktop app.
+    /// Run a headless broker under its own root (not the desktop app store).
+    ///
+    /// Default root is `~/.akaserver` (data + socket under it). Override with
+    /// `--root` or `AKA_SERVER_ROOT` (`--root` wins). The Multitool desktop app
+    /// keeps using the production layout (`~/.aka`); agents against this
+    /// process need this root's token or `--listen` + the shared agent key.
     Serve {
-        /// Use an isolated root dir (data + socket under it) instead of the
-        /// default per-user locations. Handy for testing.
+        /// Broker root (data + socket under it). Overrides `AKA_SERVER_ROOT`
+        /// and the default `~/.akaserver`.
         #[arg(long)]
         root: Option<PathBuf>,
         /// Also serve the control plane on this TCP address (e.g.
@@ -941,7 +947,8 @@ fn endpoint_action_supported(action: EndpointAction, online: bool) -> Result<(),
     if matches!(action, EndpointAction::Issue | EndpointAction::Renew) && !online {
         Err(
             "direct endpoint issuance and renewal require a running broker to own the listener; \
-             start Multitool or `multitool serve`, then retry",
+             start Multitool for the local store, or `multitool serve` / `multitool serve --root …` \
+             for a headless root, then retry",
         )
     } else {
         Ok(())
@@ -1381,6 +1388,48 @@ fn store_paths(root: Option<&Path>) -> Paths {
             ))
         }),
     }
+}
+
+/// Default directory for bare `multitool serve`: `~/.akaserver`.
+fn default_server_root() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        "could not determine the home directory for the default serve root (~/.akaserver); \
+         set HOME, pass --root, or set AKA_SERVER_ROOT"
+            .to_string()
+    })?;
+    Ok(home.join(".akaserver"))
+}
+
+/// Resolve `multitool serve`'s root.
+///
+/// Precedence: explicit `--root` > non-empty `AKA_SERVER_ROOT` > `default_root`
+/// (normally `~/.akaserver`). The env value is used as-is; shells expand `~`
+/// when exporting — bare `~` in the process environment is not expanded here.
+fn resolve_serve_root(
+    explicit: Option<PathBuf>,
+    env_value: Option<&str>,
+    default_root: PathBuf,
+) -> PathBuf {
+    if let Some(root) = explicit {
+        return root;
+    }
+    if let Some(value) = env_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    default_root
+}
+
+/// `--root` / `AKA_SERVER_ROOT` / `~/.akaserver` for a live `serve` process.
+fn serve_root_from_flags(explicit: Option<PathBuf>) -> PathBuf {
+    let env = std::env::var(SERVER_ROOT_ENV).ok();
+    let default = match default_server_root() {
+        Ok(path) => path,
+        Err(error) => die(error),
+    };
+    resolve_serve_root(explicit, env.as_deref(), default)
 }
 
 /// A typo in `--root` must not make a command silently create and operate on
@@ -3639,8 +3688,8 @@ fn cmd_ssh_agent(
     if managed.remote.is_none() {
         die_with(
             ExitCode::NoBroker,
-            "the endpoint socket is served by a running broker; start Multitool or \
-             `multitool serve`, then retry",
+            "the endpoint socket is served by a running broker; start Multitool for the local \
+             store, or `multitool serve` / `multitool serve --root …` for a headless root, then retry",
         );
     }
     let connection_id = dto_id(&dto.id);
@@ -4431,6 +4480,10 @@ fn cmd_serve(args: ServeArgs) {
         audit_pg_statements,
         no_mcp,
     } = args;
+    // Headless serve always uses an isolated root (default ~/.akaserver), never
+    // the desktop production layout. Vault is always root-scoped on macOS.
+    let root = serve_root_from_flags(root);
+    let root_flag = format!(" --root {}", shell_quote(&root.display().to_string()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -4442,8 +4495,8 @@ fn cmd_serve(args: ServeArgs) {
     let fail = |what: &str, e: &dyn std::fmt::Display| -> ! {
         die(format!("{what}: {e}"));
     };
-    let paths = store_paths(root.as_deref());
-    let vault = match open_vault(&paths, root.as_deref()) {
+    let paths = Paths::under(&root);
+    let vault = match open_vault(&paths, Some(&root)) {
         Ok(vault) => vault,
         Err(e) => fail("could not open the secret vault", &e),
     };
@@ -4505,6 +4558,7 @@ fn cmd_serve(args: ServeArgs) {
         "Multitool broker listening on {}",
         daemon.socket_path.display()
     );
+    eprintln!("  root: {}", root.display());
     if let Some(path) = first_start_manage_token {
         eprintln!(
             "  first-start management token: {} (0600, expires in {} days)",
@@ -4512,10 +4566,11 @@ fn cmd_serve(args: ServeArgs) {
             DEFAULT_MANAGE_TOKEN_TTL_DAYS,
         );
         eprintln!(
-            "  run `multitool manage token{}` while the broker is live to rotate and store it",
-            root.as_ref()
-                .map(|root| format!(" --root {}", shell_quote(&root.display().to_string())))
-                .unwrap_or_default(),
+            "  run `multitool manage token{root_flag}` while the broker is live to rotate and store it"
+        );
+    } else {
+        eprintln!(
+            "  manage this broker with `multitool …{root_flag}` or `--broker <url>` when listening"
         );
     }
     let confirm_count = broker
@@ -4541,17 +4596,23 @@ fn cmd_serve(args: ServeArgs) {
             Some(url) => eprintln!("  advertised to remote clients as {url}"),
             None => eprintln!("  no --public-url set: TCP discovery omits absolute URLs"),
         }
-        eprintln!("  remote management: enter this broker's `multitool manage token` in the app");
+        eprintln!(
+            "  remote management: rotate with `multitool manage token{root_flag}` (or --broker), \
+             then enter the token in the app"
+        );
     }
     eprintln!(
         "  discovery: curl --unix-socket {} http://localhost/instructions",
         daemon.socket_path.display()
     );
     eprintln!(
-        "  skill file: `multitool skill --write` in a repo (or --write --user) \
+        "  skill file: `multitool skill --write{root_flag}` (or --broker when listening) \
          teaches agents this broker"
     );
-    eprintln!("  agents authenticate with the shared key at the root's token file");
+    eprintln!(
+        "  agents authenticate with the shared key at {}",
+        broker.paths.token_file().display()
+    );
     eprintln!("  Ctrl-C or SIGTERM to quit.\n");
 
     let signal = runtime.block_on(wait_for_shutdown_signal());
@@ -4694,6 +4755,41 @@ mod tests {
             "/tmp/example",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn serve_root_prefers_explicit_then_env_then_default() {
+        let default = PathBuf::from("/default/akaserver");
+        assert_eq!(
+            resolve_serve_root(Some(PathBuf::from("/explicit")), Some("/from-env"), default.clone()),
+            PathBuf::from("/explicit")
+        );
+        assert_eq!(
+            resolve_serve_root(None, Some("/from-env"), default.clone()),
+            PathBuf::from("/from-env")
+        );
+        assert_eq!(
+            resolve_serve_root(None, Some("  /from-env  "), default.clone()),
+            PathBuf::from("/from-env")
+        );
+        assert_eq!(
+            resolve_serve_root(None, Some(""), default.clone()),
+            default
+        );
+        assert_eq!(
+            resolve_serve_root(None, Some("   "), default.clone()),
+            default
+        );
+        assert_eq!(resolve_serve_root(None, None, default.clone()), default);
+    }
+
+    #[test]
+    fn default_server_root_is_home_akaserver() {
+        let root = default_server_root().expect("HOME should be set in tests");
+        assert_eq!(root.file_name().and_then(|n| n.to_str()), Some(".akaserver"));
+        let paths = Paths::under(&root);
+        assert_eq!(paths.data_dir, root.join("data"));
+        assert_eq!(paths.socket_dir, root.join("sock"));
     }
 
     #[test]

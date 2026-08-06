@@ -484,8 +484,9 @@ pub fn read_migrating<A: KeychainApi + ?Sized>(
 }
 
 /// The macOS Keychain vault: one item per secret, keyed by the secret's stable
-/// UUID under a fixed service. Dev roots use a root-scoped service so `aka
-/// serve --root …` can never create or rotate production vault state.
+/// UUID under a fixed service. Dev roots use a root-scoped service so
+/// `multitool serve` (default `~/.akaserver`, or any `--root`) can never create
+/// or rotate production vault state.
 pub struct KeychainVault<A: KeychainApi> {
     api: Arc<A>,
     service: Arc<str>,

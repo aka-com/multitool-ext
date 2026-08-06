@@ -227,10 +227,11 @@ multi-platform manifest digests for reproducibility across Apple
 Silicon and amd64 hosts; update each tag and digest together after
 reviewing a new upstream release. The walkthrough above adds each
 service through Multitool Desktop; the same checks run headless on Linux
-(where the desktop app does not build) by seeding the store with
-`multitool conn add` (the MCP connection needs `--mcp-path /mcp`), starting
-`multitool serve`, and driving the broker over its Unix socket the way an
-agent would.
+(where the desktop app does not build) by seeding a throwaway root with
+`multitool conn add --root …` (the MCP connection needs `--mcp-path /mcp`),
+starting `multitool serve --root …`, and driving the broker over its Unix
+socket the way an agent would. Bare `serve` would use `~/.akaserver` instead
+of the production desktop store.
 
 Do not mount the repository, home directory, or real credentials into
 these containers.

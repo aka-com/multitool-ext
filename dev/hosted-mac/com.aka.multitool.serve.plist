@@ -3,7 +3,8 @@
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- LaunchAgent (NOT a LaunchDaemon: the broker needs the login Keychain)
      that keeps a hosted Multitool broker running. Install at
-     ~/Library/LaunchAgents/com.aka.multitool.serve.plist and edit the paths/URL. -->
+     ~/Library/LaunchAgents/com.aka.multitool.serve.plist and edit the paths/URL.
+     Default serve root is ~/.akaserver; set --root or AKA_SERVER_ROOT to override. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>

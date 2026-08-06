@@ -23,6 +23,22 @@ domain per broker. It is not a multi-tenant identity or policy service.
   A passive event observer grants no such capability. If no surface is live,
   confirmed traffic fails closed.
 
+## Process layout
+
+`multitool serve` always uses an isolated broker root so it never shares the
+desktop app's production store (`~/.aka`). Defaults:
+
+| Precedence | Source |
+|------------|--------|
+| 1 | `--root <dir>` |
+| 2 | `AKA_SERVER_ROOT` (non-empty) |
+| 3 | `~/.akaserver` |
+
+State is `Paths::under` that root: `<root>/data` and `<root>/sock` (socket,
+shared agent key, first-start manage token, lock). Manage the live process with
+`multitool … --root <same>` or, once TCP is up, `--broker <public-url>`. The
+desktop app continues to use the production layout for **This Mac**.
+
 ## Network boundary
 
 `multitool serve --listen` speaks plaintext HTTP. Put an authenticated TLS reverse
@@ -52,9 +68,10 @@ directory and inject it through the hosting platform's secret mechanism.
 Management tokens are stored in a plaintext 0600 file on non-macOS clients;
 prefer `AKA_MANAGE_TOKEN` in CI. The default management-token lifetime is 30
 days. A never-managed broker writes one bounded first-start credential to its
-owner-only socket directory. `multitool manage token` consumes it to perform the
-first authenticated online rotation; subsequent rotations require the still
-current saved or environment token and do not stop the broker.
+owner-only socket directory (`<root>/sock/manage-token`).
+`multitool manage token --root <root>` consumes it to perform the first
+authenticated online rotation; subsequent rotations require the still current
+saved or environment token and do not stop the broker.
 
 Disabling a connection refuses new calls and closes transports the broker
 owns. Rotating the shared agent key revokes outstanding tickets and direct
@@ -93,7 +110,8 @@ deletes or edits the upstream 1Password item.
 
 ## Recommended topology
 
-1. Run one broker per trust domain under a dedicated OS account.
+1. Run one broker per trust domain under a dedicated OS account (or, for
+   same-machine dual-run with the desktop app, default `~/.akaserver`).
 2. Keep its control and data-plane binds on loopback or a private interface.
 3. Terminate HTTPS at a reverse proxy or tunnel that forwards only the
    intended control-plane routes.

@@ -30,7 +30,9 @@ impl std::fmt::Display for OpenSessionError {
         match self {
             Self::NoBroker { socket } => write!(
                 f,
-                "no broker is running at {} — start the Multitool app or `multitool serve`",
+                "no broker is running at {} — start Multitool for the local store \
+                 (~/.aka), or `multitool serve` (default ~/.akaserver) / \
+                 `multitool serve --root …` for a headless root",
                 socket.display()
             ),
             Self::Refused { status, detail, .. } => {

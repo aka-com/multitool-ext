@@ -22,33 +22,32 @@ export PATH="$PWD/target/release:$PATH"
 Then:
 
 ```sh
-# Optionally seed tools/secrets offline (or do it all from the app later,
-# or live once the broker is up: `multitool manage login`, then the same
-# commands drive the running broker — remotely too, with
-# `--broker <public-url>`):
-multitool secret add GITHUB_API_KEY
-multitool conn add github --kind api --host api.github.com \
-    --template 'Authorization: Bearer {{GITHUB_API_KEY}}'
-
-# Serve. --listen adds the TCP control plane (loopback here; see below),
+# Serve under the headless default root (~/.akaserver: data/ + sock/).
+# --listen adds the TCP control plane (loopback here; see below),
 # --public-url is what remote clients will reach it at through your proxy.
+# Override the root with --root or AKA_SERVER_ROOT; never shares the desktop
+# app's production store (~/.aka), so both can run on one Mac.
 multitool serve --listen 127.0.0.1:4780 --public-url https://broker.example.dev
 ```
 
 On its first start, `multitool serve` writes a bounded, owner-only bootstrap
-credential to `~/.aka/manage-token` (mode 0600). In another terminal, rotate
-and store it while the broker remains live:
+credential to `~/.akaserver/sock/manage-token` (mode 0600). In another
+terminal, rotate and store it while the broker remains live (same `--root`):
 
 ```sh
 # Printed once — only its hash and the locally stored replacement remain.
-multitool manage token
+multitool manage token --root ~/.akaserver
 
 # Future rotations authenticate with the saved current token.
-multitool manage token --ttl-days 90
+multitool manage token --root ~/.akaserver --ttl-days 90
 
 # Close the manage API entirely.
-multitool manage token --revoke
+multitool manage token --root ~/.akaserver --revoke
 ```
+
+Seed tools live with the same `--root`, or from the desktop after you connect
+as a remote broker. Offline seed before first serve also needs
+`--root ~/.akaserver` (and often `--create-root` for the first secret).
 
 The first successful rotation removes the bootstrap file. To rotate from
 another machine, first store the current token with
@@ -63,21 +62,21 @@ Notes:
   A headless Mac mini works with auto-login enabled. Items are stored
   `AfterFirstUnlock`, so the broker keeps reading once the Mac has been
   unlocked once after boot; it cannot read before that.
-- **`multitool serve` uses the login Keychain, and it prompts.** The
-  data-protection keychain that makes reads silent is gated on a
-  `keychain-access-groups` entitlement, which the unsigned `multitool` binary does
-  not carry. On a headless box that means an approval dialog per secret, per
-  build of `multitool` — click *Always Allow* once per item, or sign your own `multitool`
-  build. `multitool status` prints which keychain is in use. If this host also runs
-  the signed desktop app against the same store, see the note in
-  `crates/aka-core/src/keychain/mod.rs`: the app moves values somewhere `multitool`
-  cannot follow, and `multitool` will say so rather than show an empty vault.
+- **`multitool serve` uses a root-scoped Keychain service and the login
+  keychain when unsigned.** The data-protection keychain that makes reads
+  silent is gated on a `keychain-access-groups` entitlement, which the
+  unsigned `multitool` binary does not carry. On a headless box that means
+  an approval dialog per secret, per build of `multitool` — click *Always
+  Allow* once per item, or sign your own `multitool` build.
+  `multitool status --root ~/.akaserver` prints which keychain is in use.
+  The desktop app's production vault is a different Keychain service, so
+  the two stores do not share secret items.
 - **MCP host**: `multitool serve` starts the in-process Rust host automatically.
   Remote MCP clients use `<public-url>/mcp`.
 - `/v1/pair` is not served on the TCP listener: remote clients get the
-  shared agent key from you (`multitool key` prints it; it lives in
-  `~/.aka/token` on this Mac), and the desktop app manages the broker
-  with the `akamgr_…` token only.
+  shared agent key from you (`multitool key --root ~/.akaserver`; it lives in
+  `~/.akaserver/sock/token`), and the desktop app manages the broker with
+  the `akamgr_…` token only.
 
 A LaunchAgent that keeps it running (edit the paths, then
 `launchctl load ~/Library/LaunchAgents/com.aka.multitool.serve.plist`):
