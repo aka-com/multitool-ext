@@ -376,6 +376,47 @@
   .broker-pane .bp-actions{ display: flex; gap: 8px; margin-top: 6px; }
   .broker-pane .app-loading-spinner{ align-self: flex-start; }
 
+  /* First run has no broker yet and no history to sit beside, so the inert
+     sidebar is dropped and the chooser centers over the whole window. Other
+     takeovers keep the sidebar (dimmed) for context. */
+  .dw-body.first-run .dw-side{ display: none; }
+
+  /* First-run chooser: two option cards, Local (recommended) and Hosted.
+     Each is a two-column row — icon, then title over description. */
+  .broker-pane-choose{ width: min(480px, 100%); }
+  .broker-pane-choose .bp-choices{
+  display: flex; flex-direction: column; gap: 10px; margin-top: 8px;
+}
+  .broker-pane-choose .bp-choice{
+  display: grid; grid-template-columns: 34px 1fr; grid-template-rows: auto auto;
+  column-gap: 13px; row-gap: 2px; align-items: center;
+  padding: 14px 15px; text-align: left; cursor: pointer;
+  background: var(--field-bg); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--ink); font: inherit;
+  transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+  .broker-pane-choose .bp-choice:hover:not(:disabled){
+  border-color: var(--accent); background: var(--accent-wash);
+  box-shadow: 0 1px 3px rgba(0,0,0,.05);
+}
+  .broker-pane-choose .bp-choice:focus-visible{
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+  .broker-pane-choose .bp-choice:disabled{ opacity: .6; cursor: default; box-shadow: none; }
+  .broker-pane-choose .bp-choice-ico{
+  grid-row: 1 / span 2; width: 34px; height: 34px; border-radius: 9px;
+  background: var(--panel); border: 1px solid var(--line-soft); color: var(--muted-2);
+  display: flex; align-items: center; justify-content: center;
+}
+  .broker-pane-choose .bp-choice-ico svg{ width: 19px; height: 19px; }
+  .broker-pane-choose .bp-choice-ico .app-loading-spinner{ width: 16px; height: 16px; }
+  .broker-pane-choose .bp-choice-title{
+  font-size: 0.86rem; font-weight: 650;
+}
+  .broker-pane-choose .bp-choice-desc{
+  font-size: 0.75rem; color: var(--muted); line-height: 1.45;
+}
+
   .act-chip-manage{ color: var(--accent-ink); background: var(--accent-wash); }
   .dd-sub .dot.dot-pending{ background: #f5a623; box-shadow: 0 0 4px rgba(245,166,35,.6); }
   .dd-sub .dot.dot-error{ background: var(--danger); box-shadow: 0 0 4px rgba(255,59,48,.6); }

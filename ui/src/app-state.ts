@@ -252,6 +252,9 @@ export interface AppState {
   elicitValues: Record<string, string>;
   approvals: Approval[];
   requests: RequestRecord[];
+  /** The local broker is starting after a pick (chooser or switcher), so
+   * both surfaces can disable their controls for the duration. */
+  brokerStartingLocal: boolean;
   approvalAnswering: string | null;
   approvalHostKeyProvenance: {
     approvalId: string;
@@ -419,6 +422,7 @@ function createInitialState(): AppState {
     elicitValues: {},
     approvals: [],
     requests: [],
+    brokerStartingLocal: false,
     approvalAnswering: null,
     approvalHostKeyProvenance: null,
     agentSetupInstructions: '',

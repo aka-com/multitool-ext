@@ -939,6 +939,9 @@ let mockBroker: import('./types').BrokerProfile = {
   mode: 'local', url: null, connected: true, error: null, has_saved_token: false,
   capabilities: ['onepassword_provider_v1', 'typed_credentials_v1'],
 };
+// Once a broker is picked, the `unset` fault stops applying so the app does
+// not snap back to the chooser on the next profile read.
+let mockPicked = false;
 let mockNotificationSettings: NotificationSettings = {
   mode: 'when_hidden',
   showContext: false,
@@ -980,6 +983,7 @@ function mockConnectRemote(url: string, token: string | null): unknown {
   if (token?.includes('badtoken')) {
     throw 'the broker rejected the management token; re-issue it with `multitool manage token` and enter the new one';
   }
+  mockPicked = true;
   mockBroker = {
     mode: 'remote', url: trimmed, connected: true, error: null, has_saved_token: true,
     capabilities: trimmed.includes('legacy') ? [] : ['onepassword_provider_v1'],
@@ -1116,6 +1120,13 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
           capabilities: ['onepassword_provider_v1', 'typed_credentials_v1'],
         };
       }
+      // `?mockFault=unset` boots the first-run chooser in a plain browser.
+      if (mockFault('unset') && !mockPicked) {
+        return {
+          mode: 'unset', url: null, connected: false, error: null,
+          has_saved_token: false, capabilities: [],
+        };
+      }
       return { ...mockBroker };
     case 'connect_remote_broker': return mockConnectRemote(args.url as string, (args.token as string | null) ?? null);
     case 'retry_remote_broker': {
@@ -1129,6 +1140,9 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       return { ...mockBroker };
     }
     case 'switch_broker_local': {
+      // A pick out of the first-run chooser: get_broker_profile stops
+      // returning `unset` once one has been made.
+      mockPicked = true;
       mockBroker = {
         mode: 'local', url: mockBroker.url, connected: true, error: null,
         has_saved_token: mockBroker.has_saved_token,

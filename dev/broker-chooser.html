@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Broker chooser — first-run mockup</title>
+<!--
+  Interactive mockup of the first-run Local/Hosted broker chooser.
+  Tokens are copied from ui/styles.css (:root and :root[data-theme="dark"]),
+  so this is a faithful preview, not a redraw. It is a design surface — the
+  real component lives in ui/app.tsx (BrokerPane kind="choose"). Toggle the
+  theme, and click a card to see the hosted-setup form open over the chooser
+  and the "This Mac" starting state.
+-->
+<style>
+  :root{
+    color-scheme: light;
+    --ink:#1d1d1f; --ink-2:#2c2c30; --muted:#66666f; --muted-2:#6d6d76;
+    --accent:#0a7cff; --accent-text:#0a7cff; --accent-ink:#0a63d0;
+    --accent-wash:rgba(10,124,255,.08); --accent-wash-2:rgba(10,124,255,.12); --accent-border:rgba(10,124,255,.32);
+    --panel:#fbfbfd; --field-bg:#fff; --btn-bg:#fff; --btn-hover:#f2f2f5;
+    --line:rgba(0,0,0,.08); --line-soft:rgba(0,0,0,.06); --line-strong:rgba(0,0,0,.14);
+    --line-field:rgba(0,0,0,.16);
+    --danger-ink:#c9372c; --danger-wash:rgba(255,59,48,.07); --danger-border:rgba(255,59,48,.2);
+    --shadow-xs:0 1px 1px rgba(0,0,0,.04);
+    --window:#eef0f3;
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --ink:#ececf0; --ink-2:#d8d8de; --muted:#9a9aa4; --muted-2:#8e8e96;
+    --accent:#0a7cff; --accent-text:#58a6ff; --accent-ink:#7db8ff;
+    --accent-wash:rgba(88,166,255,.12); --accent-wash-2:rgba(88,166,255,.18); --accent-border:rgba(88,166,255,.32);
+    --panel:#1b1b20; --field-bg:#131317; --btn-bg:#26262c; --btn-hover:#303038;
+    --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.07); --line-strong:rgba(255,255,255,.16);
+    --line-field:rgba(255,255,255,.18);
+    --danger-ink:#ff6b61; --danger-wash:rgba(255,90,80,.14); --danger-border:rgba(255,110,100,.48);
+    --shadow-xs:0 1px 1px rgba(0,0,0,.3);
+    --window:#0d0d10;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color:var(--ink); background:var(--window);
+    -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column;
+  }
+
+  /* A minimal window frame so the takeover reads in context. */
+  .frame{ flex:1; display:flex; flex-direction:column; min-height:0; }
+  .titlebar{
+    height:38px; flex:0 0 auto; display:flex; align-items:center; justify-content:center;
+    position:relative; border-bottom:1px solid var(--line-soft);
+    font-size:.8125rem; color:var(--muted); background:rgba(127,127,140,.04);
+  }
+  .lights{ position:absolute; left:12px; display:flex; gap:8px; }
+  .lights i{ width:12px; height:12px; border-radius:50%; opacity:.9; }
+  .lights .r{ background:#ff5f57; } .lights .y{ background:#febc2e; } .lights .g{ background:#28c840; }
+  .switcher{
+    position:absolute; right:10px; display:inline-flex; align-items:center; gap:6px;
+    font-size:.78125rem; color:var(--muted); border:1px solid var(--line); border-radius:7px;
+    padding:3px 8px; background:var(--field-bg);
+  }
+  .switcher .dot{ width:7px; height:7px; border-radius:50%; background:#f5a623; box-shadow:0 0 4px rgba(245,166,35,.6); }
+
+  .body{ flex:1; display:flex; min-height:0; }
+  .side{
+    width:210px; flex:0 0 auto; border-right:1px solid var(--line-soft);
+    padding:14px 12px; background:rgba(127,127,140,.03);
+    opacity:.45; pointer-events:none; /* inert behind the takeover */
+  }
+  .brand{ display:flex; align-items:center; gap:9px; margin-bottom:16px; }
+  .brand .app{ width:26px; height:26px; border-radius:7px; background:var(--accent-wash);
+    display:flex; align-items:center; justify-content:center; color:var(--accent-text); }
+  .brand .t{ font-weight:650; font-size:.875rem; }
+  .brand .s{ font-size:.72rem; color:var(--muted); }
+  .nav{ display:flex; flex-direction:column; gap:2px; }
+  .nav div{ padding:7px 10px; border-radius:7px; font-size:.84rem; color:var(--ink-2); }
+  .nav div.on{ background:var(--accent-wash); color:var(--accent-ink); }
+
+  /* content.broker-takeover */
+  .takeover{ flex:1; display:flex; align-items:center; justify-content:center; padding:24px; overflow:auto; }
+
+  /* broker-pane + broker-pane-choose */
+  .broker-pane{
+    width:min(480px,100%); display:flex; flex-direction:column; gap:10px;
+    padding:26px 28px; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+  }
+  .broker-pane h2{ margin:0; font-size:1rem; }
+  .bp-lead{ margin:0; font-size:.78125rem; color:var(--muted); line-height:1.5; }
+  .broker-pane[role="form"] h2 + .bp-lead{ margin-top:-4px; }
+  .bp-icon{ width:30px; height:30px; color:var(--muted-2); }
+  .bp-icon svg{ width:30px; height:30px; }
+
+  .bp-choices{ display:flex; flex-direction:column; gap:10px; margin-top:8px; }
+  .bp-choice{
+    display:grid; grid-template-columns:34px 1fr; grid-template-rows:auto auto;
+    column-gap:13px; row-gap:2px; align-items:center;
+    padding:14px 15px; text-align:left; cursor:pointer;
+    background:var(--field-bg); border:1px solid var(--line); border-radius:10px;
+    color:var(--ink); font:inherit;
+    transition:border-color .12s ease, background .12s ease, box-shadow .12s ease;
+  }
+  .bp-choice:hover:not(:disabled){ border-color:var(--accent); background:var(--accent-wash);
+    box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  .bp-choice:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .bp-choice:disabled{ opacity:.6; cursor:default; box-shadow:none; }
+  .bp-choice-ico{ grid-row:1 / span 2; width:34px; height:34px; border-radius:9px;
+    background:var(--panel); border:1px solid var(--line-soft); color:var(--muted-2);
+    display:flex; align-items:center; justify-content:center; }
+  .bp-choice-ico svg{ width:19px; height:19px; }
+  .bp-choice-title{ font-size:.86rem; font-weight:650; }
+  .bp-choice-desc{ font-size:.75rem; color:var(--muted); line-height:1.45; }
+
+  /* setup form bits */
+  .f-row{ display:flex; flex-direction:column; gap:4px; margin-bottom:5px; }
+  .f-row label{ font-size:.75rem; color:var(--muted); }
+  .f-row input{
+    font:inherit; font-size:.84rem; padding:7px 10px; border-radius:7px;
+    border:1px solid var(--line-field); background:var(--field-bg); color:var(--ink);
+  }
+  .f-row input:focus{ outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent; }
+  .bp-actions{ display:flex; gap:8px; margin-top:6px; }
+  .btn{ border:1px solid var(--line-strong); background:var(--btn-bg); color:var(--ink);
+    border-radius:7px; padding:5px 13px; font-size:.84375rem; cursor:pointer; box-shadow:var(--shadow-xs); font-family:inherit; }
+  .btn:hover{ background:var(--btn-hover); }
+  .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .btn.primary:hover{ background:#0868da; }
+  .btn.ghost{ border-color:transparent; background:transparent; box-shadow:none; color:var(--accent-text); }
+  .btn.ghost:hover{ background:var(--accent-wash); }
+
+  .spinner{ width:15px; height:15px; border-radius:50%; border:2px solid var(--line-strong);
+    border-top-color:var(--accent); animation:spin .7s linear infinite; display:inline-block; vertical-align:-2px; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  /* Mockup-only chrome: theme toggle bar. Not part of the component. */
+  .toolbar{ flex:0 0 auto; display:flex; gap:8px; align-items:center; justify-content:center;
+    padding:8px; border-top:1px solid var(--line-soft); background:rgba(127,127,140,.04); font-size:.75rem; color:var(--muted); }
+  .toolbar button{ font:inherit; font-size:.75rem; padding:4px 10px; border-radius:6px;
+    border:1px solid var(--line); background:var(--field-bg); color:var(--ink); cursor:pointer; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="titlebar">
+      <span class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+      Multitool
+      <span class="switcher"><span class="dot"></span> Choose broker ▾</span>
+    </div>
+    <div class="body">
+      <aside class="side" aria-hidden="true">
+        <div class="brand">
+          <span class="app">◆</span>
+          <span><div class="t">Multitool</div><div class="s">● Connecting…</div></span>
+        </div>
+        <div class="nav">
+          <div class="on">Credentials</div>
+          <div>Tools</div>
+          <div>Connect agents</div>
+          <div>Activity</div>
+        </div>
+      </aside>
+      <main class="takeover" id="takeover"><!-- pane injected --></main>
+    </div>
+    <div class="toolbar">
+      <span>Mockup controls:</span>
+      <button id="theme">Toggle dark</button>
+      <button id="reset">Reset to chooser</button>
+    </div>
+  </div>
+
+<script>
+  // Lucide-derived glyphs matching the app's icon set (zap, globe, key).
+  const ICONS = {
+    key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></svg>',
+    zap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>',
+  };
+  const takeover = document.getElementById('takeover');
+  const side = document.querySelector('.side');
+  // First run drops the inert sidebar so the chooser centers over the window;
+  // the setup/starting states keep it (dimmed) for context, matching the app.
+  function showSidebar(on){ side.style.display = on ? '' : 'none'; }
+
+  function chooser({ starting } = {}) {
+    return `
+      <div class="broker-pane broker-pane-choose" role="form" aria-label="Choose your broker">
+        <h2>Select Multitool instance</h2>
+        <div class="bp-choices">
+          <button type="button" class="bp-choice" data-act="local" ${starting ? 'disabled' : ''}>
+            <span class="bp-choice-ico">${starting ? '<span class="spinner"></span>' : ICONS.zap}</span>
+            <span class="bp-choice-title">Local Multitool</span>
+            <span class="bp-choice-desc">${starting
+              ? 'Starting the local broker…'
+              : 'Run Multitool on this computer, without connecting to a hosted instance.'}</span>
+          </button>
+          <button type="button" class="bp-choice" data-act="hosted" ${starting ? 'disabled' : ''}>
+            <span class="bp-choice-ico">${ICONS.globe}</span>
+            <span class="bp-choice-title">Hosted Multitool</span>
+            <span class="bp-choice-desc">Connect to a broker hosted elsewhere.</span>
+          </button>
+        </div>
+      </div>`;
+  }
+
+  function setupForm() {
+    return `
+      <div class="broker-pane" role="form" aria-label="Connect to hosted Multitool">
+        <div class="bp-icon">${ICONS.key}</div>
+        <h2>Connect to hosted Multitool</h2>
+        <p class="bp-lead">Provide your connection details below.</p>
+        <div class="f-row"><label for="u">Hosted instance URL</label>
+          <input id="u" placeholder="https://multitool.dev" /></div>
+        <div class="f-row"><label for="t">Management token</label>
+          <input id="t" type="password" placeholder="akamgr…" /></div>
+        <div class="bp-actions">
+          <button class="btn primary" data-act="connect">Connect</button>
+          <button class="btn ghost" data-act="back">Back</button>
+        </div>
+      </div>`;
+  }
+
+  // The chooser centers over the window (no sidebar); every other state keeps
+  // the sidebar, so it sits in the content column like a normal takeover.
+  function render(html, { centered = false } = {}){ takeover.innerHTML = html; showSidebar(!centered); }
+  render(chooser(), { centered: true });
+
+  takeover.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'local') {
+      render(chooser({ starting: true }), { centered: true });
+      setTimeout(() => render(`
+        <div class="broker-pane" role="status" style="align-items:flex-start">
+          <div class="bp-icon"><span class="spinner"></span></div>
+          <h2>Starting the local broker…</h2>
+          <p class="bp-lead">The app takes over management of the local broker once it is up.</p>
+        </div>`), 650);
+    } else if (act === 'hosted') {
+      render(setupForm());
+    } else if (act === 'back') {
+      render(chooser(), { centered: true });
+    } else if (act === 'connect') {
+      render(`
+        <div class="broker-pane" role="status" style="align-items:flex-start">
+          <div class="bp-icon"><span class="spinner"></span></div>
+          <h2>Connecting to the hosted broker…</h2>
+        </div>`);
+    }
+  });
+
+  document.getElementById('theme').addEventListener('click', () => {
+    const root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  });
+  document.getElementById('reset').addEventListener('click', () => render(chooser()));
+</script>
+</body>
+</html>

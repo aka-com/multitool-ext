@@ -3905,10 +3905,38 @@ function BrokerSwitch(): ReactNode {
   );
 }
 
-/** The full-content-pane takeover while a remote link is not usable. */
-/** The full-pane broker takeover: the remote-setup form (controlled),
- * the connecting spinner, or the unreachable-broker error. */
-function BrokerPane({ kind }: { kind: 'setup' | 'connecting' | 'error' }): ReactNode {
+/** The full-pane broker takeover: the first-run chooser, the remote-setup
+ * form (controlled), the connecting spinner, or the unreachable-broker
+ * error. */
+function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error' }): ReactNode {
+  if (kind === 'choose') {
+    const starting = state.brokerStartingLocal;
+    return (
+      <div className="broker-pane broker-pane-choose" role="form" aria-label="Choose your broker">
+        <h2>Select Multitool instance</h2>
+        <div className="bp-choices">
+          <button type="button" className="bp-choice" data-act="broker-pick-local"
+            disabled={starting}>
+            <span className="bp-choice-ico">
+              {starting ? <span className="app-loading-spinner" /> : <Icon markup={ICONS.zap} />}
+            </span>
+            <span className="bp-choice-title">Local Multitool</span>
+            <span className="bp-choice-desc">
+              {starting
+                ? 'Starting the local broker…'
+                : 'Run Multitool on this computer, without connecting to a hosted instance.'}
+            </span>
+          </button>
+          <button type="button" className="bp-choice" data-act="broker-pick-remote"
+            disabled={starting}>
+            <span className="bp-choice-ico"><Icon markup={ICONS.globe} /></span>
+            <span className="bp-choice-title">Hosted Multitool</span>
+            <span className="bp-choice-desc">Connect to a broker hosted elsewhere.</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (kind === 'setup') {
     const setup = state.remoteSetup;
     const setupInstructions =
@@ -3921,7 +3949,7 @@ function BrokerPane({ kind }: { kind: 'setup' | 'connecting' | 'error' }): React
       <div className="broker-pane" role="form" aria-label="Connect to hosted Multitool">
         <div className="bp-icon"><Icon markup={ICONS.appIcon} /></div>
         <h2>Connect to hosted Multitool</h2>
-        <p className="bp-lead">Connect to a remote Multitool server with a management token.</p>
+        <p className="bp-lead">Provide your connection details below.</p>
         <div className="adv-collapse">
           <button type="button" className="adv-toggle" aria-expanded={setup.advancedOpen}
             data-act="toggle-remote-advanced">
@@ -3957,7 +3985,8 @@ function BrokerPane({ kind }: { kind: 'setup' | 'connecting' | 'error' }): React
             {setup.busy ? 'Connecting…' : 'Connect'}</button>
           {state.broker.mode === 'remote' && !state.broker.connected
             ? <button className="btn ghost" data-act="broker-pick-local">Use this Mac instead</button>
-            : <button className="btn ghost" data-act="broker-setup-cancel">Cancel</button>}
+            : <button className="btn ghost" data-act="broker-setup-cancel">
+                {state.broker.mode === 'unset' ? 'Back' : 'Cancel'}</button>}
         </div>
       </div>
     );
@@ -4091,7 +4120,7 @@ function MainWindow(): ReactNode {
           <span className="dw-title dw-title-center">Multitool</span>
           <BrokerSwitch />
         </div>
-        <div className="dw-body">
+        <div className={`dw-body ${takeover === 'choose' ? 'first-run' : ''}`}>
           <div className={`dw-side ${takeover ? 'disabled' : ''}`}>
             <div className="dw-brand">
               <div className="dd-appicon"><Icon markup={ICONS.appIcon} /></div>
@@ -6707,7 +6736,7 @@ function receiveMcpAuth(auth: McpAuthState): void {
       && state.mcpAuthOpenedUrl !== auth.authorization_url) {
     state.mcpAuthOpenedUrl = auth.authorization_url;
     void invoke('open_url', { url: auth.authorization_url })
-      .catch(() => toast('⚠ Could not open the browser — use the button in the dialog'));
+      .catch(() => toast('⚠ Couldn’t open the browser. Use the button in the dialog'));
   }
   if (state.sheet && state.sheet.kind === 'mcp-auth') render();
 }
@@ -7159,7 +7188,7 @@ async function answerApproval(
     render();
     return;
   }
-  toast(answered ? success : '⏳ That request is gone — it lapsed or was answered elsewhere');
+  toast(answered ? success : '⏳ That request already lapsed or was answered elsewhere');
   closeSheet();
   await Promise.all([
     load('approvals', 'list_approvals'),
@@ -8157,13 +8186,18 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       state.remoteSetup.open = false;
       state.remoteSetup.error = null;
       if (state.broker.mode === 'local') { render(); break; }
+      // Starting the stack takes a beat; the chooser (and switcher) disable
+      // their controls rather than accept a second pick mid-start.
+      state.brokerStartingLocal = true;
+      render();
       try {
         setBrokerProfile(await invoke('switch_broker_local'));
         await refresh('all');
         try { await loadAgentSetup(); } catch { /* pane shows loading */ }
-        toast('Managing this Mac’s broker');
       } catch (error) {
         toast(`Couldn’t start the local broker: ${String(error)}`);
+      } finally {
+        state.brokerStartingLocal = false;
       }
       render();
       break;
@@ -8222,7 +8256,6 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         };
         await refresh('all');
         try { await loadAgentSetup(); } catch { /* pane shows loading */ }
-        toast(`Managing ${brokerLabel(state.broker)}`);
       } catch (error) {
         state.remoteSetup.busy = false;
         state.remoteSetup.error = String(error);
@@ -9383,7 +9416,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'rotate-key-confirm': {
       if (await run(() => invoke('rotate_key'))) {
         state.confirm = null;
-        toast('🔑 Key rotated — agents reconnect from the token file'); await refresh('all');
+        toast('🔑 Key rotated. Agents reconnect from the token file'); await refresh('all');
       }
       break;
     }
@@ -9447,7 +9480,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         break;
       }
       if (await answerElicitation(id, true, values)) {
-        toast(`📨 Sent to ${request.connection} — ${request.agent} resumes`);
+        toast(`📨 Sent to ${request.connection}. ${request.agent} can resume`);
         closeSheet();
         await Promise.all([
           load('elicitations', 'list_elicitations'),
@@ -9516,26 +9549,26 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       const approval = state.approvals.find((a) => a.id === id);
       const minutes = Math.max(1, Math.round((approval?.window_secs ?? 900) / 60));
       await answerApproval(id, 'approve_window',
-        `✅ Approved — not asking again on ${approval?.connection ?? 'this tool'} for ${minutes}m`);
+        `✅ Approved. Won’t ask again on ${approval?.connection ?? 'this tool'} for ${minutes}m`);
       break;
     }
     case 'approval-approve-all': {
       const approval = state.approvals.find((a) => a.id === id);
       await answerApproval(id, 'approve_all',
-        `✅ Approved — ${approval?.connection ?? 'this tool'} no longer asks`);
+        `✅ Approved. ${approval?.connection ?? 'this tool'} no longer asks`);
       break;
     }
     case 'approval-deny': {
       const approval = state.approvals.find((a) => a.id === id);
       await answerApproval(id, 'deny',
-        `🚫 Refused — ${approval?.agent ?? 'the agent'} is told the call was denied`);
+        `🚫 Refused. Told ${approval?.agent ?? 'the agent'} the call was denied`);
       break;
     }
 
     case 'elicit-refuse': {
       const request = state.elicitations.find((r) => r.id === id);
       if (await answerElicitation(id, false)) {
-        toast(`🚫 Refused — ${request?.agent ?? 'the agent'} is told no, without your reasons`);
+        toast(`🚫 Refused. Told ${request?.agent ?? 'the agent'} no (no reasons shared)`);
         closeSheet();
         await Promise.all([
           load('elicitations', 'list_elicitations'),
@@ -10192,19 +10225,34 @@ async function boot() {
     });
   }
   // Prime the shared shell data before the first real paint. Secrets remains
-  // the landing page even when no tools have been configured yet.
-  await Promise.all([
-    loadLocalUsername(),
-    loadNotificationSettings(),
-    loadLockState(),
-    load('connections', 'list_connections'),
-    loadIdentity(),
-  ]);
+  // the landing page even when no tools have been configured yet. Skipped
+  // when no broker is chosen yet: every data read would fail against the
+  // placeholder backend, and the chooser takeover renders from the profile
+  // alone. The pick runs a full refresh when it commits.
+  const noBroker = state.broker.mode === 'unset';
+  if (!noBroker) {
+    await Promise.all([
+      loadLocalUsername(),
+      loadNotificationSettings(),
+      loadLockState(),
+      load('connections', 'list_connections'),
+      loadIdentity(),
+    ]);
+  } else {
+    // The lock and notification settings are this shell's, not the broker's,
+    // so they still load — the chooser can be locked, and a saved alert
+    // preference must survive a first run that never picks.
+    await Promise.all([loadNotificationSettings(), loadLockState()]);
+  }
   booted = true;
-  await refresh('all');
-  // The setup card always shows the paste-ready message.
-  try { await loadAgentSetup(); render(); }
-  catch (error) { console.error('get_agent_setup', error); }
+  if (!noBroker) {
+    await refresh('all');
+    // The setup card always shows the paste-ready message.
+    try { await loadAgentSetup(); render(); }
+    catch (error) { console.error('get_agent_setup', error); }
+  } else {
+    render();
+  }
   // Hover tooltips (absolute timestamps on activity rows, etc.). Delegated
   // from #root so they survive re-renders; content is each element's
   // data-tippy-content. Vendored Tippy.js (self-hosted for the 'self' CSP).

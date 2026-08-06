@@ -411,7 +411,9 @@ export type ApprovalDecision = 'approve_window' | 'approve_all' | 'deny';
  * link.
  */
 export interface BrokerProfile {
-  mode: 'local' | 'remote';
+  /** `unset` is a first run: no broker has been chosen, nothing is started,
+   * and the chooser takeover is the only usable surface. */
+  mode: 'local' | 'remote' | 'unset';
   url: string | null;
   connected: boolean;
   error: string | null;

@@ -53,6 +53,19 @@ impl BrokerProfileInfo {
             ],
         }
     }
+
+    /// No broker chosen yet: the webview renders the chooser takeover from
+    /// this, and everything else stays disabled behind it.
+    fn unset() -> Self {
+        Self {
+            mode: "unset".into(),
+            url: None,
+            connected: false,
+            error: None,
+            has_saved_token: false,
+            capabilities: Vec::new(),
+        }
+    }
 }
 
 fn advertised_capabilities(whoami: &serde_json::Value) -> Vec<String> {
@@ -218,12 +231,45 @@ fn save_config(data_dir: &Path, config: &ShellConfig) -> Result<(), String> {
     std::fs::write(config_path(data_dir), bytes).map_err(|error| error.to_string())
 }
 
-/// The saved remote URL, when the persisted mode choice is remote.
-pub fn saved_remote(data_dir: &Path) -> Option<String> {
+/// The persisted boot choice. `Unset` boots the shell into the chooser
+/// takeover with nothing started: picking is what starts a broker.
+pub enum SavedMode {
+    Unset,
+    Local,
+    Remote(String),
+}
+
+/// The saved mode choice, read before anything starts.
+///
+/// A config from before the chooser existed carries no `mode`, but an
+/// `index.json` beside it means this machine's broker has been in use — that
+/// user already chose, by using it, so the choice is recorded rather than
+/// asked again. A mode string this build does not know (a corrupt edit, or a
+/// newer config) falls back to the chooser: showing it once is recoverable,
+/// silently starting a broker the user may not have chosen is not.
+pub fn saved_mode(data_dir: &Path) -> SavedMode {
     let config = load_config(data_dir);
-    match config.mode.as_deref() {
-        Some("remote") => config.remote_url,
-        _ => None,
+    match (config.mode.as_deref(), config.remote_url.as_deref()) {
+        (Some("remote"), Some(url)) => SavedMode::Remote(url.to_string()),
+        // "remote" with no URL is a state the app never writes; there is
+        // nothing to connect to, so ask rather than guess.
+        (Some("remote"), None) => SavedMode::Unset,
+        (Some("local"), _) => SavedMode::Local,
+        (Some(_), _) => SavedMode::Unset,
+        (None, _) => {
+            if data_dir.join("index.json").exists() {
+                let mut config = config;
+                config.mode = Some("local".into());
+                if let Err(error) = save_config(data_dir, &config) {
+                    // Not recording it costs one more probe next launch,
+                    // never the choice itself.
+                    tracing::warn!(%error, "could not record the migrated local broker choice");
+                }
+                SavedMode::Local
+            } else {
+                SavedMode::Unset
+            }
+        }
     }
 }
 
@@ -304,6 +350,33 @@ impl BrokerState {
                 capabilities: Vec::new(),
             }),
             tokens,
+            data_dir,
+            shell_write: Mutex::new(()),
+            transition_epoch: Mutex::new(0),
+        }
+    }
+
+    /// Construct with no broker chosen: nothing starts until the user picks.
+    ///
+    /// The first pick runs the same transitions as switching later —
+    /// [`Self::switch_local`] or [`Self::connect_remote`] — and those are
+    /// what persist the choice.
+    pub fn new_unset(data_dir: PathBuf) -> Self {
+        // The backend slot is never empty: a stray command in this state
+        // fails with a clear error instead of a crash, exactly like the
+        // pre-probe placeholder in `new_remote_pending`. The chooser
+        // takeover is what the user sees.
+        let config = RemoteConfig::new("http://127.0.0.1:1", "akamgr_unconfigured")
+            .expect("static config");
+        let backend: Arc<dyn ManagementBackend> = Arc::new(
+            RemoteBackend::new(config).with_opener(Arc::new(crate::events::open_consent_url)),
+        );
+        Self {
+            backend: RwLock::new(backend),
+            local: Mutex::new(None),
+            remote: Mutex::new(None),
+            profile: Mutex::new(BrokerProfileInfo::unset()),
+            tokens: TokenStore::new(data_dir.clone()),
             data_dir,
             shell_write: Mutex::new(()),
             transition_epoch: Mutex::new(0),
@@ -714,6 +787,59 @@ mod tests {
             ]
         );
         assert!(advertised_capabilities(&serde_json::json!({ "version": "legacy" })).is_empty());
+    }
+
+    #[test]
+    fn a_fresh_install_boots_into_the_chooser_and_a_saved_choice_skips_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Unset));
+
+        save_config(
+            dir.path(),
+            &ShellConfig {
+                mode: Some("local".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Local));
+
+        save_config(
+            dir.path(),
+            &ShellConfig {
+                mode: Some("remote".into()),
+                remote_url: Some("https://broker.example".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Remote(url) if url == "https://broker.example"));
+    }
+
+    #[test]
+    fn an_existing_local_install_is_migrated_rather_than_asked() {
+        // A config from before the chooser has no `mode`, but broker state
+        // beside it means the user already chose by using it. The probe also
+        // records the choice so it holds even if index.json later goes away.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(config_path(dir.path()), br#"{"notifications":{}}"#).unwrap();
+        std::fs::write(dir.path().join("index.json"), b"{}").unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Local));
+        assert_eq!(load_config(dir.path()).mode.as_deref(), Some("local"));
+        std::fs::remove_file(dir.path().join("index.json")).unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Local));
+    }
+
+    #[test]
+    fn a_mode_this_build_does_not_know_asks_instead_of_guessing() {
+        let dir = tempfile::tempdir().unwrap();
+        // An unknown mode string, and "remote" with nothing to connect to:
+        // both recover through the chooser rather than starting a broker the
+        // user may not have chosen.
+        std::fs::write(config_path(dir.path()), br#"{"mode":"quantum"}"#).unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Unset));
+        std::fs::write(config_path(dir.path()), br#"{"mode":"remote"}"#).unwrap();
+        assert!(matches!(saved_mode(dir.path()), SavedMode::Unset));
     }
 
     #[test]

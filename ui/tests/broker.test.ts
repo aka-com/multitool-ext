@@ -73,6 +73,28 @@ test('the takeover pane renders exactly when the active broker is unusable', () 
   );
 });
 
+function unset(overrides: Partial<BrokerProfile> = {}): BrokerProfile {
+  return {
+    mode: 'unset',
+    url: null,
+    connected: false,
+    error: null,
+    has_saved_token: false,
+    capabilities: [],
+    ...overrides,
+  };
+}
+
+test('a first run with no chosen broker shows the chooser', () => {
+  assert.equal(brokerTakeover(unset(), false), 'choose');
+  assert.equal(brokerTone(unset()), 'pending');
+  assert.equal(brokerLabel(unset()), 'Choose broker');
+  // The "Hosted broker" option opens the setup form over the chooser, and
+  // closing it (setupOpen back to false) returns to the chooser rather than
+  // an app with no broker behind it.
+  assert.equal(brokerTakeover(unset(), true), 'setup');
+});
+
 test('remote endpoint cautions describe reachability per type', () => {
   // Local mode: no caution.
   assert.equal(remoteEndpointCaution(LOCAL_BROKER, 'api'), null);

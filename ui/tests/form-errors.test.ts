@@ -41,6 +41,6 @@ test('preserves structured diagnostic detail for sheets and toasts', () => {
   assert.equal(formErrorDetail(error), 'The data protection keychain is unavailable');
   assert.equal(
     formErrorToast(error),
-    'Couldn’t save to macOS Keychain — The data protection keychain is unavailable',
+    'Couldn’t save to macOS Keychain. The data protection keychain is unavailable',
   );
 });

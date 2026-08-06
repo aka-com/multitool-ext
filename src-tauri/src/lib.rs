@@ -306,21 +306,27 @@ pub fn run() {
 
             // The saved mode decides what starts. Local failures are fatal
             // dialogs (the broker is the product); a remote broker that is
-            // down is a recoverable in-window state, never a dialog.
-            let brokers = match broker_mode::saved_remote(&data_dir) {
-                Some(url) => {
+            // down is a recoverable in-window state, never a dialog. No
+            // saved mode starts nothing: the webview shows the chooser and
+            // the pick runs the same transitions as switching later.
+            let brokers = match broker_mode::saved_mode(&data_dir) {
+                broker_mode::SavedMode::Remote(url) => {
                     attention::set_scope(&handle, "remote", Some(&url));
                     let state = Arc::new(BrokerState::new_remote_pending(data_dir, url));
                     state.clone().start_saved_remote(handle.clone());
                     state
                 }
-                None => {
+                broker_mode::SavedMode::Local => {
                     attention::set_scope(&handle, "local", None);
                     let runtime = match start_local_runtime(&handle) {
                         Ok(runtime) => runtime,
                         Err(e) => fatal_startup(app, e),
                     };
                     Arc::new(BrokerState::new_local(data_dir, runtime))
+                }
+                broker_mode::SavedMode::Unset => {
+                    attention::set_scope(&handle, "unset", None);
+                    Arc::new(BrokerState::new_unset(data_dir))
                 }
             };
 

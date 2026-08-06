@@ -30,6 +30,7 @@ export function supportsTypedCredentials(profile: BrokerProfile): boolean {
 /** The switcher's label: "Local" for this machine, or the remote host. */
 export function brokerLabel(profile: BrokerProfile): string {
   if (profile.mode === 'local') return 'Local';
+  if (profile.mode === 'unset') return 'Choose broker';
   if (!profile.url) return 'Remote broker';
   try {
     return new URL(profile.url).host;
@@ -47,19 +48,23 @@ export function brokerTone(profile: BrokerProfile): BrokerTone {
   return profile.error ? 'error' : 'pending';
 }
 
-export type BrokerTakeover = 'setup' | 'connecting' | 'error' | null;
+export type BrokerTakeover = 'choose' | 'setup' | 'connecting' | 'error' | null;
 
 /**
  * Which full-pane takeover the main content shows. `setupOpen` is the
- * user-driven "configure a remote broker" form; the others derive from the
- * link state: an unavailable broker owns the whole content pane (and
- * disables the nav) until it responds or the user switches brokers.
+ * user-driven "configure a remote broker" form; `choose` is a first run
+ * where no broker exists yet; the others derive from the link state: an
+ * unavailable broker owns the whole content pane (and disables the nav)
+ * until it responds or the user switches brokers.
  */
 export function brokerTakeover(
   profile: BrokerProfile,
   setupOpen: boolean,
 ): BrokerTakeover {
+  // The setup form opens over the chooser (its "Hosted broker" option), and
+  // closing it falls back here rather than into an app with no broker.
   if (setupOpen) return 'setup';
+  if (profile.mode === 'unset') return 'choose';
   if (profile.connected) return null;
   if (profile.mode === 'local') return 'error';
   if (profile.mode === 'remote' && !profile.has_saved_token) return 'setup';

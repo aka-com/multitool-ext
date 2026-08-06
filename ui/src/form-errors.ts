@@ -53,7 +53,7 @@ export function formErrorDetail(error: unknown): string | null {
 export function formErrorToast(error: unknown): string {
   const message = formErrorMessage(error);
   const detail = formErrorDetail(error);
-  return detail ? `${message} — ${detail}` : message;
+  return detail ? `${message}. ${detail}` : message;
 }
 
 export function formErrorKind(error: unknown): string | null {
