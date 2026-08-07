@@ -199,6 +199,12 @@ impl Paths {
     pub fn identity_file(&self) -> PathBuf {
         self.data_dir.join("identity.json")
     }
+    /// Who may sign in as a human: passkeys, browser sessions, device
+    /// grants, automation tokens. Sealed, like `identity.json` and for the
+    /// same reason — the file says who has authority here.
+    pub fn auth_file(&self) -> PathBuf {
+        self.data_dir.join("auth.json")
+    }
     /// Legacy per-agent registry; read once to absorb its token hashes as
     /// aliases of the shared key.
     pub fn agents_file(&self) -> PathBuf {

@@ -225,8 +225,17 @@ export interface RemoteSetupState {
   open: boolean;
   advancedOpen: boolean;
   url: string;
+  /** The legacy management token, under Advanced while it is retired. */
   token: string;
+  /** What this Mac will be called in the broker's device list. Prefilled
+   * from the computer name, editable because "MacBook Pro" is not a name
+   * you can pick out of a list of four. */
+  deviceName: string;
   busy: boolean;
+  /** A passkey sign-in is waiting on the system browser. Distinct from
+   * `busy`: it can take a minute and the user is looking at another
+   * window, so the pane says so rather than appearing hung. */
+  signingIn: boolean;
   error: string | null;
 }
 
@@ -450,7 +459,14 @@ function createInitialState(): AppState {
     broker: LOCAL_BROKER,
     brokerMenuOpen: false,
     remoteSetup: {
-      open: false, advancedOpen: false, url: '', token: '', busy: false, error: null,
+      open: false,
+      advancedOpen: false,
+      url: '',
+      token: '',
+      deviceName: '',
+      busy: false,
+      signingIn: false,
+      error: null,
     },
     localUsername: '',
     secrets: [],

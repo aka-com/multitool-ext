@@ -209,6 +209,10 @@ pub struct Broker {
     /// Cloud sessions minted on another machine and pushed here to serve
     /// (see [`crate::cloud::PushedSessions`]).
     pub pushed_cloud_sessions: crate::cloud::PushedSessions,
+    /// Human sign-in: passkeys, browser sessions, device grants, automation
+    /// tokens. Distinct from [`Self::identity`], which is the broker's own
+    /// key material and the agent plane's authority.
+    pub auth: Arc<crate::auth::AuthStore>,
     /// This install's id, read once — the mint path consults it per call.
     install_id: std::sync::OnceLock<String>,
     /// Short-lived, single-use capabilities proving that an elicitation came
@@ -498,7 +502,15 @@ impl Broker {
         let endpoint_uploads =
             Arc::new(tokio::sync::Semaphore::new(config.endpoint_global_uploads));
         let (agent_surface_changes, _) = tokio::sync::watch::channel(0_u64);
+        // Who may sign in as a human. Sealed alongside the other state
+        // files, and independent of `identity` — that one answers "is this
+        // the broker's key?", this one answers "is this the owner?".
+        let auth = Arc::new(crate::auth::AuthStore::open(
+            paths.auth_file(),
+            integrity.clone(),
+        )?);
         let broker = Arc::new(Self {
+            auth,
             vault,
             data_plane,
             approvals,
@@ -627,6 +639,31 @@ impl Broker {
     /// The configured public URL, when serving one.
     pub fn public_url(&self) -> Option<String> {
         self.public_url.lock().unwrap().clone()
+    }
+
+    /// Record a sign-in event in the activity log.
+    ///
+    /// `subject` names the passkey or the device — never the credential
+    /// itself, and never anything the browser sent that a route did not
+    /// first sanitize.
+    pub fn audit_sign_in(&self, kind: AuditKind, outcome: &str, subject: &str) {
+        let mut entry = AuditEntry::new(kind, format!("{outcome}: {subject}"))
+            .outcome(outcome)
+            .field("subject", subject);
+        if let Some(context) = crate::audit::current_decision_context() {
+            entry = entry.context(&context);
+        }
+        self.audit.append(entry);
+    }
+
+    /// The origin this broker is a WebAuthn relying party for.
+    ///
+    /// Derived from the operator's `--public-url` and nothing else — see
+    /// [`crate::auth::origin`] for why a request's `Host` must never reach
+    /// this. `Err` is the ordinary state for a broker that serves only its
+    /// local socket: passkey sign-in is unavailable, with a reason to show.
+    pub fn public_origin(&self) -> Result<crate::auth::PublicOrigin, crate::auth::OriginError> {
+        crate::auth::PublicOrigin::from_configured_public_url(self.public_url().as_deref())
     }
 
     /// This install's id, for deciding whether a machine-bound connection's
@@ -3650,6 +3687,50 @@ impl Broker {
         Ok(())
     }
 
+    /// Turn the global management token off (or back on).
+    ///
+    /// Refused while nothing else can sign in. Turning it off with no
+    /// passkey enrolled would close the manage plane completely, and the
+    /// only way back is a shell on the broker host — which is precisely the
+    /// situation a hosted broker exists to avoid.
+    pub async fn ui_set_legacy_manage_token(&self, on: bool) -> Result<()> {
+        let old = self.store.settings(&self.workspace).legacy_manage_token;
+        if old == on {
+            return Ok(());
+        }
+        // The liveness condition, stated as what it actually is: after this,
+        // will anything still be able to authenticate? A passkey can start a
+        // session, and an authorized device holds a grant that renews itself
+        // indefinitely. With neither, retiring closes the plane.
+        let something_else_can_sign_in =
+            self.auth.is_enrolled() || !self.auth.devices().is_empty();
+        if !on && !something_else_can_sign_in {
+            return Err(CoreError::Vault(
+                "enrol a passkey or authorize a device before retiring the management \
+                 token, or nothing will be able to sign in"
+                    .into(),
+            ));
+        }
+        self.store
+            .set_legacy_manage_token(&self.workspace, on)
+            .await?;
+        self.audit.append(
+            AuditEntry::new(
+                AuditKind::SettingsChanged,
+                if on {
+                    "Setting changed: the management token is accepted again"
+                } else {
+                    "Setting changed: the management token is retired"
+                },
+            )
+            .field("setting", "legacy_manage_token")
+            .field("old", old)
+            .field("new", on)
+            .confirmation(crate::types::ConfirmationMethod::Passkey),
+        );
+        Ok(())
+    }
+
     pub async fn ui_set_menu_bar_hides_dock(&self, on: bool) -> Result<()> {
         let old = self.store.settings(&self.workspace).menu_bar_hides_dock;
         if old == on {
@@ -3868,6 +3949,9 @@ mod tests {
         // consults, not how the line happens to break. The `)` keeps it
         // anchored to a `settings(…)` call rather than any field of that
         // name on some other struct.
+        //
+        // Behavior itself is covered in `tests/ssh_agent.rs`: the prompt with
+        // the setting on, and the silent first pin with it off.
         let ssh = include_str!("capability/ssh.rs");
         let dense: String = ssh.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
@@ -3875,7 +3959,7 @@ mod tests {
             "the host-key pin must consult the setting"
         );
         assert!(
-            ssh.contains("confirm_host_key"),
+            ssh.contains("confirm_host_key(state"),
             "and route the question through the approval surface"
         );
     }

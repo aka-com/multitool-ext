@@ -162,9 +162,41 @@ impl TokenStore {
     }
 }
 
+/// Namespace a device grant's refresh token so it cannot collide with the
+/// management token for the same broker.
+///
+/// The two are different credentials with different lifetimes and need
+/// separate removal: signing out of a passkey grant should not delete a
+/// management token the user still wants under Advanced, and vice versa.
+fn grant_key(url: &str) -> String {
+    format!("device-grant\u{1f}{}", url.trim_end_matches('/'))
+}
+
+impl TokenStore {
+    /// Store the rotating refresh token for a passkey device grant.
+    ///
+    /// Call on every rotation, not only at sign-in: the stored value goes
+    /// stale the moment the broker issues a replacement, and presenting a
+    /// stale one on next start revokes the device.
+    pub fn save_grant(&self, url: &str, refresh: &str) -> Result<(), String> {
+        self.save(&grant_key(url), refresh)
+    }
+
+    pub fn load_grant(&self, url: &str) -> Option<Zeroizing<String>> {
+        self.load(&grant_key(url))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_grant_and_a_management_token_do_not_share_a_slot() {
+        // Two credentials for one broker, separately revocable.
+        assert_ne!(key_for("https://a"), key_for(&grant_key("https://a")));
+        assert_eq!(grant_key("https://a/"), grant_key("https://a"));
+    }
 
     #[test]
     fn keys_are_scoped_per_url_and_safe() {

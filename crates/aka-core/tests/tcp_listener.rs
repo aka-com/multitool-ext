@@ -227,7 +227,10 @@ async fn both_planes_authenticate_over_tcp() {
 
     // A successful manage mutation records the directly connected TCP peer
     // as remote decision provenance. It remains socket attribution, not a
-    // claim that the peer is the human who possessed the management token.
+    // claim that the peer is the human who possessed the management token —
+    // so the two are recorded in different fields. `surface` carries the
+    // socket, and `approver` names the credential that authorized, which is
+    // the principal's label rather than an address.
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/v1/manage/secrets", h.base))
@@ -250,11 +253,9 @@ async fn both_planes_authenticate_over_tcp() {
             peer: Some(peer)
         }) if peer.ip().is_loopback()
     ));
-    assert!(
-        entry
-            .approver
-            .as_deref()
-            .is_some_and(|value| value.starts_with("127.0.0.1:")),
+    assert_eq!(
+        entry.approver.as_deref(),
+        Some("the management token"),
         "{entry:?}"
     );
 

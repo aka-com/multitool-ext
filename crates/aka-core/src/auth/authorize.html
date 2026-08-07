@@ -1,0 +1,98 @@
+<h1>Authorize this device</h1>
+<p class=muted>Signing in lets this app manage the connections and credentials
+on <b>__ORIGIN__</b>.</p>
+<div class=device><span>Device</span> <b id=device>__DEVICE__</b></div>
+<p id=status class=muted>Confirm with your passkey to continue.</p>
+<button id=go>Continue with passkey</button>
+<p id=error class=error hidden></p>
+<script nonce="__NONCE__" id=params type="application/json">__PARAMS__</script>
+<script nonce="__NONCE__">
+// Everything is inline and same-origin: the content-security policy on this
+// response forbids remote script, so there is nothing here to subvert by
+// compromising a CDN.
+const params = JSON.parse(document.getElementById('params').textContent);
+const status = document.getElementById('status');
+const errorBox = document.getElementById('error');
+const go = document.getElementById('go');
+
+const b64url = (buffer) =>
+  btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64url = (text) => {
+  const padded = text.replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(padded + '='.repeat((4 - padded.length % 4) % 4));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+
+function fail(message) {
+  errorBox.textContent = message;
+  errorBox.hidden = false;
+  go.disabled = false;
+  go.textContent = 'Try again';
+}
+
+async function post(path, body, csrf) {
+  const headers = { 'content-type': 'application/json' };
+  if (csrf) headers['x-multitool-csrf'] = csrf;
+  const response = await fetch(path, {
+    method: 'POST',
+    headers,
+    // The cookie is the point; never send this anywhere but here.
+    credentials: 'same-origin',
+    body: JSON.stringify(body ?? {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.detail || response.statusText);
+  return payload;
+}
+
+// A fresh ceremony every time, even when a session already exists:
+// authorizing a device is a step-up operation, and a live session is not the
+// same as a person at the keyboard right now.
+async function signIn() {
+  status.textContent = 'Waiting for your passkey…';
+  const { challenge_id, options } = await post('/v1/auth/signin/options');
+  const publicKey = options.publicKey;
+  publicKey.challenge = unb64url(publicKey.challenge);
+  for (const credential of publicKey.allowCredentials ?? []) {
+    credential.id = unb64url(credential.id);
+  }
+  const assertion = await navigator.credentials.get({ publicKey });
+  const payload = {
+    challenge_id,
+    credential: {
+      id: assertion.id,
+      rawId: b64url(assertion.rawId),
+      type: assertion.type,
+      response: {
+        clientDataJSON: b64url(assertion.response.clientDataJSON),
+        authenticatorData: b64url(assertion.response.authenticatorData),
+        signature: b64url(assertion.response.signature),
+        userHandle: assertion.response.userHandle
+          ? b64url(assertion.response.userHandle)
+          : null,
+      },
+      extensions: assertion.getClientExtensionResults(),
+    },
+  };
+  return post('/v1/auth/signin', payload);
+}
+
+go.addEventListener('click', async () => {
+  go.disabled = true;
+  errorBox.hidden = true;
+  try {
+    const session = await signIn();
+    status.textContent = 'Authorizing…';
+    const { redirect } = await post('/v1/auth/authorize', params, session.csrf);
+    status.textContent = 'Done. You can close this tab.';
+    go.hidden = true;
+    // Hands the code to the desktop's loopback listener and nowhere else:
+    // the broker validated this target before the page was served.
+    location.assign(redirect);
+  } catch (error) {
+    status.textContent = 'Confirm with your passkey to continue.';
+    fail(error.message || String(error));
+  }
+});
+</script>

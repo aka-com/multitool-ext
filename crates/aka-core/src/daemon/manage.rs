@@ -14,10 +14,8 @@
 use std::convert::Infallible;
 
 use aka_api::{ManageError, ManageEvent};
-use axum::extract::{FromRequestParts, Path, Query, State};
-use axum::http::request::Parts;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
@@ -26,7 +24,8 @@ use serde_json::json;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::{bearer_token, err_missing_token, request_peer, ApiJson, AppState};
+use super::principal::ManagePrincipal;
+use super::{ApiJson, AppState};
 use crate::manage::{
     AccessBody, AllowedToolsBody, ApprovalResponseBody, AuditStatementsBody, ConfirmBody,
     ConnectionAddBody, ConnectionConfigPatchBody, ConnectionRenameBody, ConnectionUpdateBody,
@@ -36,73 +35,6 @@ use crate::manage::{
     OnePasswordSecretAddBody, OnePasswordTokenBody, ResponseCredentialsBody, SecretAddBody,
     SecretEditBody, SettingsPatchBody,
 };
-
-/// Bearer authentication against the management token.
-pub struct ManageAuthed {
-    // The SSE handler revalidates long-lived streams. Keep the copied
-    // credential zeroizing so it is not left in freed heap memory.
-    token: Zeroizing<String>,
-}
-
-impl ManageAuthed {
-    fn token(&self) -> &str {
-        &self.token
-    }
-}
-
-impl FromRequestParts<AppState> for ManageAuthed {
-    type Rejection = Response;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let token = bearer_token(&parts.headers).map_err(err_missing_token)?;
-        match state
-            .broker
-            .identity
-            .verify_manage(&state.broker.workspace, token)
-        {
-            Ok(()) => Ok(ManageAuthed {
-                token: Zeroizing::new(token.to_string()),
-            }),
-            Err(error) => {
-                let peer = request_peer(parts);
-                let source = peer
-                    .map(|peer| peer.ip().to_string())
-                    .unwrap_or_else(|| state.transport.audit_label().to_string());
-                let peer = peer.map(|peer| peer.ip().to_string());
-                state.broker.audit_auth_failure(
-                    "manage",
-                    error.reason().as_str(),
-                    state.transport.audit_label(),
-                    peer.as_deref(),
-                );
-                if let Err(wait) = state.broker.manage_auth_limiter.check(&source) {
-                    return Err(super::err_rate_limited(
-                        crate::wire::ErrorReason::RateLimited,
-                        wait,
-                    ));
-                }
-                // Both map to InvalidManageToken client-side (re-enter the
-                // token), but the detail names the cause so a curl user
-                // knows whether to re-issue or check what they pasted.
-                let detail = if error == crate::identity::TokenError::Expired {
-                    "the management token has expired; issue a fresh one on the \
-                     broker host with `multitool manage token`"
-                } else {
-                    "manage routes require this broker's management token \
-                     (issue one on the broker host with `multitool manage token`)"
-                };
-                Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({ "reason": "invalid_manage_token", "detail": detail })),
-                )
-                    .into_response())
-            }
-        }
-    }
-}
 
 fn manage_error_response(error: ManageError) -> Response {
     let status = match &error {
@@ -176,7 +108,7 @@ fn respond<T: serde::Serialize>(result: Result<T, ManageError>) -> Response {
 }
 
 /// The manage router, nested at `/v1/manage` by the daemon.
-pub fn router() -> Router<AppState> {
+pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/whoami", get(whoami))
         .route(
@@ -276,30 +208,34 @@ pub fn router() -> Router<AppState> {
         .route("/sessions/{id}", delete(close_session))
         .route("/activity", get(activity).delete(clear_activity))
         .route("/cloud/session", post(push_cloud_session))
+        .route("/cloud/pushable", post(pushable_connections))
         .route("/activity/page", get(activity_page))
         .route("/settings", get(settings).patch(patch_settings))
         .route("/agent-setup", get(agent_setup))
-        .layer(axum::middleware::from_fn(remote_decision_context))
+        // Who can sign in, and on what. Kept on the manage plane rather than
+        // beside the ceremonies: these are management operations, they need
+        // `identity:manage`, and putting them here means one authorization
+        // path to the data instead of two.
+        .route("/auth/whoami", get(auth_whoami))
+        .route("/auth/passkeys", get(list_passkeys))
+        .route("/auth/passkeys/{id}", delete(remove_passkey))
+        .route("/auth/sessions", get(list_browser_sessions))
+        .route("/auth/sessions/{id}", delete(revoke_browser_session))
+        .route("/auth/devices", get(list_devices))
+        .route("/auth/devices/{id}", patch(rename_device).delete(revoke_device))
+        .route("/auth/tokens", get(list_automation).post(mint_automation))
+        .route("/auth/tokens/{id}", delete(revoke_automation))
+        // One layer authenticates and authorizes every route above, and
+        // scopes the deciding actor across the handler so the activity log
+        // records who acted rather than which proxy forwarded them. No
+        // handler repeats the check; none can forget it.
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            super::principal::require_principal,
+        ))
 }
 
-/// Everything under `/v1/manage` is a management-token surface, including
-/// requests arriving over the local control socket. Scope its direct socket
-/// peer across the handler so every audit entry produced by the core carries
-/// honest remote attribution. A reverse proxy remains the observed peer; this
-/// is operational provenance, not a human identity.
-async fn remote_decision_context(request: axum::extract::Request, next: Next) -> Response {
-    let peer = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    crate::audit::with_request_decision_context(
-        crate::types::DecisionContext::remote(peer),
-        next.run(request),
-    )
-    .await
-}
-
-async fn whoami(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn whoami(State(state): State<AppState>) -> Response {
     ok(json!({
         "ok": true,
         "version": state.broker.config.version,
@@ -308,6 +244,7 @@ async fn whoami(State(state): State<AppState>, _authed: ManageAuthed) -> Respons
             aka_api::APPROVAL_SURFACE_CAPABILITY,
             aka_api::ONEPASSWORD_PROVIDER_CAPABILITY,
             aka_api::TYPED_CREDENTIALS_CAPABILITY,
+            aka_api::PASSKEY_AUTH_CAPABILITY,
         ],
         "approval_surface_attached": state.broker.events.has_approval_surface(),
     }))
@@ -341,7 +278,7 @@ fn token_mutation_error(error: crate::identity::ManageTokenMutationError) -> Res
 /// lock, closing the extractor-to-handler race between concurrent rotations.
 async fn rotate_management_token(
     State(state): State<AppState>,
-    authed: ManageAuthed,
+    principal: ManagePrincipal,
     ApiJson(body): ApiJson<RotateManagementTokenBody>,
 ) -> Response {
     if !(1..=3650).contains(&body.ttl_days) {
@@ -350,12 +287,28 @@ async fn rotate_management_token(
         });
     }
     let ttl = std::time::Duration::from_secs(body.ttl_days * 86_400);
-    match state
-        .broker
-        .identity
-        .rotate_manage_token_with_ttl(&state.broker.workspace, authed.token(), Some(ttl))
-        .await
-    {
+    // Rotating *with* the current token is the race-free path: the identity
+    // store re-verifies and mutates under one lock, so two concurrent
+    // rotations cannot both win. A passkey principal has no such token to
+    // present — its authority came from a ceremony the layer already
+    // checked, and it reached this route only by holding `identity:manage`
+    // with a fresh step-up.
+    let rotated = match principal.legacy_token() {
+        Some(current) => {
+            state
+                .broker
+                .identity
+                .rotate_manage_token_with_ttl(&state.broker.workspace, current, Some(ttl))
+                .await
+        }
+        None => state
+            .broker
+            .identity
+            .issue_manage_token_with_ttl(&state.broker.workspace, Some(ttl))
+            .await
+            .map_err(crate::identity::ManageTokenMutationError::Persist),
+    };
+    match rotated {
         Ok(token) => {
             if let Err(error) = state.broker.paths.remove_manage_bootstrap_token() {
                 tracing::warn!("could not remove consumed management bootstrap token: {error}");
@@ -371,7 +324,7 @@ async fn rotate_management_token(
             )
             .outcome("rotated")
             .field("expires_at", expires_at.to_rfc3339())
-            .confirmation(crate::types::ConfirmationMethod::ManagementToken);
+            .confirmation(principal.confirmation());
             if let Some(context) = crate::audit::current_decision_context() {
                 entry = entry.context(&context);
             }
@@ -385,13 +338,26 @@ async fn rotate_management_token(
     }
 }
 
-async fn revoke_management_token(State(state): State<AppState>, authed: ManageAuthed) -> Response {
-    match state
-        .broker
-        .identity
-        .revoke_manage_token_with_token(&state.broker.workspace, authed.token())
-        .await
-    {
+async fn revoke_management_token(
+    State(state): State<AppState>,
+    principal: ManagePrincipal,
+) -> Response {
+    let revoked = match principal.legacy_token() {
+        Some(current) => state
+            .broker
+            .identity
+            .revoke_manage_token_with_token(&state.broker.workspace, current)
+            .await,
+        // A passkey holder closing the manage API they are not using.
+        None => state
+            .broker
+            .identity
+            .revoke_manage_token(&state.broker.workspace)
+            .await
+            .map(|_| ())
+            .map_err(crate::identity::ManageTokenMutationError::Persist),
+    };
+    match revoked {
         Ok(()) => {
             if let Err(error) = state.broker.paths.remove_manage_bootstrap_token() {
                 tracing::warn!("could not remove consumed management bootstrap token: {error}");
@@ -401,7 +367,7 @@ async fn revoke_management_token(State(state): State<AppState>, authed: ManageAu
                 "Management token revoked online",
             )
             .outcome("revoked")
-            .confirmation(crate::types::ConfirmationMethod::ManagementToken);
+            .confirmation(principal.confirmation());
             if let Some(context) = crate::audit::current_decision_context() {
                 entry = entry.context(&context);
             }
@@ -412,7 +378,7 @@ async fn revoke_management_token(State(state): State<AppState>, authed: ManageAu
     }
 }
 
-async fn create_approval_surface(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn create_approval_surface(State(state): State<AppState>) -> Response {
     let id = state.broker.manage_bus().mint_polling_approval_surface();
     ok(serde_json::to_value(aka_api::ApprovalSurfaceDto {
         id: id.to_string(),
@@ -426,7 +392,6 @@ async fn create_approval_surface(State(state): State<AppState>, _authed: ManageA
 /// closed.
 async fn heartbeat_approval_surface(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     if state.broker.manage_bus().renew_approval_surface(&id) {
@@ -444,7 +409,6 @@ async fn heartbeat_approval_surface(
 
 async fn release_approval_surface(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     ok(json!({
@@ -459,7 +423,7 @@ async fn release_approval_surface(
 /// Live delivery still emits `resync` on broadcast lag.
 async fn events(
     State(state): State<AppState>,
-    authed: ManageAuthed,
+    principal: ManagePrincipal,
     headers: axum::http::HeaderMap,
 ) -> Response {
     use crate::manage::{parse_event_id, ManageReplay, SeqEvent};
@@ -530,9 +494,12 @@ async fn events(
         rx: tokio::sync::broadcast::Receiver<SeqEvent>,
         backlog: std::collections::VecDeque<SeqEvent>,
         epoch: String,
-        workspace: crate::repository::WorkspaceContext,
-        identity: std::sync::Arc<dyn crate::repository::IdentityRepository>,
-        token: Zeroizing<String>,
+        // Whatever credential opened this stream, re-checked on a timer and
+        // before every frame. This is what binds the approval-surface lease
+        // below to its principal: revoking the session, the device, or the
+        // management token ends the stream, and the lease's Drop releases
+        // the capability with it.
+        revalidate_credential: super::principal::Revalidator,
         // Present only when the authenticated client explicitly promised a
         // user-facing request inbox. Its Drop releases capability as soon as
         // the response stream goes away.
@@ -550,9 +517,7 @@ async fn events(
         rx,
         backlog,
         epoch,
-        workspace: state.broker.workspace.clone(),
-        identity: state.broker.identity.clone(),
-        token: authed.token,
+        revalidate_credential: principal.revalidator(),
         _approval_surface: approval_surface,
         revalidate: tokio::time::interval(std::time::Duration::from_secs(1)),
         delivered_head,
@@ -565,7 +530,7 @@ async fn events(
         // stream that can live indefinitely. Rotation, revocation, and TTL
         // expiry must stop both event disclosure and the stream counting as
         // an approval surface.
-        if st.identity.verify_manage(&st.workspace, &st.token).is_err() {
+        if !st.revalidate_credential.still_valid() {
             return None;
         }
         if std::mem::take(&mut st.ready_first) {
@@ -594,7 +559,7 @@ async fn events(
             let item = tokio::select! {
                 biased;
                 _ = st.revalidate.tick() => {
-                    if st.identity.verify_manage(&st.workspace, &st.token).is_err() {
+                    if !st.revalidate_credential.still_valid() {
                         return None;
                     }
                     continue;
@@ -605,7 +570,7 @@ async fn events(
                         // Dropped live notifications: force a full refetch,
                         // but never disclose it after the stream's credential
                         // has ceased to be valid.
-                        if st.identity.verify_manage(&st.workspace, &st.token).is_err() {
+                        if !st.revalidate_credential.still_valid() {
                             return None;
                         }
                         let id = format!("{}:{}", st.epoch, st.delivered_head);
@@ -622,7 +587,7 @@ async fn events(
             if item.seq <= st.delivered_head {
                 continue;
             }
-            if st.identity.verify_manage(&st.workspace, &st.token).is_err() {
+            if !st.revalidate_credential.still_valid() {
                 return None;
             }
             st.delivered_head = item.seq;
@@ -642,13 +607,12 @@ async fn events(
 
 /* ------------------------------- secrets ---------------------------------- */
 
-async fn list_secrets(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn list_secrets(State(state): State<AppState>) -> Response {
     respond(state.manage.list_secrets().await)
 }
 
 async fn add_secret(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<SecretAddBody>,
 ) -> Response {
     respond(state.manage.add_credential(body).await)
@@ -656,7 +620,6 @@ async fn add_secret(
 
 async fn edit_secret(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<SecretEditBody>,
 ) -> Response {
@@ -665,7 +628,6 @@ async fn edit_secret(
 
 async fn secret_totp_code(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.secret_totp_code(id).await)
@@ -673,7 +635,6 @@ async fn secret_totp_code(
 
 async fn delete_secret(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.delete_secret(id).await)
@@ -684,7 +645,6 @@ async fn delete_secret(
 /// reveal as it releases the value.
 async fn reveal_secret(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(
@@ -706,7 +666,6 @@ async fn reveal_secret(
 /// honor-system note route for remote clients.)
 async fn secret_value_for_copy(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     let result = state.manage.secret_value_for_copy(id).await;
@@ -729,14 +688,12 @@ async fn secret_value_for_copy(
 
 async fn list_onepassword_integrations(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
 ) -> Response {
     respond(state.manage.list_onepassword_integrations().await)
 }
 
 async fn add_onepassword_integration(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<OnePasswordIntegrationAddBody>,
 ) -> Response {
     let (auth, token) = body.authentication.into_parts();
@@ -750,7 +707,6 @@ async fn add_onepassword_integration(
 
 async fn replace_onepassword_token(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<OnePasswordTokenBody>,
 ) -> Response {
@@ -764,7 +720,6 @@ async fn replace_onepassword_token(
 
 async fn delete_onepassword_integration(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.delete_onepassword_integration(id).await)
@@ -772,7 +727,6 @@ async fn delete_onepassword_integration(
 
 async fn onepassword_health(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.onepassword_health(id).await)
@@ -780,7 +734,6 @@ async fn onepassword_health(
 
 async fn onepassword_vaults(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.onepassword_vaults(id).await)
@@ -788,7 +741,6 @@ async fn onepassword_vaults(
 
 async fn onepassword_items(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path((id, vault_id)): Path<(Uuid, String)>,
 ) -> Response {
     respond(state.manage.onepassword_items(id, vault_id).await)
@@ -796,7 +748,6 @@ async fn onepassword_items(
 
 async fn onepassword_fields(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path((id, vault_id, item_id)): Path<(Uuid, String, String)>,
 ) -> Response {
     respond(state.manage.onepassword_fields(id, vault_id, item_id).await)
@@ -804,7 +755,6 @@ async fn onepassword_fields(
 
 async fn add_onepassword_secret(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<OnePasswordSecretAddBody>,
 ) -> Response {
     let (name, reference) = body.into_reference();
@@ -813,13 +763,12 @@ async fn add_onepassword_secret(
 
 /* ----------------------------- connections -------------------------------- */
 
-async fn list_connections(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn list_connections(State(state): State<AppState>) -> Response {
     respond(state.manage.list_connections().await)
 }
 
 async fn add_connection(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<ConnectionAddBody>,
 ) -> Response {
     let mut new_secrets = body.new_secrets;
@@ -865,7 +814,6 @@ async fn add_connection(
 
 async fn update_connection(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ConnectionUpdateBody>,
 ) -> Response {
@@ -879,7 +827,6 @@ async fn update_connection(
 
 async fn rename_connection(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ConnectionRenameBody>,
 ) -> Response {
@@ -893,7 +840,6 @@ async fn rename_connection(
 
 async fn patch_connection(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ConnectionConfigPatchBody>,
 ) -> Response {
@@ -907,7 +853,6 @@ async fn patch_connection(
 
 async fn delete_connection(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.delete_connection(id).await)
@@ -915,7 +860,6 @@ async fn delete_connection(
 
 async fn reorder_connections(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<ConnectionsReorderBody>,
 ) -> Response {
     respond(state.manage.reorder_connections(body.ordered_ids).await)
@@ -923,7 +867,6 @@ async fn reorder_connections(
 
 async fn test_connection(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.test_connection(id).await)
@@ -931,7 +874,6 @@ async fn test_connection(
 
 async fn test_connection_draft(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<DraftTestBody>,
 ) -> Response {
     let typed = body
@@ -943,7 +885,6 @@ async fn test_connection_draft(
 
 async fn set_tool_access(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<AccessBody>,
 ) -> Response {
@@ -958,7 +899,6 @@ async fn set_tool_access(
 
 async fn set_confirm_mode(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ConfirmBody>,
 ) -> Response {
@@ -973,7 +913,6 @@ async fn set_confirm_mode(
 
 async fn set_expose_response_credentials(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ResponseCredentialsBody>,
 ) -> Response {
@@ -986,11 +925,11 @@ async fn set_expose_response_credentials(
     )
 }
 
-async fn approvals(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn approvals(State(state): State<AppState>) -> Response {
     respond(state.manage.approvals().await)
 }
 
-async fn approval_snapshot(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn approval_snapshot(State(state): State<AppState>) -> Response {
     // Capture the bus head first. A mutation racing the following queue read
     // can make the data newer than its version (safe and self-correcting),
     // but can never label stale data with a newer version.
@@ -1016,13 +955,12 @@ async fn approval_snapshot(State(state): State<AppState>, _authed: ManageAuthed)
     respond(result)
 }
 
-async fn elicitations(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn elicitations(State(state): State<AppState>) -> Response {
     respond(state.manage.elicitations().await)
 }
 
 async fn respond_elicitation(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ElicitationResponseBody>,
 ) -> Response {
@@ -1035,13 +973,12 @@ async fn respond_elicitation(
     )
 }
 
-async fn requests(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn requests(State(state): State<AppState>) -> Response {
     respond(state.manage.requests().await)
 }
 
 async fn respond_approval(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<ApprovalResponseBody>,
 ) -> Response {
@@ -1056,7 +993,6 @@ async fn respond_approval(
 
 async fn set_allowed_tools(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<AllowedToolsBody>,
 ) -> Response {
@@ -1071,7 +1007,6 @@ async fn set_allowed_tools(
 
 async fn set_audit_statements(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<AuditStatementsBody>,
 ) -> Response {
@@ -1086,7 +1021,6 @@ async fn set_audit_statements(
 
 async fn set_endpoint_require_auth(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<EndpointRequireAuthBody>,
 ) -> Response {
@@ -1101,7 +1035,6 @@ async fn set_endpoint_require_auth(
 
 async fn list_mcp_tools(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.list_mcp_tools(id).await)
@@ -1110,7 +1043,6 @@ async fn list_mcp_tools(
 /// The check options ride as a required JSON body; `{}` means defaults.
 async fn mcp_status(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(options): ApiJson<crate::mcp::McpCheckOptions>,
 ) -> Response {
@@ -1119,7 +1051,6 @@ async fn mcp_status(
 
 async fn issue_endpoint(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.issue_endpoint(id).await)
@@ -1127,7 +1058,6 @@ async fn issue_endpoint(
 
 async fn renew_endpoint(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.renew_endpoint(id).await)
@@ -1135,7 +1065,6 @@ async fn renew_endpoint(
 
 async fn set_endpoint_expiry(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<EndpointExpiryBody>,
 ) -> Response {
@@ -1144,7 +1073,6 @@ async fn set_endpoint_expiry(
 
 async fn get_endpoint(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.get_endpoint(id).await)
@@ -1152,7 +1080,6 @@ async fn get_endpoint(
 
 async fn copy_endpoint(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(state.manage.copy_endpoint(id).await)
@@ -1160,7 +1087,6 @@ async fn copy_endpoint(
 
 async fn revoke_endpoint(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     respond(
@@ -1179,7 +1105,6 @@ async fn revoke_endpoint(
 /// delivers the code its catcher receives.
 async fn mcp_auth_start(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<McpAuthStartBody>,
 ) -> Response {
     let result = state
@@ -1190,7 +1115,6 @@ async fn mcp_auth_start(
 
 async fn mcp_auth_state(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     ok(state.broker.ui_mcp_auth_state(&id))
@@ -1198,7 +1122,6 @@ async fn mcp_auth_state(
 
 async fn mcp_auth_cancel(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
 ) -> Response {
     ok(json!({ "cancelled": state.broker.ui_cancel_mcp_auth(&id) }))
@@ -1206,7 +1129,6 @@ async fn mcp_auth_cancel(
 
 async fn mcp_auth_deliver(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<McpAuthDeliverBody>,
 ) -> Response {
@@ -1224,7 +1146,6 @@ async fn mcp_auth_deliver(
 /// and completes on `/oauth/complete/{flow_id}`.
 async fn oauth_start(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<OAuthStartBody>,
 ) -> Response {
     let result = state.broker.manage_oauth_start(
@@ -1238,7 +1159,6 @@ async fn oauth_start(
 
 async fn oauth_reconnect_start(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<OAuthReconnectBody>,
 ) -> Response {
@@ -1251,7 +1171,6 @@ async fn oauth_reconnect_start(
 
 async fn oauth_complete(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<Uuid>,
     ApiJson(body): ApiJson<OAuthCompleteBody>,
 ) -> Response {
@@ -1264,7 +1183,7 @@ async fn oauth_complete(
 
 /* ---------------------- identity, sessions, activity ---------------------- */
 
-async fn identity(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn identity(State(state): State<AppState>) -> Response {
     respond(state.manage.identity().await)
 }
 
@@ -1273,7 +1192,7 @@ async fn identity(State(state): State<AppState>, _authed: ManageAuthed) -> Respo
 /// anyway; this keeps the Connect page's copy button working remotely.
 /// (`LocalBackend::agent_key` audits the release, so remote copies land
 /// in the activity log exactly once.)
-async fn agent_key(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn agent_key(State(state): State<AppState>) -> Response {
     respond(
         state
             .manage
@@ -1283,17 +1202,16 @@ async fn agent_key(State(state): State<AppState>, _authed: ManageAuthed) -> Resp
     )
 }
 
-async fn rotate_key(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn rotate_key(State(state): State<AppState>) -> Response {
     respond(state.manage.rotate_key().await)
 }
 
-async fn sessions(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn sessions(State(state): State<AppState>) -> Response {
     respond(state.manage.sessions().await)
 }
 
 async fn close_session(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Path(id): Path<u64>,
 ) -> Response {
     respond(
@@ -1325,7 +1243,6 @@ const ACTIVITY_VIEW_LIMIT: usize = 500;
 
 async fn activity(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Query(query): Query<ActivityQuery>,
 ) -> Response {
     let limit = query.limit.unwrap_or(ACTIVITY_VIEW_LIMIT);
@@ -1334,7 +1251,6 @@ async fn activity(
 
 async fn activity_page(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     Query(query): Query<ActivityPageQuery>,
 ) -> Response {
     let limit = query
@@ -1353,28 +1269,284 @@ async fn activity_page(
 /// already allow.
 async fn push_cloud_session(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
     ApiJson(body): ApiJson<aka_api::CloudSessionPushDto>,
 ) -> Response {
     respond(state.manage.push_cloud_session(body).await)
 }
 
-async fn clear_activity(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+#[derive(serde::Deserialize)]
+struct PushableBody {
+    install_id: String,
+}
+
+/// The refresher's read. POST rather than GET because the install id goes in
+/// the body: it identifies which install's `~/.aws` is being asked about, and
+/// query strings end up in proxy access logs.
+async fn pushable_connections(
+    State(state): State<AppState>,
+    ApiJson(body): ApiJson<PushableBody>,
+) -> Response {
+    respond(state.manage.pushable_connections(&body.install_id).await)
+}
+
+async fn clear_activity(State(state): State<AppState>) -> Response {
     // `LocalBackend::clear_activity` publishes the ActivityCleared manage
     // event itself, so route-driven and in-process clears both reach SSE
     // subscribers.
     respond(state.manage.clear_activity().await)
 }
 
+/* --------------------------------- sign-in -------------------------------- */
+
+/// Who this request is, as the principal resolved it. The web app's and the
+/// desktop's "signed in as" both read this.
+async fn auth_whoami(State(state): State<AppState>, principal: ManagePrincipal) -> Response {
+    ok(json!({
+        "account": principal.account,
+        "credential": principal.credential,
+        "method": principal.method,
+        "surface": principal.surface,
+        "scopes": principal.scopes,
+        "authenticated_at": principal.authenticated_at,
+        "label": principal.label,
+        "passkeys_enrolled": state.broker.auth.is_enrolled(),
+    }))
+}
+
+fn auth_error(error: crate::auth::AuthError) -> Response {
+    manage_error_response(ManageError::InvalidSetting {
+        message: error.detail(),
+    })
+}
+
+async fn list_passkeys(State(state): State<AppState>) -> Response {
+    ok(state
+        .broker
+        .auth
+        .credentials()
+        .into_iter()
+        .map(|credential| {
+            json!({
+                "id": credential.id,
+                "label": credential.label,
+                "created_at": credential.created_at,
+                "last_used_at": credential.last_used_at,
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+async fn remove_passkey(
+    State(state): State<AppState>,
+    principal: ManagePrincipal,
+    Path(id): Path<Uuid>,
+) -> Response {
+    match state.broker.auth.remove_credential(&id) {
+        Ok(removed) => {
+            if removed {
+                state.broker.audit_sign_in(
+                    crate::audit::AuditKind::Passkey,
+                    "Passkey removed",
+                    &principal.label,
+                );
+            }
+            ok(json!({ "removed": removed }))
+        }
+        Err(error) => auth_error(error),
+    }
+}
+
+async fn list_browser_sessions(State(state): State<AppState>) -> Response {
+    ok(state
+        .broker
+        .auth
+        .sessions()
+        .into_iter()
+        .map(|session| {
+            json!({
+                "id": session.id,
+                "created_at": session.created_at,
+                "last_seen_at": session.last_seen_at,
+                "expires_at": session.expires_at,
+                "authenticated_at": session.authenticated_at,
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+async fn revoke_browser_session(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
+    match state.broker.auth.revoke_session(&id) {
+        Ok(revoked) => ok(json!({ "revoked": revoked })),
+        Err(error) => auth_error(error),
+    }
+}
+
+async fn list_devices(State(state): State<AppState>, principal: ManagePrincipal) -> Response {
+    ok(state
+        .broker
+        .auth
+        .devices()
+        .into_iter()
+        .map(|device| {
+            json!({
+                "id": device.id,
+                "name": device.name,
+                "surface": device.surface,
+                "created_at": device.created_at,
+                "last_seen_at": device.last_seen_at,
+                // So the list can mark "this one" and warn before a user
+                // revokes the device they are reading the list on.
+                "current": principal.credential == Some(device.id),
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+#[derive(serde::Deserialize)]
+struct RenameDeviceBody {
+    name: String,
+}
+
+async fn rename_device(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    ApiJson(body): ApiJson<RenameDeviceBody>,
+) -> Response {
+    let name = crate::untrusted_text::cap(body.name.trim(), 64);
+    if name.is_empty() {
+        return manage_error_response(ManageError::InvalidSetting {
+            message: "a device needs a name".into(),
+        });
+    }
+    match state.broker.auth.rename_device(&id, &name) {
+        Ok(renamed) => ok(json!({ "renamed": renamed })),
+        Err(error) => auth_error(error),
+    }
+}
+
+async fn revoke_device(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
+    match state.broker.auth.revoke_device(&id) {
+        Ok(revoked) => {
+            if revoked {
+                state.broker.audit_sign_in(
+                    crate::audit::AuditKind::DeviceGrant,
+                    "Device revoked",
+                    &id.to_string(),
+                );
+            }
+            ok(json!({ "revoked": revoked }))
+        }
+        Err(error) => auth_error(error),
+    }
+}
+
+async fn list_automation(State(state): State<AppState>) -> Response {
+    ok(state
+        .broker
+        .auth
+        .automation_tokens()
+        .into_iter()
+        .map(|token| {
+            json!({
+                "id": token.id,
+                "name": token.name,
+                "scopes": token.scopes,
+                "created_at": token.created_at,
+                "expires_at": token.expires_at,
+                "last_used_at": token.last_used_at,
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+#[derive(serde::Deserialize)]
+struct MintAutomationBody {
+    name: String,
+    scopes: crate::auth::ScopeSet,
+    /// Days until it stops working. Absent means never, which the UI should
+    /// make the harder choice to pick.
+    #[serde(default)]
+    ttl_days: Option<u64>,
+}
+
+async fn mint_automation(
+    State(state): State<AppState>,
+    principal: ManagePrincipal,
+    ApiJson(body): ApiJson<MintAutomationBody>,
+) -> Response {
+    let name = crate::untrusted_text::cap(body.name.trim(), 64);
+    if name.is_empty() {
+        return manage_error_response(ManageError::InvalidSetting {
+            message: "an automation token needs a name".into(),
+        });
+    }
+    if body.scopes.is_empty() {
+        return manage_error_response(ManageError::InvalidSetting {
+            message: "an automation token with no scopes could do nothing".into(),
+        });
+    }
+    // A grant may narrow what its issuer holds, never widen it. Otherwise
+    // the narrowest credential on the broker could mint the broadest one.
+    if !body.scopes.is_subset_of(principal.scopes) {
+        return manage_error_response(ManageError::InvalidSetting {
+            message: "a token cannot be granted more than the credential minting it holds".into(),
+        });
+    }
+    let Some(account) = principal.account else {
+        return manage_error_response(ManageError::InvalidSetting {
+            message: "sign in with a passkey to mint an automation token".into(),
+        });
+    };
+    let ttl = body
+        .ttl_days
+        .map(|days| chrono::Duration::days(days.clamp(1, 3650) as i64));
+    match state
+        .broker
+        .auth
+        .mint_automation(account, &name, body.scopes, ttl)
+    {
+        Ok((record, token)) => {
+            state.broker.audit_sign_in(
+                crate::audit::AuditKind::DeviceGrant,
+                "Automation token issued",
+                &name,
+            );
+            ok(json!({
+                "id": record.id,
+                "name": record.name,
+                "scopes": record.scopes,
+                "expires_at": record.expires_at,
+                // Shown once. Only the hash is kept.
+                "token": token.as_str(),
+            }))
+        }
+        Err(error) => auth_error(error),
+    }
+}
+
+async fn revoke_automation(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
+    match state.broker.auth.revoke_automation(&id) {
+        Ok(revoked) => ok(json!({ "revoked": revoked })),
+        Err(error) => auth_error(error),
+    }
+}
+
 /* ------------------------------- settings ---------------------------------- */
 
-async fn settings(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn settings(State(state): State<AppState>) -> Response {
     respond(state.manage.settings().await)
 }
 
+/// Apply a settings patch, field by field.
+///
+/// Every field the body carries is applied. Until now only
+/// `menu_bar_hides_dock` was — `confirm_ssh_host_keys` crossed the wire from
+/// the remote client and was silently dropped, so a hosted broker's host-key
+/// setting could be toggled in the UI and never changed. The others were
+/// added alongside it and would have inherited the same hole.
 async fn patch_settings(
     State(state): State<AppState>,
-    _authed: ManageAuthed,
+    principal: ManagePrincipal,
     ApiJson(body): ApiJson<SettingsPatchBody>,
 ) -> Response {
     if let Some(on) = body.menu_bar_hides_dock {
@@ -1382,10 +1554,28 @@ async fn patch_settings(
             return manage_error_response(error);
         }
     }
+    if let Some(on) = body.confirm_ssh_host_keys {
+        if let Err(error) = state.manage.set_confirm_ssh_host_keys(on).await {
+            return manage_error_response(error);
+        }
+    }
+    if let Some(on) = body.legacy_manage_token {
+        // Deciding what may sign in is `identity:manage`, whichever route it
+        // arrives on, and it needs a person who proved themselves just now.
+        if let Err(refusal) = principal.require(
+            crate::auth::Scope::IdentityManage,
+            crate::auth::StepUp::Always,
+        ) {
+            return refusal;
+        }
+        if let Err(error) = state.manage.set_legacy_manage_token(on).await {
+            return manage_error_response(error);
+        }
+    }
     respond(state.manage.settings().await)
 }
 
-async fn agent_setup(State(state): State<AppState>, _authed: ManageAuthed) -> Response {
+async fn agent_setup(State(state): State<AppState>) -> Response {
     respond(
         state
             .manage

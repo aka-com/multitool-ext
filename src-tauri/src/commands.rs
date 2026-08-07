@@ -91,6 +91,28 @@ pub async fn connect_remote_broker(
     state.brokers.connect_remote(&app, url, token).await
 }
 
+/// Sign in to a hosted broker with a passkey.
+///
+/// Opens the broker's own sign-in page in the system browser and waits for
+/// it to hand back an authorization code. Long-running by nature — the user
+/// has to reach for a phone or a fingerprint reader — so the webview shows a
+/// pending state rather than blocking anything.
+#[tauri::command]
+pub async fn sign_in_remote_broker(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    device_name: Option<String>,
+) -> Result<crate::broker_mode::BrokerProfileInfo, String> {
+    state.brokers.sign_in_remote(&app, url, device_name).await
+}
+
+/// The name this Mac will appear under in the broker's device list.
+#[tauri::command]
+pub fn default_device_name() -> String {
+    crate::passkey_signin::default_device_name()
+}
+
 /// Re-attempt the saved remote connection (the error pane's Retry).
 #[tauri::command]
 pub async fn retry_remote_broker(
@@ -2530,6 +2552,8 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Syn
         get_local_username,
         get_broker_profile,
         connect_remote_broker,
+        sign_in_remote_broker,
+        default_device_name,
         retry_remote_broker,
         switch_broker_local,
         list_secrets,

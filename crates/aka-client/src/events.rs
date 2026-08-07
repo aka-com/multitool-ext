@@ -224,11 +224,15 @@ async fn open_stream(
     let config = backend
         .config()
         .ok_or_else(|| "the manage event stream requires an HTTP broker URL".to_string())?;
+    // Renew before opening rather than during: a stream lives for hours and
+    // the broker re-checks the credential the whole time, so it must start
+    // from a token with a full life ahead of it.
+    let bearer = config.bearer().await.map_err(|error| error.to_string())?;
     let mut request = client
         .get(format!("{}/v1/manage/events", config.base_url()))
         .header(
             reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", config.token()),
+            format!("Bearer {}", bearer.as_str()),
         );
     if request_surface {
         // New brokers mint a client-heartbeated capability in response. Old
@@ -334,6 +338,9 @@ async fn heartbeat_surface(
     let config = backend
         .config()
         .ok_or_else(|| "request surfaces require an HTTP broker URL".to_string())?;
+    // The heartbeat is the one call that runs unattended for the life of a
+    // stream, so it is also the one that keeps a device grant alive.
+    let bearer = config.bearer().await.map_err(|error| error.to_string())?;
     let request = async {
         let response = client
             .put(format!(
@@ -342,7 +349,7 @@ async fn heartbeat_surface(
             ))
             .header(
                 reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", config.token()),
+                format!("Bearer {}", bearer.as_str()),
             )
             .send()
             .await?;

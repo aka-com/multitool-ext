@@ -15,6 +15,7 @@
 
 pub mod credentials;
 pub mod events;
+pub mod grant;
 
 use aka_api::{
     ActivityDto, ActivityPageDto, ApprovalDecisionDto, ApprovalDto, ApprovalSnapshotDto,
@@ -51,19 +52,22 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// (mirrors the broker's own browser deadline).
 const MCP_SIGNIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// A validated broker base URL + management token.
+/// A validated broker base URL and the credential to reach it with.
 #[derive(Clone)]
 pub struct RemoteConfig {
     base: url::Url,
-    token: Zeroizing<String>,
+    /// Shared, because a device grant renews itself and every clone of this
+    /// config must see the same rotation. Two independent grants for one
+    /// device would race on the refresh token and revoke it.
+    credential: std::sync::Arc<crate::grant::ManageCredential>,
 }
 
-/// Debug never prints the token.
+/// Debug never prints the credential.
 impl std::fmt::Debug for RemoteConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RemoteConfig")
             .field("base", &self.base.as_str())
-            .field("token", &"<redacted>")
+            .field("credential", &self.credential)
             .finish()
     }
 }
@@ -123,8 +127,10 @@ impl RemoteConfig {
             .to_string())
     }
 
-    /// Parse and normalize the user-entered URL (scheme required, trailing
-    /// slash trimmed).
+    /// Parse and normalize the user-entered URL, with a management token.
+    ///
+    /// The legacy path, kept working while the desktop migrates: see
+    /// [`Self::with_credential`] for a passkey device grant.
     pub fn new(url: &str, token: &str) -> Result<Self, String> {
         let base = Self::parse_base(url)?;
         let token = token.trim();
@@ -133,7 +139,19 @@ impl RemoteConfig {
         }
         Ok(Self {
             base,
-            token: Zeroizing::new(token.to_string()),
+            credential: std::sync::Arc::new(crate::grant::ManageCredential::manage_token(token)),
+        })
+    }
+
+    /// A broker reached with whatever credential the caller obtained —
+    /// today a device grant from a passkey sign-in.
+    pub fn with_credential(
+        url: &str,
+        credential: std::sync::Arc<crate::grant::ManageCredential>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            base: Self::parse_base(url)?,
+            credential,
         })
     }
 
@@ -141,8 +159,19 @@ impl RemoteConfig {
         self.base.as_str().trim_end_matches('/').to_string()
     }
 
-    pub fn token(&self) -> &str {
-        &self.token
+    pub fn credential(&self) -> &std::sync::Arc<crate::grant::ManageCredential> {
+        &self.credential
+    }
+
+    /// The bearer for the next request, renewing a device grant if it is
+    /// about to expire.
+    pub async fn bearer(&self) -> ManageResult<Zeroizing<String>> {
+        self.credential.bearer().await.map_err(|error| match error {
+            crate::grant::GrantError::SignInRequired(detail) => ManageError::InvalidManageToken {
+                detail: Some(detail),
+            },
+            crate::grant::GrantError::Unreachable(message) => ManageError::Unreachable { message },
+        })
     }
 }
 
@@ -188,11 +217,12 @@ impl Transport {
     ) -> ManageResult<(u16, Vec<u8>)> {
         match self {
             Transport::Http { http, config } => {
+                let bearer = config.bearer().await?;
                 let mut request = http
                     .request(method, format!("{}{path}", config.base_url()))
                     .header(
                         reqwest::header::AUTHORIZATION,
-                        format!("Bearer {}", config.token()),
+                        format!("Bearer {}", bearer.as_str()),
                     );
                 if let Some(body) = body {
                     request = request
@@ -1264,6 +1294,14 @@ impl ManagementBackend for RemoteBackend {
         self.delete("/v1/manage/activity").await
     }
 
+    async fn pushable_connections(
+        &self,
+        install_id: &str,
+    ) -> ManageResult<Vec<aka_api::PushableConnectionDto>> {
+        self.post("/v1/manage/cloud/pushable", &serde_json::json!({ "install_id": install_id }))
+            .await
+    }
+
     async fn push_cloud_session(&self, push: aka_api::CloudSessionPushDto) -> ManageResult<()> {
         self.post("/v1/manage/cloud/session", &push).await
     }
@@ -1275,6 +1313,14 @@ impl ManagementBackend for RemoteBackend {
     async fn set_menu_bar_hides_dock(&self, on: bool) -> ManageResult<()> {
         self.patch_settings(SettingsPatchBody {
             menu_bar_hides_dock: Some(on),
+            ..Default::default()
+        })
+        .await
+    }
+
+    async fn set_legacy_manage_token(&self, on: bool) -> ManageResult<()> {
+        self.patch_settings(SettingsPatchBody {
+            legacy_manage_token: Some(on),
             ..Default::default()
         })
         .await
@@ -1310,7 +1356,10 @@ mod tests {
     fn remote_config_normalizes_and_validates() {
         let config = RemoteConfig::new(" https://broker.example.dev/ ", " akamgr_x ").unwrap();
         assert_eq!(config.base_url(), "https://broker.example.dev");
-        assert_eq!(config.token(), "akamgr_x");
+        assert_eq!(
+            futures::executor::block_on(config.bearer()).unwrap().as_str(),
+            "akamgr_x"
+        );
 
         assert!(RemoteConfig::new("", "t").is_err());
         assert!(RemoteConfig::new("broker.example.dev", "t")

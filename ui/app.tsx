@@ -6,7 +6,7 @@
 // a reveal open on it. When run outside Tauri (a plain browser), a dev
 // mock stands in for the core so the UI is developable standalone.
 
-import { invoke, listen, mode } from '/src/bridge';
+import { invoke, isNativeHost, listen, mode } from '/src/bridge';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   StrictMode, useEffect, useLayoutEffect, useRef, useState,
@@ -624,6 +624,9 @@ async function loadSettings(): Promise<boolean> {
   }
 }
 async function loadNotificationSettings(): Promise<void> {
+  // Native notifications and login items belong to the desktop app; the web
+  // app has neither to read, and asking would only log a refusal.
+  if (!isNativeHost()) return;
   const epoch = notificationSettingsEpoch;
   const [settings, launchAtLogin] = await Promise.allSettled([
     invoke('get_notification_settings'),
@@ -644,6 +647,9 @@ async function loadNotificationSettings(): Promise<void> {
  * defaults, which is "no lock" — the gate is enforced in Rust regardless, so
  * a webview that fails this read cannot talk its way past it. */
 async function loadLockState(): Promise<void> {
+  // The app lock gates this shell's own windows. In a browser the session's
+  // own expiry is the equivalent, and it is the broker's to enforce.
+  if (!isNativeHost()) return;
   try {
     state.lock = await invoke('get_lock_state');
   } catch (error) {
@@ -658,6 +664,7 @@ function relLockDelay(secs: number): string {
 }
 
 async function loadLocalUsername(): Promise<void> {
+  if (!isNativeHost()) return;
   try { state.localUsername = await invoke('get_local_username'); }
   catch (e) { console.error('get_local_username', e); }
 }
@@ -677,6 +684,23 @@ async function loadIdentity(): Promise<boolean> {
     return false;
   }
 }
+/// Prefill the device-name field from the computer name, once.
+///
+/// Best-effort and non-blocking: the field is editable and has a usable
+/// placeholder, so a failure here costs nothing worth reporting.
+async function prefillDeviceName(): Promise<void> {
+  if (state.remoteSetup.deviceName) return;
+  try {
+    const name = await invoke('default_device_name');
+    if (!state.remoteSetup.deviceName) {
+      state.remoteSetup.deviceName = name;
+      render();
+    }
+  } catch {
+    /* the placeholder stands in */
+  }
+}
+
 async function loadAgentSetup(): Promise<void> {
   const broker = state.broker;
   const epoch = brokerEpoch;
@@ -1176,6 +1200,23 @@ function usedHint(at: string): string {
  * the mask, centered — never beside it (the placeholder dims behind). */
 function MaskedValueCopy({ secret }: { secret: SecretSummary }): ReactNode {
   const copied = state.copied === secret.id;
+  // This copy is native for a reason: the value goes shell-side to the OS
+  // clipboard and never enters the webview, marked transient so clipboard
+  // managers skip it and cleared on a timer. A browser can offer none of
+  // that, so the web app offers Reveal — which at least says plainly that
+  // the value is now on screen — instead of a copy that quietly is not the
+  // same thing.
+  if (!isNativeHost()) {
+    return (
+      <span className="val-wrap"><span className="val-slot">
+        <code>••••••••</code>
+        <span className="val-overlay">
+          <button className="ghost-copy" title="Reveal value" data-act="reveal-secret-ask"
+            data-id={secret.id}><Icon markup={ICONS.eye} /><span>Reveal</span></button>
+        </span>
+      </span></span>
+    );
+  }
   return (
     <span className="val-wrap"><span className={`val-slot ${copied ? 'is-copied' : ''}`}>
       <code>••••••••</code>
@@ -4099,26 +4140,22 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
     const setupInstructions =
       '# To start a remote instance, run this behind a TLS proxy or tunnel:\n'
       + 'multitool serve --listen 0.0.0.0:4780\nmultitool manage token';
-    const hasSaved = state.broker.has_saved_token
-      && (setup.url.trim() === '' || setup.url.trim().replace(/\/+$/, '') === (state.broker.url ?? ''));
+    const sameBroker = setup.url.trim() === ''
+      || setup.url.trim().replace(/\/+$/, '') === (state.broker.url ?? '');
+    const hasSaved = state.broker.has_saved_token && sameBroker;
+    const hasGrant = state.broker.has_saved_grant && sameBroker;
     const insecureRemote = insecureNonLoopbackHttp(setup.url);
+    const urlReady = setup.url.trim() !== '';
+    const enrollInstructions =
+      '# On the broker host, open enrollment for your first passkey:\n'
+      + 'multitool manage enroll';
     return (
       <div className="broker-pane" role="form" aria-label="Connect to hosted Multitool">
         <div className="bp-icon"><Icon markup={ICONS.appIcon} /></div>
         <h2>Connect to hosted Multitool</h2>
-        <p className="bp-lead">Provide your connection details below.</p>
-        <div className="adv-collapse">
-          <button type="button" className="adv-toggle" aria-expanded={setup.advancedOpen}
-            data-act="toggle-remote-advanced">
-            <span className="adv-toggle-icon" aria-hidden="true"><Icon markup={ICONS.chevronDown} /></span>Advanced</button>
-          {setup.advancedOpen && (
-            <div className="bp-setup-wrap">
-              <pre className="setup-instructions bp-setup-code"><code>{setupInstructions}</code></pre>
-              <button className="btn sm" data-act="copy-text"
-                data-text={setupInstructions}>Copy</button>
-            </div>
-          )}
-        </div>
+        <p className="bp-lead">
+          Sign in with the passkey you use for this instance on the web.
+        </p>
         <div className="f-row">
           <label htmlFor="rb-url">Hosted instance URL</label>
           <input id="rb-url" placeholder="https://multitool.dev" value={setup.url}
@@ -4126,24 +4163,72 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
             onChange={(e) => { setup.url = e.currentTarget.value; render(); }} />
           {insecureRemote
             ? <div className="field-warning" role="alert">
-                This sends the management token over unencrypted HTTP. Use HTTPS or a loopback URL.
+                Passkeys need HTTPS. Use an https:// address, or a loopback URL for local testing.
               </div>
             : null}
         </div>
         <div className="f-row">
-          <label htmlFor="rb-token">Management token</label>
-          <input id="rb-token" type="password" value={setup.token} autoComplete="off"
-            placeholder={hasSaved ? 'Using the saved token (paste to replace)' : 'akamgr_…'}
-            onChange={(e) => { setup.token = e.currentTarget.value; render(); }} />
+          <label htmlFor="rb-device">This device’s name</label>
+          <input id="rb-device" value={setup.deviceName} autoComplete="off"
+            placeholder="This Mac"
+            onChange={(e) => { setup.deviceName = e.currentTarget.value; render(); }} />
+          <div className="field-hint">
+            How this Mac appears in the instance’s list of authorised devices,
+            so you can revoke it from anywhere.
+          </div>
         </div>
+        {hasGrant && (
+          <div className="field-hint" role="status">
+            This Mac is already signed in to that instance. Connecting reuses it.
+          </div>
+        )}
         {setup.error && <div className="inline-error" role="alert">{setup.error}</div>}
         <div className="bp-actions">
-          <button className="btn primary" data-act="broker-connect-submit" disabled={setup.busy}>
-            {setup.busy ? 'Connecting…' : 'Connect'}</button>
+          <button className="btn primary" data-act="broker-signin-submit"
+            disabled={setup.busy || setup.signingIn || !urlReady}>
+            {setup.signingIn
+              ? 'Waiting for your browser…'
+              : hasGrant ? 'Connect' : 'Sign in with passkey'}</button>
           {state.broker.mode === 'remote' && !state.broker.connected
             ? <button className="btn ghost" data-act="broker-pick-local">Use this Mac instead</button>
             : <button className="btn ghost" data-act="broker-setup-cancel">
                 {state.broker.mode === 'unset' ? 'Back' : 'Cancel'}</button>}
+        </div>
+        {setup.signingIn && (
+          <p className="bp-detail" role="status">
+            Finish signing in on the page that opened in your browser. The
+            passkey is checked by the instance itself, not by this app.
+          </p>
+        )}
+        <div className="adv-collapse">
+          <button type="button" className="adv-toggle" aria-expanded={setup.advancedOpen}
+            data-act="toggle-remote-advanced">
+            <span className="adv-toggle-icon" aria-hidden="true"><Icon markup={ICONS.chevronDown} /></span>Advanced</button>
+          {setup.advancedOpen && (
+            <div className="bp-setup-wrap">
+              <div className="f-row">
+                <label htmlFor="rb-token">Management token</label>
+                <input id="rb-token" type="password" value={setup.token} autoComplete="off"
+                  placeholder={hasSaved ? 'Using the saved token (paste to replace)' : 'akamgr_…'}
+                  onChange={(e) => { setup.token = e.currentTarget.value; render(); }} />
+                <div className="field-hint">
+                  The older way in. One token works from anywhere and cannot be
+                  revoked for one machine, so prefer a passkey where you can.
+                </div>
+              </div>
+              <div className="bp-actions">
+                <button className="btn" data-act="broker-connect-submit"
+                  disabled={setup.busy || setup.signingIn || !urlReady}>
+                  {setup.busy ? 'Connecting…' : 'Connect with token'}</button>
+              </div>
+              <pre className="setup-instructions bp-setup-code"><code>{setupInstructions}</code></pre>
+              <button className="btn sm" data-act="copy-text"
+                data-text={setupInstructions}>Copy</button>
+              <pre className="setup-instructions bp-setup-code"><code>{enrollInstructions}</code></pre>
+              <button className="btn sm" data-act="copy-text"
+                data-text={enrollInstructions}>Copy</button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -6269,6 +6354,15 @@ function CloudGuideScriptPath(): ReactNode[] {
  * stamps its own draft — a listing left over from an earlier sheet would
  * skip the load and leave the fresh draft with no machine stamp. */
 async function loadAwsProfiles(): Promise<void> {
+  // Reuse connections name a profile in one machine's ~/.aws, and the app on
+  // that machine is what mints and pushes their sessions. A browser has no
+  // ~/.aws to enumerate, so the picker reports none and the path is not
+  // offered — rather than listing the *broker host's* profiles, which are a
+  // different machine's and would be the wrong answer confidently given.
+  if (!isNativeHost()) {
+    state.awsProfiles = { profiles: [], origin: '', origin_label: '' };
+    return;
+  }
   const d = state.draft;
   let listing: AwsProfileList;
   try {
@@ -6939,7 +7033,12 @@ async function connectionDraftFromImport(
   source: string,
   currentDraft: ConnectionDraft = {},
 ): Promise<{ type: ConnectionType; draft: ConnectionDraft }> {
-  const imported = shouldResolveSshImport(source)
+  // Resolving an `ssh host` line reads this machine's ~/.ssh — the config,
+  // the identity files, known_hosts. In a browser there is nothing to read,
+  // so the same text is parsed as far as it goes and the user fills in the
+  // rest, rather than the import silently resolving against the *broker
+  // host's* SSH config, which is a different machine's.
+  const imported = isNativeHost() && shouldResolveSshImport(source)
     ? sshImportFromPreview(await invoke('inspect_ssh_import', { source }))
     : parseConnectionImport(source);
   const importedFields = imported.fields as ConnectionDraft;
@@ -8059,15 +8158,25 @@ function SettingsSheet(): ReactNode {
       </div></div>
       <button className="btn danger sm" data-act="rotate-key-ask">Rotate key…</button>
     </div>;
+  // Notifications, the app lock, login items, and the dock behaviour are
+  // properties of this desktop app rather than of the broker behind it, so
+  // the web app omits them entirely. Omitted, not disabled: a switch that
+  // cannot be moved, with a note explaining why, is worse than the absence.
+  const nativeShell = isNativeHost();
   return (
     <>
       <h3 id="settings-title">Settings</h3>
-      {notificationRow}{notificationWarning}{notificationPreviewRow}
-      {notificationSoundRow}{notificationFocusRow}{notificationEscalationRow}
-      {lockRow}{lockWarning}{autoLockRow}{lockOnHideRow}
-      {autostartRow}{sampleToolsRow}
+      {nativeShell && <>
+        {notificationRow}{notificationWarning}{notificationPreviewRow}
+        {notificationSoundRow}{notificationFocusRow}{notificationEscalationRow}
+        {lockRow}{lockWarning}{autoLockRow}{lockOnHideRow}
+        {autostartRow}
+      </>}
+      {sampleToolsRow}
       {brokerKeyRow}
-      {settingsFailed ? settingsFailureRow : <>{hostKeyRow}{dockRow}</>}
+      {settingsFailed
+        ? settingsFailureRow
+        : <>{hostKeyRow}{nativeShell ? dockRow : null}</>}
       <div className="sheet-actions"><button className="btn primary" data-act="sheet-cancel">Done</button></div>
     </>
   );
@@ -9445,9 +9554,12 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         advancedOpen: false,
         url: state.broker.url ?? state.remoteSetup.url,
         token: '',
+        deviceName: state.remoteSetup.deviceName,
         busy: false,
+        signingIn: false,
         error: null,
       };
+      void prefillDeviceName();
       render();
       break;
     }
@@ -9466,11 +9578,46 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         advancedOpen: false,
         url: state.broker.url ?? '',
         token: '',
+        deviceName: state.remoteSetup.deviceName,
         busy: false,
+        signingIn: false,
         error: null,
       };
+      void prefillDeviceName();
       render();
       break;
+    case 'broker-signin-submit': {
+      const url = state.remoteSetup.url.trim();
+      state.remoteSetup.signingIn = true;
+      state.remoteSetup.error = null;
+      render();
+      try {
+        // The ceremony happens in the system browser against the broker's
+        // own origin, so this waits on a window the app does not own. It
+        // can legitimately take a minute.
+        setBrokerProfile(await invoke('sign_in_remote_broker', {
+          url,
+          deviceName: state.remoteSetup.deviceName.trim() || null,
+        }));
+        state.remoteSetup = {
+          open: false,
+          advancedOpen: false,
+          url: '',
+          token: '',
+          deviceName: '',
+          busy: false,
+          signingIn: false,
+          error: null,
+        };
+        await refresh('all');
+        try { await loadAgentSetup(); } catch { /* pane shows loading */ }
+      } catch (error) {
+        state.remoteSetup.signingIn = false;
+        state.remoteSetup.error = String(error);
+      }
+      render();
+      break;
+    }
     case 'broker-connect-submit': {
       const url = state.remoteSetup.url.trim();
       const token = state.remoteSetup.token.trim();
@@ -9480,7 +9627,14 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       try {
         setBrokerProfile(await invoke('connect_remote_broker', { url, token: token || null }));
         state.remoteSetup = {
-          open: false, advancedOpen: false, url: '', token: '', busy: false, error: null,
+          open: false,
+          advancedOpen: false,
+          url: '',
+          token: '',
+          deviceName: '',
+          busy: false,
+          signingIn: false,
+          error: null,
         };
         await refresh('all');
         try { await loadAgentSetup(); } catch { /* pane shows loading */ }
@@ -9637,7 +9791,20 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     }
     case 'open-settings': state.menuOpen = false; setSheet({ kind: 'settings' }); render(); break;
     case 'copy-agent-setup':
-      if (await run(() => invoke('copy_agent_setup'))) toast('📋 Setup instructions copied');
+      // The native copy keeps the agent key out of the webview. In a
+      // browser the text is already on the page, so the browser's own
+      // clipboard is no worse — and refusing would leave no way to copy at
+      // all.
+      if (isNativeHost()) {
+        if (await run(() => invoke('copy_agent_setup'))) toast('📋 Setup instructions copied');
+      } else if (state.agentSetupInstructions) {
+        try {
+          await navigator.clipboard.writeText(state.agentSetupInstructions);
+          toast('📋 Setup instructions copied');
+        } catch {
+          toast('⚠ Your browser blocked the clipboard');
+        }
+      }
       break;
     case 'clear-activity-ask':
       setSheet({ kind: 'clear-activity' });
@@ -10240,6 +10407,9 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       render();
       break;
     case 'check-known-hosts': {
+      // ~/.ssh/known_hosts is this machine's record of hosts it has met.
+      // A browser has none, and the broker host's would be somebody else's.
+      if (!isNativeHost()) break;
       const host = state.draft.host?.trim() ?? '';
       if (!host || state.draft.hostKeyChecking) break;
       const port = Number.parseInt(state.draft.port || '22', 10);
@@ -10729,7 +10899,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         const connection = state.connections.find(
           (candidate) => candidate.id === approval.connection_id,
         );
-        if (connection?.host) {
+        if (connection?.host && isNativeHost()) {
           state.approvalHostKeyProvenance = {
             approvalId: approval.id,
             loading: true,

@@ -28,6 +28,11 @@ pub const ONEPASSWORD_PROVIDER_CAPABILITY: &str = "onepassword_provider_v1";
 /// Manage-plane support for typed credentials: password records carrying
 /// site/username metadata and an optional local TOTP factor.
 pub const TYPED_CREDENTIALS_CAPABILITY: &str = "typed_credentials_v1";
+/// Manage-plane support for passkey sign-in: the `/v1/auth` surface, device
+/// grants, and the scoped principal behind them. A client that does not see
+/// this is talking to a broker where the management token is the only way
+/// in, and should not offer to sign in with a passkey.
+pub const PASSKEY_AUTH_CAPABILITY: &str = "passkey_auth_v1";
 /// Response header acknowledging how a manage-event stream was classified.
 pub const APPROVAL_SURFACE_STATUS_HEADER: &str = "x-aka-approval-surface-status";
 pub const APPROVAL_SURFACE_STATUS_ACTIVE: &str = "active";
@@ -593,6 +598,43 @@ pub struct CloudSessionPushDto {
     pub credentials: serde_json::Value,
 }
 
+/// A connection whose credentials live on the calling machine, reduced to
+/// exactly what minting a session needs.
+///
+/// This exists rather than reusing [`ConnectionDto`] because the background
+/// refresher runs unattended every minute and should hold `cloud:push` and
+/// nothing else. Listing the catalog would mean `manage:read` — the authority
+/// to enumerate every connection, credential name, and endpoint on the
+/// broker — for a loop that only ever needs the profile name and the shape of
+/// the role to assume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushableConnectionDto {
+    pub connection_id: String,
+    /// Only for the mint's session name and for log lines.
+    pub name: String,
+    pub source_profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_arn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_policy_arn: Option<String>,
+    /// Inline session-policy JSON bounding minted sessions, alongside or
+    /// instead of the ARN above. Carried for the same reason [`CloudDto`]
+    /// carries it: this DTO *is* the mint's parameters, so omitting it
+    /// would push a session without its leash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_policy: Option<String>,
+    pub session_ttl_secs: u64,
+    /// Seconds remaining on the session this broker currently holds, so the
+    /// caller can skip a mint it does not need. `None` means the broker holds
+    /// no session and needs one now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_expires_in_seconds: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudDto {
     /// `aws`, `gcp`, or `azure`.
@@ -934,12 +976,20 @@ pub enum ApprovalDecisionDto {
     Deny,
 }
 
+fn legacy_manage_token_default() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingsDto {
     pub menu_bar_hides_dock: bool,
     /// Ask before trusting an SSH server's host key the first time it is seen.
     #[serde(default)]
     pub confirm_ssh_host_keys: bool,
+    /// Whether the global management token still authenticates this broker's
+    /// manage plane. False once the migration to passkeys is finished.
+    #[serde(default = "legacy_manage_token_default")]
+    pub legacy_manage_token: bool,
 }
 
 /* -------------------------------- events ---------------------------------- */

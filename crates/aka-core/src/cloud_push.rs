@@ -218,31 +218,20 @@ pub async fn refresh_once(
     if install_id.is_empty() {
         return;
     }
-    let connections = match backend.list_connections().await {
+    // Only connections this install owns the files for: the filter is the
+    // broker's, so the loop asks a narrow question rather than listing the
+    // catalog and discarding most of it.
+    let connections = match backend.pushable_connections(install_id).await {
         Ok(connections) => connections,
         // A broker that is down needs no pushes; the next tick retries.
         Err(_) => return,
     };
     for connection in connections {
-        let Some(cloud) = connection.cloud.as_ref() else {
-            continue;
-        };
-        // Only connections that name *this* install's files, and only when
-        // the broker is not the one reading them: a local broker mints at
-        // request time from the same ~/.aws, holds nothing, and refuses
-        // pushes — minting here anyway would spend a real STS call per tick
-        // on credentials the push path then throws away.
-        if cloud.source_origin.as_deref() != Some(install_id) || !cloud.minted_elsewhere {
-            continue;
-        }
-        let Some(profile) = cloud.source_profile.as_deref() else {
-            continue;
-        };
-        if !clock.needs_push(&connection.id) {
+        if !clock.needs_push(&connection.connection_id) {
             continue;
         }
         // The DTO's TTL is broker-supplied; the ceiling is ours to enforce.
-        let ttl = cloud
+        let ttl = connection
             .session_ttl_secs
             .clamp(MIN_CLOUD_SESSION_TTL_SECS, MAX_CLOUD_SESSION_TTL_SECS);
         // Everything below rides in from the broker's listing — the same
@@ -251,15 +240,15 @@ pub async fn refresh_once(
         // broker that reports a stripped policy or a swapped profile gets
         // nothing rather than a wider session.
         let params = LeashParams {
-            profile: profile.to_string(),
-            region: cloud.region.clone(),
-            role_arn: cloud.role_arn.clone(),
-            external_id: cloud.external_id.clone(),
-            session_policy_arn: cloud.session_policy_arn.clone(),
-            session_policy: cloud.session_policy.clone(),
+            profile: connection.source_profile.clone(),
+            region: connection.region.clone(),
+            role_arn: connection.role_arn.clone(),
+            external_id: connection.external_id.clone(),
+            session_policy_arn: connection.session_policy_arn.clone(),
+            session_policy: connection.session_policy.clone(),
             session_ttl_secs: ttl,
         };
-        if !pins.check_and_pin(&connection.id, &params) {
+        if !pins.check_and_pin(&connection.connection_id, &params) {
             tracing::warn!(
                 connection = %connection.name,
                 "the broker reports different mint parameters than this app \
@@ -297,7 +286,7 @@ pub async fn refresh_once(
             .map(|value| value.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
         let push = aka_api::CloudSessionPushDto {
-            connection_id: connection.id.clone(),
+            connection_id: connection.connection_id.clone(),
             expires_at: session.expires_at.clone(),
             expires_in_seconds: session.expires_in_seconds,
             provider: session.provider.clone(),
@@ -309,7 +298,7 @@ pub async fn refresh_once(
             // not the one requested: recording the request would skew the
             // half-life whenever the two diverge.
             Ok(()) => clock.record(
-                &connection.id,
+                &connection.connection_id,
                 expires_at,
                 session.expires_in_seconds as i64,
             ),

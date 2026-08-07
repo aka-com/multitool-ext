@@ -230,6 +230,7 @@ interface MockArgs {
   value: string;
   input2?: never;
   url?: string;
+  deviceName?: string | null;
   options?: { whoami_tool?: string | null } | null;
   newName?: string | null;
   newValue?: string | null;
@@ -1001,6 +1002,7 @@ function mockStatusReport(c: MockConnection): McpStatusReport {
 // are reviewable in a plain browser.
 let mockBroker: import('./types').BrokerProfile = {
   mode: 'local', url: null, connected: true, error: null, has_saved_token: false,
+  has_saved_grant: false, credential: null, device_name: null,
   capabilities: ['onepassword_provider_v1', 'typed_credentials_v1'],
 };
 // Once a broker is picked, the `unset` fault stops applying so the app does
@@ -1050,7 +1052,10 @@ function mockConnectRemote(url: string, token: string | null): unknown {
   mockPicked = true;
   mockBroker = {
     mode: 'remote', url: trimmed, connected: true, error: null, has_saved_token: true,
-    capabilities: trimmed.includes('legacy') ? [] : ['onepassword_provider_v1'],
+    has_saved_grant: false, credential: 'token', device_name: null,
+    capabilities: trimmed.includes('legacy')
+          ? []
+          : ['onepassword_provider_v1', 'passkey_auth_v1'],
   };
   emit('aka://broker-changed', mockBroker);
   // A "flaky" broker connects, then drops the link shortly after — the
@@ -1205,6 +1210,34 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       }
       return { ...mockBroker };
     case 'connect_remote_broker': return mockConnectRemote(args.url as string, (args.token as string | null) ?? null);
+    case 'default_device_name': return 'Development Mac';
+    case 'sign_in_remote_broker': {
+      // Frontend-only stand-in for the browser ceremony. A URL containing
+      // "cancel" plays the user closing the tab, which is the failure the
+      // pane most needs to look right for.
+      const trimmed = (args.url as string).trim().replace(/\/+$/, '');
+      if (!trimmed) throw 'enter the broker\u2019s URL';
+      if (!/^https?:\/\//.test(trimmed)) throw 'enter a full URL, e.g. https://broker.example.dev';
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      if (trimmed.includes('cancel')) throw 'the browser sign-in timed out';
+      if (trimmed.includes('down')) throw 'could not reach the broker: connection refused';
+      mockPicked = true;
+      mockBroker = {
+        mode: 'remote',
+        url: trimmed,
+        connected: true,
+        error: null,
+        has_saved_token: mockBroker.has_saved_token,
+        has_saved_grant: true,
+        credential: 'passkey',
+        device_name: ((args.deviceName as string | null) ?? '').trim() || 'Development Mac',
+        capabilities: trimmed.includes('legacy')
+          ? []
+          : ['onepassword_provider_v1', 'passkey_auth_v1'],
+      };
+      emit('aka://broker-changed', mockBroker);
+      return { ...mockBroker };
+    }
     case 'retry_remote_broker': {
       if (mockBroker.url?.includes('down')) {
         mockBroker = { ...mockBroker, connected: false, error: 'the remote broker could not be reached: connection refused' };
@@ -1222,6 +1255,9 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       mockBroker = {
         mode: 'local', url: mockBroker.url, connected: true, error: null,
         has_saved_token: mockBroker.has_saved_token,
+        has_saved_grant: mockBroker.has_saved_grant,
+        credential: null,
+        device_name: null,
         capabilities: ['onepassword_provider_v1', 'typed_credentials_v1'],
       };
       emit('aka://broker-changed', mockBroker);

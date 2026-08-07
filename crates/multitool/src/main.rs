@@ -240,6 +240,12 @@ enum Command {
         /// tunnel address); advertised in discovery served over TCP.
         #[arg(long, requires = "listen", value_parser = parse_public_url)]
         public_url: Option<String>,
+        /// Serve the Multitool web app from this directory (the `dist/ui`
+        /// a UI build produces). It rides the same listener as the manage
+        /// API on purpose: the session cookie, the passkey's relying
+        /// party, and the CSRF check are all same-origin.
+        #[arg(long, requires = "public_url")]
+        web_root: Option<PathBuf>,
         /// Bind the PG data plane and API direct endpoints to this
         /// address (e.g. 0.0.0.0 or a LAN IP) for remote agents, instead of
         /// loopback. These legs are plaintext, so a non-loopback value is
@@ -627,6 +633,38 @@ enum ManageCommand {
         /// Create a missing explicit --root before issuing its first token.
         #[arg(long, requires = "root", conflicts_with = "broker")]
         create_root: bool,
+    },
+    /// Retire the global management token, or bring it back.
+    ///
+    /// The last step of the passkey migration: after this, the manage plane
+    /// accepts only passkey sessions, device grants, and automation tokens.
+    /// Refused while no passkey is enrolled — that would leave nothing able
+    /// to sign in.
+    Legacy {
+        /// Accept the management token again.
+        #[arg(long, conflicts_with = "retire")]
+        restore: bool,
+        /// Stop accepting the management token.
+        #[arg(long)]
+        retire: bool,
+        /// Operate on a broker rooted here instead of the default layout.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Open passkey enrollment and print the one-use secret.
+    ///
+    /// Runs against this machine's broker over its own socket, never over
+    /// the network: being able to open enrollment is what decides who owns
+    /// the broker, so it takes local access to the host rather than a
+    /// credential anyone could carry. Hand the printed link to the browser
+    /// you want to enroll; it expires in 15 minutes.
+    Enroll {
+        /// Close an outstanding enrollment instead of opening one.
+        #[arg(long)]
+        cancel: bool,
+        /// Operate on a broker rooted here instead of the default layout.
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
 }
 
@@ -1218,6 +1256,7 @@ fn run_cli() {
             root,
             listen,
             public_url,
+            web_root,
             data_plane_listen,
             advertise_host,
             data_plane_insecure,
@@ -1229,6 +1268,7 @@ fn run_cli() {
             root,
             listen,
             public_url,
+            web_root,
             data_plane_listen,
             advertise_host,
             data_plane_insecure,
@@ -1450,6 +1490,18 @@ fn run_cli() {
             } => {
                 reject_json_for_mutation(json);
                 cmd_manage_token(revoke, ttl_days, root, broker, create_root)
+            }
+            ManageCommand::Enroll { cancel, root } => {
+                reject_json_for_mutation(json);
+                cmd_manage_enroll(cancel, root)
+            }
+            ManageCommand::Legacy {
+                restore,
+                retire,
+                root,
+            } => {
+                reject_json_for_mutation(json);
+                cmd_manage_legacy(restore, retire, root)
             }
         },
         Command::Key {
@@ -3653,6 +3705,141 @@ fn cmd_manage_token(
     }
 }
 
+/// Open (or cancel) passkey enrollment on this machine's running broker.
+///
+/// Deliberately socket-only, with no offline fallback. The running broker
+/// holds the auth state in memory and rewrites the file on every change, so
+/// an offline edit would be silently clobbered by the next session it
+/// records — and more to the point, opening enrollment is the one decision
+/// that must be made by somebody standing on the host.
+fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>) {
+    require_existing_root_for_read(root.as_deref(), false);
+    let paths = store_paths(root.as_deref());
+    let socket = paths.socket_file();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let method = if cancel { "DELETE" } else { "POST" };
+    let (status, body) = match runtime.block_on(client::unix_http(
+        &socket,
+        method,
+        "/v1/auth/enrollment",
+        None,
+        None,
+        None,
+    )) {
+        Ok(response) => response,
+        Err(error) => die_with(
+            ExitCode::NoBroker,
+            format!(
+                "could not reach this machine's broker at {}: {error}\n\
+                 Enrollment is opened on the broker host, so the broker has to be running there.",
+                socket.display()
+            ),
+        ),
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    if status != 200 {
+        let detail = parsed
+            .get("detail")
+            .and_then(|value| value.as_str())
+            .unwrap_or(body.trim());
+        die(format!("could not change enrollment: {detail}"));
+    }
+    if cancel {
+        eprintln!("passkey enrollment closed; any outstanding secret is void");
+        return;
+    }
+    let secret = parsed
+        .get("secret")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let already = parsed
+        .get("already_enrolled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if already {
+        eprintln!("This broker already has a passkey; this enrolls an additional one.\n");
+    }
+    match parsed.get("sign_in_url").and_then(|value| value.as_str()) {
+        Some(url) => {
+            eprintln!("Open this on the device you want to enroll:\n");
+            println!("{url}");
+            eprintln!("\nand paste this one-use secret when it asks:\n");
+        }
+        // Without --public-url there is no origin a passkey could be bound
+        // to. The secret is still issued — the operator may be about to add
+        // one — but saying nothing about the missing URL would be a mystery.
+        None => eprintln!(
+            "Note: this broker has no --public-url, so there is no address a browser \
+             can enroll against yet. Restart it with --listen and --public-url.\n\n\
+             One-use enrollment secret:\n"
+        ),
+    }
+    println!("{secret}");
+    eprintln!("\nIt expires in 15 minutes. Re-run to issue a fresh one, or --cancel to close it.");
+}
+
+/// Retire (or restore) the global management token on this machine's broker.
+///
+/// Socket-only for the same reason enrollment is: this decides what may
+/// authenticate, and getting it wrong locks the manage plane. The broker's
+/// own guard refuses a retirement with no passkey enrolled; this just
+/// reports it.
+fn cmd_manage_legacy(restore: bool, retire: bool, root: Option<PathBuf>) {
+    if restore == retire {
+        die_with(
+            ExitCode::Usage,
+            "choose one of --retire or --restore",
+        );
+    }
+    require_existing_root_for_read(root.as_deref(), false);
+    let paths = store_paths(root.as_deref());
+    let socket = paths.socket_file();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let body = serde_json::json!({ "legacy_manage_token": restore }).to_string();
+    let token = std::env::var("AKA_MANAGE_TOKEN").ok();
+    let (status, response) = match runtime.block_on(client::unix_http(
+        &socket,
+        "PATCH",
+        "/v1/manage/settings",
+        Some(&body),
+        token.as_deref(),
+        None,
+    )) {
+        Ok(response) => response,
+        Err(error) => die_with(
+            ExitCode::NoBroker,
+            format!(
+                "could not reach this machine's broker at {}: {error}",
+                socket.display()
+            ),
+        ),
+    };
+    if status != 200 {
+        let parsed: serde_json::Value =
+            serde_json::from_str(&response).unwrap_or(serde_json::Value::Null);
+        let detail = parsed
+            .get("message")
+            .or_else(|| parsed.get("detail"))
+            .and_then(|value| value.as_str())
+            .unwrap_or(response.trim());
+        die(format!("could not change the setting: {detail}"));
+    }
+    if retire {
+        eprintln!(
+            "the management token is retired; this broker now accepts only passkey \n\
+             sign-ins, device grants, and automation tokens"
+        );
+    } else {
+        eprintln!("the management token is accepted again");
+    }
+}
+
 /// Open a capability session on the running broker and hand back the
 /// parsed 200 body; any failure dies with the client module's one-liner.
 fn open_session(
@@ -4914,6 +5101,7 @@ struct ServeArgs {
     root: Option<PathBuf>,
     listen: Option<std::net::SocketAddr>,
     public_url: Option<String>,
+    web_root: Option<PathBuf>,
     data_plane_listen: Option<std::net::IpAddr>,
     advertise_host: Option<String>,
     data_plane_insecure: bool,
@@ -4968,6 +5156,7 @@ fn cmd_serve(args: ServeArgs) {
         root,
         listen,
         public_url,
+        web_root,
         data_plane_listen,
         advertise_host,
         data_plane_insecure,
@@ -5020,9 +5209,20 @@ fn cmd_serve(args: ServeArgs) {
             Ok(path) => path,
             Err(error) => die(error),
         };
+    // A web root that is not there would serve every request as a 404 with
+    // no hint why, so say so at startup instead.
+    if let Some(web_root) = &web_root {
+        if !web_root.join("index.html").is_file() {
+            die(format!(
+                "--web-root {} has no index.html; point it at the dist/ui a UI build produces",
+                web_root.display()
+            ));
+        }
+    }
     let options = daemon::ServeOptions {
         listen,
         public_url: public_url.clone(),
+        web_root: web_root.clone(),
         data_plane_listen,
         advertise_host: advertise_host.clone(),
         data_plane_insecure,

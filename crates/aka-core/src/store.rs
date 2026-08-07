@@ -1587,6 +1587,15 @@ impl Store {
         next.settings = Some(settings);
         self.commit(&mut state, next)
     }
+
+    pub fn set_legacy_manage_token(&self, on: bool) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let mut settings = state.settings();
+        settings.legacy_manage_token = on;
+        let mut next = state.clone();
+        next.settings = Some(settings);
+        self.commit(&mut state, next)
+    }
 }
 
 impl crate::policy::AccessGenerationStore for Store {

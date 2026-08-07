@@ -33,6 +33,15 @@ pub struct BrokerProfileInfo {
     /// A saved management token exists for `url`, so the connect form can
     /// offer to reuse it.
     pub has_saved_token: bool,
+    /// A saved passkey device grant exists for `url`. Preferred over the
+    /// token when both are present: it is per-device and revocable.
+    pub has_saved_grant: bool,
+    /// How the current connection authenticated: "passkey" | "token" |
+    /// null. The header shows the migration nudge from this.
+    pub credential: Option<String>,
+    /// What this Mac is called in the broker's authorized-device list, so
+    /// the user can find the right row when revoking one.
+    pub device_name: Option<String>,
     /// Optional management features advertised by the active broker.
     /// Legacy remote brokers omit the 1Password capability and the shell
     /// keeps that surface disabled instead of issuing unsupported calls.
@@ -47,6 +56,9 @@ impl BrokerProfileInfo {
             connected: true,
             error: None,
             has_saved_token: false,
+            has_saved_grant: false,
+            credential: None,
+            device_name: None,
             capabilities: vec![
                 aka_api::ONEPASSWORD_PROVIDER_CAPABILITY.into(),
                 aka_api::TYPED_CREDENTIALS_CAPABILITY.into(),
@@ -63,6 +75,9 @@ impl BrokerProfileInfo {
             connected: false,
             error: None,
             has_saved_token: false,
+            has_saved_grant: false,
+            credential: None,
+            device_name: None,
             capabilities: Vec::new(),
         }
     }
@@ -192,7 +207,7 @@ pub struct BrokerState {
     remote: Mutex<Option<RemoteRuntime>>,
     profile: Mutex<BrokerProfileInfo>,
     data_dir: PathBuf,
-    tokens: TokenStore,
+    tokens: Arc<TokenStore>,
     /// Serializes `shell.json` read-modify-write cycles. Broker transitions
     /// and notification settings can be changed from different async tasks;
     /// neither is allowed to overwrite the other's fields.
@@ -312,7 +327,7 @@ impl BrokerState {
             local: Mutex::new(Some(runtime)),
             remote: Mutex::new(None),
             profile: Mutex::new(BrokerProfileInfo::local()),
-            tokens: TokenStore::new(data_dir.clone()),
+            tokens: Arc::new(TokenStore::new(data_dir.clone())),
             data_dir,
             shell_write: Mutex::new(()),
             transition_epoch: Mutex::new(0),
@@ -322,16 +337,28 @@ impl BrokerState {
     /// Construct for remote mode from the saved choice; the connection is
     /// attempted by [`Self::start_saved_remote`] after the app is up.
     pub fn new_remote_pending(data_dir: PathBuf, url: String) -> Self {
-        let tokens = TokenStore::new(data_dir.clone());
+        let tokens = Arc::new(TokenStore::new(data_dir.clone()));
         let has_saved_token = tokens.load(&url).is_some();
+        let saved_grant = tokens.load_grant(&url);
         // Until the probe finishes there is still a backend to answer
-        // commands: the remote one (with a placeholder token when none is
+        // commands: the remote one (with a placeholder token when nothing is
         // saved — every call then fails with a clear auth error rather
         // than a crash, and the takeover pane is what the user sees).
-        let token = tokens
-            .load(&url)
-            .unwrap_or_else(|| zeroize::Zeroizing::new("akamgr_unconfigured".into()));
-        let config = RemoteConfig::new(&url, &token).unwrap_or_else(|_| {
+        // A saved device grant is deliberately *not* resumed here. Building a
+        // grant now would leave two live grants for one device — this one and
+        // the one `connect_remote` builds when `start_saved_remote` runs — and
+        // two holders of a rotating refresh token race on it and get the
+        // device revoked (see `RemoteConfig`'s own note). Until that single
+        // real grant connects, the placeholder answers commands with a clear
+        // auth error, exactly as the unset and pre-probe states already do.
+        //
+        // A management token does not rotate, so serving it immediately is
+        // safe and keeps token-mode startup working without waiting on a probe.
+        let config = match tokens.load(&url) {
+            Some(token) if saved_grant.is_none() => RemoteConfig::new(&url, &token).ok(),
+            _ => None,
+        }
+        .unwrap_or_else(|| {
             RemoteConfig::new("http://127.0.0.1:1", "akamgr_unconfigured").expect("static config")
         });
         let backend: Arc<dyn ManagementBackend> = Arc::new(
@@ -347,6 +374,9 @@ impl BrokerState {
                 connected: false,
                 error: None,
                 has_saved_token,
+                has_saved_grant: saved_grant.is_some(),
+                credential: None,
+                device_name: None,
                 capabilities: Vec::new(),
             }),
             tokens,
@@ -376,7 +406,7 @@ impl BrokerState {
             local: Mutex::new(None),
             remote: Mutex::new(None),
             profile: Mutex::new(BrokerProfileInfo::unset()),
-            tokens: TokenStore::new(data_dir.clone()),
+            tokens: Arc::new(TokenStore::new(data_dir.clone())),
             data_dir,
             shell_write: Mutex::new(()),
             transition_epoch: Mutex::new(0),
@@ -471,31 +501,93 @@ impl BrokerState {
         let _ = app.emit(EVT_BROKER, snapshot);
     }
 
+    /// Sign this Mac in to a hosted broker with a passkey.
+    ///
+    /// The ceremony runs in the system browser against the broker's own
+    /// origin, so the passkey the user already has for the web app is the
+    /// one that authorizes this app — see [`crate::passkey_signin`].
+    pub async fn sign_in_remote(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        url: String,
+        device_name: Option<String>,
+    ) -> Result<BrokerProfileInfo, String> {
+        let url = RemoteConfig::normalize_url(&url)?;
+        let device_name = device_name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(crate::passkey_signin::default_device_name);
+        let signed_in =
+            crate::passkey_signin::sign_in(&url, &device_name, crate::events::open_consent_url)
+                .await?;
+        // Store the refresh token before anything can rotate it. A rotation
+        // that outruns the first write would leave the keychain holding a
+        // superseded token, and presenting one of those revokes the device.
+        self.tokens
+            .save_grant(&url, &signed_in.refresh)
+            .map_err(|error| format!("could not store this device's sign-in: {error}"))?;
+        let credential =
+            crate::passkey_signin::grant_for(&url, &signed_in, self.tokens.clone());
+        let device_name = signed_in.device_name.clone();
+        self.commit_remote(app, url, credential, "passkey", None, Some(device_name))
+            .await
+    }
+
     /// Connect to (and switch to) a remote broker. `token: None` reuses the
-    /// saved one for that URL. On success the choice and token persist and
-    /// the local stack (if any) is torn down; on failure nothing changes
-    /// and the message is for the connect form.
+    /// saved credential for that URL, preferring a passkey device grant over
+    /// a management token. On success the choice persists and the local
+    /// stack (if any) is torn down; on failure nothing changes and the
+    /// message is for the connect form.
     pub async fn connect_remote(
         self: &Arc<Self>,
         app: &AppHandle,
         url: String,
         token: Option<String>,
     ) -> Result<BrokerProfileInfo, String> {
-        // Normalize before the saved-token lookup: tokens are stored under
-        // the canonical URL (what base_url() returns), so a re-typed variant
-        // of the same broker — different case, an explicit default port, a
-        // trailing slash — must collapse to the same key or the saved token
-        // is missed and the user is asked to paste it again.
+        // Normalize before the saved-credential lookup: credentials are
+        // stored under the canonical URL (what base_url() returns), so a
+        // re-typed variant of the same broker — different case, an explicit
+        // default port, a trailing slash — must collapse to the same key or
+        // the saved one is missed and the user is asked to paste it again.
         let url = RemoteConfig::normalize_url(&url)?;
-        let saved = self.tokens.load(&url);
-        let token = match token.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let explicit = token.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        // A passkey grant wins over a saved management token for the same
+        // broker: it is per-device and revocable by name, and it is where
+        // the migration is going. An explicitly pasted token still wins over
+        // both, because the user just chose it.
+        if explicit.is_none() {
+            if let Some(refresh) = self.tokens.load_grant(&url) {
+                let credential =
+                    crate::passkey_signin::resume_grant(&url, &refresh, self.tokens.clone());
+                return self
+                    .commit_remote(app, url, credential, "passkey", None, None)
+                    .await;
+            }
+        }
+        let token = match explicit {
             Some(token) => token.to_string(),
-            None => match &saved {
+            None => match self.tokens.load(&url) {
                 Some(saved) => saved.to_string(),
-                None => return Err("enter the broker's management token".into()),
+                None => return Err("sign in with a passkey, or enter a management token".into()),
             },
         };
-        let config = RemoteConfig::new(&url, &token)?;
+        let credential = Arc::new(aka_client::grant::ManageCredential::manage_token(&token));
+        self.commit_remote(app, url, credential, "token", Some(token), None)
+            .await
+    }
+
+    /// Probe the broker with a credential and, if it answers, make it the
+    /// active one. Shared by every way of arriving at a hosted broker.
+    async fn commit_remote(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        url: String,
+        credential: Arc<aka_client::grant::ManageCredential>,
+        kind: &str,
+        save_token: Option<String>,
+        device_name: Option<String>,
+    ) -> Result<BrokerProfileInfo, String> {
+        let config = RemoteConfig::with_credential(&url, credential)?;
         let url = config.base_url();
         let backend = Arc::new(
             RemoteBackend::new(config).with_opener(Arc::new(crate::events::open_consent_url)),
@@ -511,8 +603,10 @@ impl BrokerState {
             let Some(_commit) = self.transition_guard(epoch) else {
                 return Err(TRANSITION_SUPERSEDED.into());
             };
-            if let Err(error) = self.tokens.save(&url, &token) {
-                tracing::warn!(%error, "could not store the management token");
+            if let Some(token) = &save_token {
+                if let Err(error) = self.tokens.save(&url, token) {
+                    tracing::warn!(%error, "could not store the management token");
+                }
             }
             if let Err(error) = self.update_shell_config(|config| {
                 config.mode = Some("remote".into());
@@ -534,10 +628,13 @@ impl BrokerState {
             self.arm_sse(app, backend);
             let profile = BrokerProfileInfo {
                 mode: "remote".into(),
+                has_saved_token: self.tokens.load(&url).is_some(),
+                has_saved_grant: self.tokens.load_grant(&url).is_some(),
+                credential: Some(kind.to_string()),
+                device_name,
                 url: Some(url),
                 connected: true,
                 error: None,
-                has_saved_token: true,
                 capabilities,
             };
             self.set_profile(app, profile.clone());

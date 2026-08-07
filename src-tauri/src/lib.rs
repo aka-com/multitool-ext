@@ -13,6 +13,7 @@ mod clipboard;
 mod cloud_refresh;
 mod commands;
 mod events;
+mod passkey_signin;
 mod ssh_import;
 mod windows;
 

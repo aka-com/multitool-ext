@@ -189,6 +189,13 @@ pub enum AuditKind {
     ManagementTokenRevoked,
     ManagementTokenExpired,
     AuthenticationFailed,
+    /// A passkey was enrolled, used to sign in, stepped up, or removed. One
+    /// kind with an outcome rather than four kinds: the activity view reads
+    /// as a single "who signed in" thread that way, and the outcome is
+    /// already how every other multi-state event here is distinguished.
+    Passkey,
+    /// A desktop or CLI device grant was authorized or revoked.
+    DeviceGrant,
     /// Retained so activity logs written by older versions still deserialize.
     /// Peer identity verification was removed; nothing emits this.
     PeerIdentityMismatch,
@@ -290,6 +297,8 @@ impl AuditKind {
             AuditKind::ManagementTokenRevoked => "keyRound",
             AuditKind::ManagementTokenExpired => "clockAlert",
             AuditKind::AuthenticationFailed => "shieldAlert",
+            AuditKind::Passkey => "fingerprint",
+            AuditKind::DeviceGrant => "laptop",
             AuditKind::PeerIdentityMismatch => "shieldAlert",
             AuditKind::Requested => "bell",
             AuditKind::AllowedOnce => "circleCheck",

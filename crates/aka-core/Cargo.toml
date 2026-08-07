@@ -51,6 +51,8 @@ ssh-key = { workspace = true }
 rsa = { workspace = true }
 signature = { workspace = true }
 
+webauthn-rs = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Security.framework directly, rather than the `keyring` crate: only the raw
 # SecItem API exposes `kSecUseDataProtectionKeychain`, which is what keeps

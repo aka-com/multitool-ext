@@ -9,6 +9,7 @@
 //!   key, rate limited and idempotency-scoped by authenticated identity.
 
 pub mod manage;
+pub mod principal;
 pub mod wellknown;
 
 use std::io;
@@ -82,6 +83,10 @@ pub struct AppState {
     pub manage: Arc<crate::manage::LocalBackend>,
     /// The listener this router serves.
     pub transport: Transport,
+    /// The WebAuthn relying party, when this listener has an origin a browser
+    /// can reach it at. `None` on the Unix socket and on a TCP listener
+    /// served without `--public-url`; the sign-in routes then report why.
+    pub passkeys: Option<Arc<crate::auth::RelyingParty>>,
 }
 
 fn err(status: StatusCode, reason: ErrorReason) -> Response {
@@ -211,7 +216,7 @@ fn outcome_response(outcome: ExecOutcome) -> Response {
 /// 429 with machine-actionable backoff: a `Retry-After` header (whole
 /// seconds, rounded up) plus the same value in the body, so an agent knows
 /// how long to wait instead of guessing.
-fn err_rate_limited(reason: ErrorReason, retry_after: std::time::Duration) -> Response {
+pub(crate) fn err_rate_limited(reason: ErrorReason, retry_after: std::time::Duration) -> Response {
     let secs = (retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0)).max(1);
     (
         StatusCode::TOO_MANY_REQUESTS,
@@ -373,6 +378,10 @@ pub struct ServeOptions {
     /// The URL remote clients reach the TCP listener at; advertised in
     /// TCP-served discovery documents.
     pub public_url: Option<String>,
+    /// Serve the web app from this directory on the TCP listener. Same
+    /// origin as the manage API by construction — the session cookie, the
+    /// passkey's relying party, and the CSRF check all depend on that.
+    pub web_root: Option<std::path::PathBuf>,
     /// Bind the PG data-plane proxy and API direct endpoints to this
     /// address instead of loopback (for remote agents on the LAN). The
     /// credential legs on these are plaintext, so a non-loopback value must
@@ -550,10 +559,62 @@ pub fn router(broker: Arc<Broker>) -> Router {
 }
 
 pub fn router_for(broker: Arc<Broker>, transport: Transport) -> Router {
+    router_with(broker, transport, None)
+}
+
+/// [`router_for`] plus the web app, when the operator configured a bundle.
+pub fn router_with(
+    broker: Arc<Broker>,
+    transport: Transport,
+    web_root: Option<std::path::PathBuf>,
+) -> Router {
     let body_cap = broker.config.request_cap;
     let control_cap = broker.config.control_plane_request_cap;
+    // The relying party exists only where a browser can reach this broker at
+    // a name the operator chose. On the Unix socket it would be meaningless:
+    // opening that socket already requires being the broker's own user.
+    let passkeys = match &transport {
+        Transport::Tcp { .. } => match broker.public_origin() {
+            Ok(origin) => match crate::auth::RelyingParty::new(origin) {
+                Ok(party) => Some(Arc::new(party)),
+                Err(error) => {
+                    tracing::warn!("passkey sign-in is unavailable: {error}");
+                    None
+                }
+            },
+            Err(error) => {
+                // Ordinary for a broker served without --public-url; the
+                // routes report the same reason to anyone who asks.
+                tracing::debug!("passkey sign-in is unavailable: {error}");
+                None
+            }
+        },
+        Transport::Uds => None,
+    };
+    // Sign-in is network-only; opening enrollment is host-only. Neither
+    // surface is reachable from where the other lives, which is what keeps
+    // "who becomes the owner?" from being answerable by whoever finds the
+    // URL first.
+    let sign_in = match &transport {
+        Transport::Tcp { .. } => crate::auth::routes::router(),
+        Transport::Uds => crate::auth::routes::local_router(),
+    };
+    // The bundle rides the same listener as the API it calls. Only on TCP:
+    // there is no browser on the Unix socket.
+    let web_app = match &transport {
+        Transport::Tcp { .. } => crate::auth::webapp::router(web_root),
+        Transport::Uds => Router::new(),
+    };
+    let state = AppState {
+        manage: Arc::new(crate::manage::LocalBackend::new(broker.clone())),
+        broker,
+        transport,
+        passkeys,
+    };
     Router::new()
-        .nest("/v1/manage", manage::router())
+        .merge(sign_in)
+        .merge(web_app)
+        .nest("/v1/manage", manage::router(state.clone()))
         .route("/.well-known/agent-broker.json", get(get_manifest))
         .route("/instructions", get(get_instructions))
         .route("/v1/pair", post(post_pair))
@@ -583,11 +644,55 @@ pub fn router_for(broker: Arc<Broker>, transport: Transport) -> Router {
         // JSON string bodies inflate the wire size (escaping, base64): give
         // the transport head-room; the decoded body cap is enforced exactly.
         .layer(DefaultBodyLimit::max(body_cap + body_cap / 2 + 1024 * 1024))
-        .with_state(AppState {
-            manage: Arc::new(crate::manage::LocalBackend::new(broker.clone())),
-            broker,
-            transport,
-        })
+        .layer(axum::middleware::from_fn(browser_safety_headers))
+        .with_state(state)
+}
+
+/// Headers every response carries, for the browser's sake.
+///
+/// The sign-in pages are self-contained, so the policy can be absolute:
+/// `default-src 'none'` with script and style allowed only from this document
+/// itself. There is no CDN to compromise, no font host to be redirected, and
+/// no `connect-src` beyond our own origin — which matters because these are
+/// the pages a passkey ceremony runs on.
+///
+/// `frame-ancestors 'none'` is the load-bearing one: clickjacking the
+/// authorize page would let another site frame it and harvest a device grant
+/// from a user who thought they were clicking something else.
+async fn browser_safety_headers(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use axum::http::header::{HeaderName, HeaderValue};
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    // The default, for the API and the web app's bundle: everything comes
+    // from this origin and inline script is not permitted at all. The two
+    // sign-in pages are inline by necessity and set their own policy naming
+    // a per-response nonce, so this does not overwrite one already there.
+    headers
+        .entry(HeaderName::from_static("content-security-policy"))
+        .or_insert(HeaderValue::from_static(
+            "default-src 'none'; script-src 'self'; style-src 'self'; \
+             img-src 'self' data:; font-src 'self'; connect-src 'self'; \
+             form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+        ));
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    // A code or a session cookie must not survive in a shared cache. The
+    // web app's fingerprinted assets set their own, longer value and keep
+    // it — their names contain their content hash, so a stale one is
+    // impossible.
+    headers
+        .entry(axum::http::header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Bind the control-plane socket and serve. [`Broker::new`] acquired the OS
@@ -709,11 +814,12 @@ pub async fn serve_with(broker: Arc<Broker>, options: ServeOptions) -> crate::Re
     broker.set_public_url(options.public_url.clone());
     let (tcp_addr, tcp_task) = match tcp_listener {
         Some((tcp_listener, bound)) => {
-            let tcp_app = router_for(
+            let tcp_app = router_with(
                 broker.clone(),
                 Transport::Tcp {
                     public_url: options.public_url.clone().map(Arc::from),
                 },
+                options.web_root.clone(),
             );
             let task = tokio::spawn(async move {
                 if let Err(e) = axum::serve(

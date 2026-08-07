@@ -308,6 +308,7 @@ pub trait CatalogRepository: CatalogReader {
         ordered_ids: &[Uuid],
     ) -> Result<Vec<Connection>>;
     async fn set_menu_bar_hides_dock(&self, workspace: &WorkspaceContext, on: bool) -> Result<()>;
+    async fn set_legacy_manage_token(&self, workspace: &WorkspaceContext, on: bool) -> Result<()>;
     async fn set_confirm_ssh_host_keys(&self, workspace: &WorkspaceContext, on: bool)
         -> Result<()>;
 }
@@ -695,6 +696,10 @@ impl CatalogRepository for Store {
 
     async fn set_menu_bar_hides_dock(&self, _workspace: &WorkspaceContext, on: bool) -> Result<()> {
         Store::set_menu_bar_hides_dock(self, on)
+    }
+
+    async fn set_legacy_manage_token(&self, _workspace: &WorkspaceContext, on: bool) -> Result<()> {
+        Store::set_legacy_manage_token(self, on)
     }
 
     async fn set_confirm_ssh_host_keys(

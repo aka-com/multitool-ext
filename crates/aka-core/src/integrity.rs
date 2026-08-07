@@ -297,6 +297,7 @@ fn sealed_state_exists(paths: &Paths) -> Result<bool> {
         paths.index_file(),
         paths.access_file(),
         paths.identity_file(),
+        paths.auth_file(),
         paths.endpoints_file(),
         paths.audit_seal_file(),
         paths.health_file(),

@@ -640,6 +640,7 @@ pub fn settings_dto(broker: &Broker) -> SettingsDto {
     SettingsDto {
         menu_bar_hides_dock: settings.menu_bar_hides_dock,
         confirm_ssh_host_keys: settings.confirm_ssh_host_keys,
+        legacy_manage_token: settings.legacy_manage_token,
     }
 }
 
@@ -1647,6 +1648,10 @@ pub struct SettingsPatchBody {
     pub menu_bar_hides_dock: Option<bool>,
     #[serde(default)]
     pub confirm_ssh_host_keys: Option<bool>,
+    /// Retire (or restore) the global management token. We refuse this while
+    /// no passkey is enrolled — see [`crate::broker::Broker::ui_set_legacy_manage_token`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_manage_token: Option<bool>,
 }
 
 /* -------------------------------- backend --------------------------------- */
@@ -1882,6 +1887,18 @@ pub trait ManagementBackend: Send + Sync {
     async fn clear_activity(&self) -> ManageResult<()>;
 
     /* cloud sessions minted elsewhere */
+    /// The connections `install_id` owns the credentials for, reduced to
+    /// what minting needs.
+    ///
+    /// Deliberately not "filter the output of `list_connections`". The
+    /// background refresher is the only caller, it runs unattended, and it
+    /// should hold `cloud:push` and nothing else — so the narrow question
+    /// gets a narrow route rather than the catalog plus a client-side
+    /// filter.
+    async fn pushable_connections(
+        &self,
+        install_id: &str,
+    ) -> ManageResult<Vec<aka_api::PushableConnectionDto>>;
     /// Hand this broker a session for a connection whose credentials live
     /// on another machine. The pusher is the machine that owns them; the
     /// broker only ever holds material that expires on its own.
@@ -1892,6 +1909,8 @@ pub trait ManagementBackend: Send + Sync {
     async fn set_menu_bar_hides_dock(&self, on: bool) -> ManageResult<()>;
     /// Ask before trusting a first-seen SSH host key.
     async fn set_confirm_ssh_host_keys(&self, on: bool) -> ManageResult<()>;
+    /// Retire the global management token once passkeys are established.
+    async fn set_legacy_manage_token(&self, on: bool) -> ManageResult<()>;
 
     /* discovery */
     async fn agent_setup(&self) -> ManageResult<String>;
@@ -2567,6 +2586,64 @@ impl ManagementBackend for LocalBackend {
         })
     }
 
+    async fn pushable_connections(
+        &self,
+        install_id: &str,
+    ) -> ManageResult<Vec<aka_api::PushableConnectionDto>> {
+        // An empty install id would match every connection whose origin was
+        // never recorded, so it matches nothing instead.
+        if install_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pushable = Vec::new();
+        for connection in self.broker.store.list_connections(&self.broker.workspace) {
+            let crate::types::ConnectionConfig::Cloud {
+                provider:
+                    crate::types::CloudProvider::AwsProfile {
+                        profile,
+                        origin,
+                        region,
+                        origin_label: _,
+                        role_arn,
+                        external_id,
+                        session_policy_arn,
+                        session_policy,
+                        session_ttl_secs,
+                    },
+            } = &connection.config
+            else {
+                continue;
+            };
+            // Only connections this install owns the files for. A local
+            // broker that can read the same ~/.aws mints at request time
+            // and refuses pushes — listing them here would make the app
+            // spend an STS call per tick on credentials the push path
+            // then throws away (see `minted_elsewhere` on CloudDto).
+            if origin != install_id || profile.is_empty() {
+                continue;
+            }
+            if !origin.is_empty() && origin == self.broker.install_id() {
+                continue;
+            }
+            pushable.push(aka_api::PushableConnectionDto {
+                connection_id: connection.id.to_string(),
+                name: connection.name.clone(),
+                source_profile: profile.clone(),
+                region: region.clone(),
+                role_arn: role_arn.clone(),
+                external_id: external_id.clone(),
+                session_policy_arn: session_policy_arn.clone(),
+                session_policy: session_policy.clone(),
+                session_ttl_secs: *session_ttl_secs,
+                pushed_expires_in_seconds: self
+                    .broker
+                    .pushed_cloud_sessions
+                    .remaining_seconds(connection.id),
+            });
+        }
+        Ok(pushable)
+    }
+
     async fn push_cloud_session(&self, push: aka_api::CloudSessionPushDto) -> ManageResult<()> {
         let id = uuid::Uuid::parse_str(&push.connection_id)
             .map_err(|_| crate::error::CoreError::ConnectionNotFound)?;
@@ -2638,6 +2715,13 @@ impl ManagementBackend for LocalBackend {
     async fn set_confirm_ssh_host_keys(&self, on: bool) -> ManageResult<()> {
         self.blocking_async(
             move |broker| async move { broker.ui_set_confirm_ssh_host_keys(on).await },
+        )
+        .await
+    }
+
+    async fn set_legacy_manage_token(&self, on: bool) -> ManageResult<()> {
+        self.blocking_async(
+            move |broker| async move { broker.ui_set_legacy_manage_token(on).await },
         )
         .await
     }

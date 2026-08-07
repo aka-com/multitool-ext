@@ -1133,6 +1133,14 @@ pub enum ConfirmationMethod {
     /// Possession of the management token authorized the action (a hosted
     /// broker managed over its manage API — no user is at the machine).
     ManagementToken,
+    /// A person who authenticated to the broker with a passkey, in a browser or
+    /// on a device they authorized. Distinct from [`Self::ManagementToken`]
+    /// because it names a human: the entry traces to an account and to the
+    /// credential that can be revoked to end it.
+    Passkey,
+    /// A named, scoped automation token. No human was involved, which is why
+    /// nothing requiring a step-up can confirm this way.
+    AutomationToken,
 }
 
 /// Attribution carried with every decision: who decided, from where. The
@@ -1201,6 +1209,25 @@ pub struct Settings {
     /// better answer where it is available.
     #[serde(default)]
     pub confirm_ssh_host_keys: bool,
+    /// Whether the global management token still authenticates the manage
+    /// plane.
+    ///
+    /// On by default, because turning it off on upgrade would lock out every
+    /// existing install. It is the credential passkeys replace: one bearer
+    /// string, the same wherever anyone pastes it, revocable only for
+    /// everybody at once, and — because it has no ceremony behind it — exempt
+    /// from every step-up on the plane. Once a passkey is enrolled and the
+    /// devices that need one are signed in, turning this off finishes the
+    /// migration.
+    ///
+    /// We refuse to turn it off while no passkey is enrolled: that would leave
+    /// nothing able to sign in at all, recoverable only from the broker host.
+    #[serde(default = "enabled")]
+    pub legacy_manage_token: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -1209,6 +1236,7 @@ impl Default for Settings {
             legacy_pg_trusted_ca_bundle_path: None,
             menu_bar_hides_dock: false,
             confirm_ssh_host_keys: false,
+            legacy_manage_token: true,
         }
     }
 }

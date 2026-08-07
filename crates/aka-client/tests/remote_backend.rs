@@ -317,7 +317,15 @@ async fn byo_oauth_relays_through_the_client_loopback() {
     // The opener stands in for the user's browser: capture the consent URL.
     let (url_tx, mut url_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let backend = RemoteBackend::new(
-        RemoteConfig::new(&h.base, h.backend.config().expect("http backend").token()).unwrap(),
+        RemoteConfig::with_credential(
+            &h.base,
+            h.backend
+                .config()
+                .expect("http backend")
+                .credential()
+                .clone(),
+        )
+        .unwrap(),
     )
     .with_opener(std::sync::Arc::new(move |url: &str| {
         let _ = url_tx.send(url.to_string());

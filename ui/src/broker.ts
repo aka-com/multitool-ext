@@ -7,6 +7,7 @@ import type { BrokerProfile, ConnectionType } from './types';
 
 export const ONEPASSWORD_PROVIDER_CAPABILITY = 'onepassword_provider_v1';
 export const TYPED_CREDENTIALS_CAPABILITY = 'typed_credentials_v1';
+export const PASSKEY_AUTH_CAPABILITY = 'passkey_auth_v1';
 
 export const LOCAL_BROKER: BrokerProfile = {
   mode: 'local',
@@ -14,6 +15,9 @@ export const LOCAL_BROKER: BrokerProfile = {
   connected: true,
   error: null,
   has_saved_token: false,
+  has_saved_grant: false,
+  credential: null,
+  device_name: null,
   capabilities: [ONEPASSWORD_PROVIDER_CAPABILITY, TYPED_CREDENTIALS_CAPABILITY],
 };
 
@@ -37,6 +41,19 @@ export function brokerLabel(profile: BrokerProfile): string {
   } catch {
     return profile.url;
   }
+}
+
+/** Whether this broker can be signed in to with a passkey at all. A broker
+ * predating the auth plane sees only the management token, and the setup
+ * pane must not offer a sign-in it would fail. */
+export function supportsPasskeys(profile: BrokerProfile): boolean {
+  return profile.capabilities.includes(PASSKEY_AUTH_CAPABILITY);
+}
+
+/** Whether this connection is still on the management token. The setup
+ * pane offers to move it to a passkey, which is per-device and revocable. */
+export function usesLegacyToken(profile: BrokerProfile): boolean {
+  return profile.mode === 'remote' && profile.credential === 'token';
 }
 
 export type BrokerTone = 'local' | 'ok' | 'pending' | 'error';
@@ -67,7 +84,12 @@ export function brokerTakeover(
   if (profile.mode === 'unset') return 'choose';
   if (profile.connected) return null;
   if (profile.mode === 'local') return 'error';
-  if (profile.mode === 'remote' && !profile.has_saved_token) return 'setup';
+  // Nothing saved for this broker means the user has never signed in to it,
+  // so the setup pane is the only useful thing to show — not a retry loop
+  // against a credential that does not exist.
+  if (profile.mode === 'remote' && !profile.has_saved_token && !profile.has_saved_grant) {
+    return 'setup';
+  }
   return profile.error ? 'error' : 'connecting';
 }
 

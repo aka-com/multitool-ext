@@ -40,6 +40,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = "1"
 sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Building the /authorize query and parsing the loopback callback.
+serde_urlencoded = "0.7"
 glob = "0.3"
 shell-words = "1"
 url = "2"

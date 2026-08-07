@@ -469,6 +469,14 @@ export interface BrokerProfile {
   error: string | null;
   /** A saved management token exists for `url`. */
   has_saved_token: boolean;
+  /** A saved passkey device grant exists for `url`. Preferred over a saved
+   * token: it is per-device and revocable by name from the broker. */
+  has_saved_grant: boolean;
+  /** How the live connection authenticated. `token` is the legacy path and
+   * the header offers to move it to a passkey. */
+  credential: 'passkey' | 'token' | null;
+  /** What this Mac is called in the broker's authorized-device list. */
+  device_name: string | null;
   /** Optional management features advertised by the active broker. */
   capabilities: string[];
 }
@@ -746,6 +754,14 @@ export interface CommandMap {
   get_local_username: CommandSpec<undefined, string>;
   get_broker_profile: CommandSpec<undefined, BrokerProfile>;
   connect_remote_broker: CommandSpec<{ url: string; token?: string | null }, BrokerProfile>;
+  /** Opens the broker's sign-in page in the system browser and waits for
+   * the user to confirm with their passkey. Slow by nature. */
+  sign_in_remote_broker: CommandSpec<
+    { url: string; deviceName?: string | null },
+    BrokerProfile
+  >;
+  /** This Mac's suggested name in the broker's device list. */
+  default_device_name: CommandSpec<undefined, string>;
   retry_remote_broker: CommandSpec<undefined, BrokerProfile>;
   switch_broker_local: CommandSpec<undefined, BrokerProfile>;
   list_secrets: CommandSpec<undefined, SecretSummary[]>;

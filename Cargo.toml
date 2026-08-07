@@ -72,6 +72,26 @@ ssh-key = { version = "0.6", default-features = false, features = ["std", "ed255
 rsa = { version = "0.9", default-features = false, features = ["std", "sha2"] }
 signature = "2"
 
+# Passkey sign-in. The relying-party half of WebAuthn only: challenge
+# generation, and verification of what the browser signs. MPL-2.0, which is
+# file-level copyleft and so does not reach this tree; it is the one
+# maintained Rust implementation of a protocol that is unforgiving to
+# hand-roll.
+#
+# Pinned to the 0.6 line, and exactly, for one reason: 0.5 verifies through
+# native OpenSSL, and `multitool` cross-compiles to both Linux targets with
+# zig (see scripts/npm-dist.sh). openssl-sys would need a cross-built OpenSSL
+# per target in a tree that is otherwise pure-Rust and rustls-only. 0.6
+# replaced it with RustCrypto, so it cross-compiles with everything else. The
+# cost is a version upstream still labels `-dev`, hence the exact pin: this
+# must not drift underneath a security-critical path without a deliberate
+# bump.
+#
+# Ceremony state is deliberately *not* serialized (no
+# `danger-allow-state-serialisation`): a challenge is one-use and expiring, so
+# it lives in memory and dies with the process rather than on disk.
+webauthn-rs = { version = "=0.6.1-dev", features = ["resident-key-support"] }
+
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 

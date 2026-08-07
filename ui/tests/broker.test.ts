@@ -8,6 +8,8 @@ import {
   brokerTone,
   remoteEndpointCaution,
   supportsOnePassword,
+  supportsPasskeys,
+  usesLegacyToken,
 } from '../src/broker';
 import type { BrokerProfile } from '../src/types';
 
@@ -18,6 +20,9 @@ function remote(overrides: Partial<BrokerProfile> = {}): BrokerProfile {
     connected: true,
     error: null,
     has_saved_token: true,
+    has_saved_grant: false,
+    credential: 'token',
+    device_name: null,
     capabilities: ['onepassword_provider_v1'],
     ...overrides,
   };
@@ -80,6 +85,9 @@ function unset(overrides: Partial<BrokerProfile> = {}): BrokerProfile {
     connected: false,
     error: null,
     has_saved_token: false,
+    has_saved_grant: false,
+    credential: null,
+    device_name: null,
     capabilities: [],
     ...overrides,
   };
@@ -104,4 +112,40 @@ test('remote endpoint cautions describe reachability per type', () => {
   assert.match(remoteEndpointCaution(remote(), 'api') ?? '', /advertised host/);
   assert.match(remoteEndpointCaution(remote(), 'pg') ?? '', /broker host/);
   assert.match(remoteEndpointCaution(remote(), 'ssh') ?? '', /broker host/);
+});
+
+
+test('a saved passkey sign-in is enough to skip the setup pane', () => {
+  // Before passkeys, a saved management token was the only thing that meant
+  // "this broker has been set up". A device grant means it too, and a broker
+  // reached that way has no token to have saved.
+  const grantOnly = remote({
+    connected: false,
+    has_saved_token: false,
+    has_saved_grant: true,
+  });
+  assert.equal(brokerTakeover(grantOnly, false), 'connecting');
+
+  // Nothing saved at all is still the setup pane: retrying against a
+  // credential that does not exist would just loop.
+  const nothingSaved = remote({
+    connected: false,
+    has_saved_token: false,
+    has_saved_grant: false,
+  });
+  assert.equal(brokerTakeover(nothingSaved, false), 'setup');
+});
+
+test('the legacy credential is identified so it can be migrated', () => {
+  assert.equal(usesLegacyToken(remote({ credential: 'token' })), true);
+  assert.equal(usesLegacyToken(remote({ credential: 'passkey' })), false);
+  assert.equal(usesLegacyToken(remote({ credential: null })), false);
+  // Local mode has no credential to migrate.
+  assert.equal(usesLegacyToken(LOCAL_BROKER), false);
+});
+
+test('a broker predating passkeys is not offered a passkey sign-in', () => {
+  assert.equal(supportsPasskeys(remote({ capabilities: ['passkey_auth_v1'] })), true);
+  assert.equal(supportsPasskeys(remote({ capabilities: ['onepassword_provider_v1'] })), false);
+  assert.equal(supportsPasskeys(remote({ capabilities: [] })), false);
 });
