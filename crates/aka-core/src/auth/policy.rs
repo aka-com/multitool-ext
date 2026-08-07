@@ -167,7 +167,9 @@ impl ScopeSet {
     }
 
     pub fn iter(self) -> impl Iterator<Item = Scope> {
-        Scope::ALL.into_iter().filter(move |scope| self.contains(*scope))
+        Scope::ALL
+            .into_iter()
+            .filter(move |scope| self.contains(*scope))
     }
 }
 
@@ -614,10 +616,7 @@ mod tests {
 
     #[test]
     fn changing_who_can_sign_in_always_steps_up() {
-        for route in [
-            "/v1/manage/identity/rotate",
-            "/v1/manage/management-token",
-        ] {
+        for route in ["/v1/manage/identity/rotate", "/v1/manage/management-token"] {
             let requirement = requirement(&Method::POST, route);
             assert_eq!(requirement.scope, Scope::IdentityManage, "{route}");
             assert_eq!(requirement.step_up, StepUp::Always, "{route}");
@@ -694,7 +693,10 @@ mod tests {
     fn no_route_is_listed_twice() {
         let mut seen = std::collections::HashSet::new();
         for (method, route, _) in OVERRIDES {
-            assert!(seen.insert((*method, *route)), "duplicate entry for {route}");
+            assert!(
+                seen.insert((*method, *route)),
+                "duplicate entry for {route}"
+            );
         }
     }
 }

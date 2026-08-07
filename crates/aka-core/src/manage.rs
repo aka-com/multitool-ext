@@ -2694,7 +2694,10 @@ impl ManagementBackend for LocalBackend {
             .map_err(|_| crate::error::CoreError::ConnectionNotFound)?;
         // Refuse a push for a connection that would never serve it: a
         // silent no-op here would look like a working refresh loop.
-        let connection = self.broker.store.connection_by_id(&self.broker.workspace, &id)?;
+        let connection = self
+            .broker
+            .store
+            .connection_by_id(&self.broker.workspace, &id)?;
         // Only a connection this broker cannot mint for itself has anything
         // to do with a push. Accepting one for a connection whose files are
         // right here would store material that the mint path never reads —

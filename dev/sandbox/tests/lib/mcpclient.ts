@@ -1,7 +1,7 @@
 // An MCP client for the broker's own MCP host (in-process, reverse-proxied
 // at /mcp on the control socket).
 //
-// This is the surface `claude mcp add multitool -- multitool mcp` ends up talking
+// This is the surface `claude mcp add multitool -- aka mcp` ends up talking
 // to, so the suite exercises it the way a client does: streamable HTTP,
 // `initialize` then a session id on every later request, responses that may
 // arrive as JSON or as a one-frame event stream.

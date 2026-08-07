@@ -423,8 +423,8 @@ impl BrokerState {
         // fails with a clear error instead of a crash, exactly like the
         // pre-probe placeholder in `new_remote_pending`. The chooser
         // takeover is what the user sees.
-        let config = RemoteConfig::new("http://127.0.0.1:1", "akamgr_unconfigured")
-            .expect("static config");
+        let config =
+            RemoteConfig::new("http://127.0.0.1:1", "akamgr_unconfigured").expect("static config");
         let backend: Arc<dyn ManagementBackend> = Arc::new(
             RemoteBackend::new(config).with_opener(Arc::new(crate::events::open_consent_url)),
         );
@@ -553,8 +553,7 @@ impl BrokerState {
         self.tokens
             .save_grant(&url, &signed_in.refresh)
             .map_err(|error| format!("could not store this device's sign-in: {error}"))?;
-        let credential =
-            crate::passkey_signin::grant_for(&url, &signed_in, self.tokens.clone());
+        let credential = crate::passkey_signin::grant_for(&url, &signed_in, self.tokens.clone());
         let device_name = signed_in.device_name.clone();
         self.commit_remote(app, url, credential, "passkey", None, Some(device_name))
             .await
@@ -955,7 +954,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(matches!(saved_mode(dir.path()), SavedMode::Remote(url) if url == "https://broker.example"));
+        assert!(
+            matches!(saved_mode(dir.path()), SavedMode::Remote(url) if url == "https://broker.example")
+        );
     }
 
     #[test]

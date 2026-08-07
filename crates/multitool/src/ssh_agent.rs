@@ -126,7 +126,7 @@ impl AgentSocket {
                     // client that left between poll and accept) and says
                     // nothing about the listener, so keep serving.
                     Err(error) => {
-                        eprintln!("multitool ssh-agent: could not accept a client: {error}");
+                        eprintln!("aka ssh-agent: could not accept a client: {error}");
                         continue;
                     }
                 },
@@ -139,7 +139,7 @@ impl AgentSocket {
                     // The agent protocol has no error channel, so a client
                     // sees only "Permission denied (publickey)". Saying why
                     // here is the only chance to name the real cause.
-                    eprintln!("multitool ssh-agent: {error}");
+                    eprintln!("aka ssh-agent: {error}");
                 }
             });
         }
@@ -222,7 +222,7 @@ async fn authenticate(server: &mut UnixStream, secret: &str) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "the endpoint refused this secret — reissue the endpoint \
-             (`multitool conn endpoint <name> --issue`) if it was rotated",
+             (`aka conn endpoint <name> --issue`) if it was rotated",
         ));
     }
     Ok(())

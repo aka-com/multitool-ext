@@ -32,7 +32,7 @@ pub struct CloudSession {
     /// RFC3339 expiry of the minted material.
     pub expires_at: String,
     pub expires_in_seconds: u64,
-    /// Shell exports (`KEY=value` lines) for `eval "$(multitool cloud env …)"`.
+    /// Shell exports (`KEY=value` lines) for `eval "$(aka cloud env …)"`.
     pub env: Vec<(String, String)>,
     /// Provider-specific payload (AWS process JSON fields, etc.).
     pub credentials: serde_json::Value,
@@ -95,7 +95,10 @@ fn parse_aws_ini(text: &str) -> Vec<(String, BTreeMap<String, String>)> {
         if line.is_empty() || line.starts_with(['#', ';']) {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
             sections.push((name.trim().to_string(), BTreeMap::new()));
             continue;
         }
@@ -103,10 +106,7 @@ fn parse_aws_ini(text: &str) -> Vec<(String, BTreeMap<String, String>)> {
             continue;
         };
         if let Some((_, props)) = sections.last_mut() {
-            props.insert(
-                key.trim().to_ascii_lowercase(),
-                value.trim().to_string(),
-            );
+            props.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
         }
     }
     sections
@@ -204,13 +204,12 @@ const PUSHED_SESSION_FLOOR: chrono::TimeDelta = chrono::TimeDelta::seconds(60);
 /// TTL — so a push whose expiry runs materially past the ceiling is either
 /// a clock problem or a client minting outside the rules, and holding it
 /// would make this broker serve it for however long it claims.
-const PUSHED_SESSION_CEILING: chrono::TimeDelta = chrono::TimeDelta::seconds(
-    crate::types::MAX_CLOUD_SESSION_TTL_SECS as i64 + 300,
-);
+const PUSHED_SESSION_CEILING: chrono::TimeDelta =
+    chrono::TimeDelta::seconds(crate::types::MAX_CLOUD_SESSION_TTL_SECS as i64 + 300);
 
 /// Whether a name is a plain shell/POSIX environment variable name.
 ///
-/// The documented way to use a session is `eval "$(multitool cloud env …)"`,
+/// The documented way to use a session is `eval "$(aka cloud env …)"`,
 /// which makes every exported name shell source. Values are quoted at the
 /// print site; a name cannot be, so it has to be a name and nothing else —
 /// otherwise `x; curl … | sh` is an export line. Broker-minted sessions only
@@ -223,11 +222,7 @@ pub fn is_env_var_name(name: &str) -> bool {
 
 impl PushedSessions {
     pub fn store(&self, connection: Uuid, session: CloudSession) -> Result<(), CloudMintError> {
-        if let Some((name, _)) = session
-            .env
-            .iter()
-            .find(|(name, _)| !is_env_var_name(name))
-        {
+        if let Some((name, _)) = session.env.iter().find(|(name, _)| !is_env_var_name(name)) {
             return Err(CloudMintError::Config(format!(
                 "pushed session exports {name:?}, which is not an environment \
                  variable name"
@@ -257,7 +252,13 @@ impl PushedSessions {
         self.by_connection
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .insert(connection, PushedSession { session, expires_at });
+            .insert(
+                connection,
+                PushedSession {
+                    session,
+                    expires_at,
+                },
+            );
         Ok(())
     }
 
@@ -399,9 +400,7 @@ async fn aws_caller_identity(
             .credentials
             .get(name)
             .and_then(|value| value.as_str())
-            .ok_or_else(|| {
-                CloudMintError::Config(format!("the minted session carries no {name}"))
-            })
+            .ok_or_else(|| CloudMintError::Config(format!("the minted session carries no {name}")))
     };
     let access_key = credential("AccessKeyId")?;
     let secret_key = credential("SecretAccessKey")?;
@@ -433,7 +432,10 @@ async fn aws_caller_identity(
         ),
         ("x-amz-content-sha256".to_string(), payload_hash.clone()),
         ("x-amz-date".to_string(), amz_date.clone()),
-        ("x-amz-security-token".to_string(), session_token.to_string()),
+        (
+            "x-amz-security-token".to_string(),
+            session_token.to_string(),
+        ),
     ];
     let signature = sigv4::sign(&SignParams {
         access_key: &access_key,
@@ -498,9 +500,7 @@ pub async fn mint_session(
     install: &InstallContext<'_>,
 ) -> Result<CloudSession, CloudMintError> {
     let ConnectionConfig::Cloud { provider } = &connection.config else {
-        return Err(CloudMintError::Config(
-            "not a cloud connection".to_string(),
-        ));
+        return Err(CloudMintError::Config("not a cloud connection".to_string()));
     };
     match provider {
         CloudProvider::Aws {
@@ -548,20 +548,17 @@ pub async fn mint_session(
             // hosted one. The message names the home the connection was
             // created from rather than promising a different computer.
             if origin.is_empty() || origin != install.id {
-                return install
-                    .pushed
-                    .take_live(connection.id)
-                    .ok_or_else(|| {
-                        let where_ = match origin_label.as_deref() {
-                            Some(label) => format!("the Multitool install at {label}"),
-                            None => "the Multitool install that owns it".to_string(),
-                        };
-                        CloudMintError::Config(format!(
-                            "this connection mints from the {profile:?} AWS profile in \
+                return install.pushed.take_live(connection.id).ok_or_else(|| {
+                    let where_ = match origin_label.as_deref() {
+                        Some(label) => format!("the Multitool install at {label}"),
+                        None => "the Multitool install that owns it".to_string(),
+                    };
+                    CloudMintError::Config(format!(
+                        "this connection mints from the {profile:?} AWS profile in \
                              {where_}. Open Multitool there to refresh it — this broker \
                              cannot read those credentials."
-                        ))
-                    });
+                    ))
+                });
             }
             let keys = aws_profile_keys(profile)?;
             let region = region
@@ -853,7 +850,10 @@ async fn mint_aws_session(
     let amz_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let mut signed_headers = vec![
         ("host".to_string(), host.clone()),
-        ("content-type".to_string(), "application/x-www-form-urlencoded".to_string()),
+        (
+            "content-type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        ),
         ("x-amz-content-sha256".to_string(), payload_hash.clone()),
         ("x-amz-date".to_string(), amz_date.clone()),
     ];
@@ -901,18 +901,15 @@ async fn mint_aws_session(
         )));
     }
 
-    let access_key_id = xml_tag(&text, "AccessKeyId").ok_or_else(|| {
-        CloudMintError::Upstream("AWS STS returned no AccessKeyId".to_string())
-    })?;
+    let access_key_id = xml_tag(&text, "AccessKeyId")
+        .ok_or_else(|| CloudMintError::Upstream("AWS STS returned no AccessKeyId".to_string()))?;
     let secret_access_key = xml_tag(&text, "SecretAccessKey").ok_or_else(|| {
         CloudMintError::Upstream("AWS STS returned no SecretAccessKey".to_string())
     })?;
-    let session_token = xml_tag(&text, "SessionToken").ok_or_else(|| {
-        CloudMintError::Upstream("AWS STS returned no SessionToken".to_string())
-    })?;
-    let expiration = xml_tag(&text, "Expiration").ok_or_else(|| {
-        CloudMintError::Upstream("AWS STS returned no Expiration".to_string())
-    })?;
+    let session_token = xml_tag(&text, "SessionToken")
+        .ok_or_else(|| CloudMintError::Upstream("AWS STS returned no SessionToken".to_string()))?;
+    let expiration = xml_tag(&text, "Expiration")
+        .ok_or_else(|| CloudMintError::Upstream("AWS STS returned no Expiration".to_string()))?;
     let expires_at = DateTime::parse_from_rfc3339(&expiration)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|_| {
@@ -1010,9 +1007,7 @@ async fn mint_azure(
     let access_token = body
         .get("access_token")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            CloudMintError::Upstream("Entra returned no access_token".to_string())
-        })?;
+        .ok_or_else(|| CloudMintError::Upstream("Entra returned no access_token".to_string()))?;
     let expires_in = body
         .get("expires_in")
         .and_then(|v| v.as_u64())
@@ -1113,9 +1108,15 @@ async fn mint_gcp(
     });
 
     let mut env = vec![
-        ("CLOUDSDK_AUTH_ACCESS_TOKEN".to_string(), bearer.token.to_string()),
+        (
+            "CLOUDSDK_AUTH_ACCESS_TOKEN".to_string(),
+            bearer.token.to_string(),
+        ),
         // google-auth / some libraries honor this for ADC-style bearer use.
-        ("GOOGLE_OAUTH_ACCESS_TOKEN".to_string(), bearer.token.to_string()),
+        (
+            "GOOGLE_OAUTH_ACCESS_TOKEN".to_string(),
+            bearer.token.to_string(),
+        ),
     ];
     if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
         env.push(("CLOUDSDK_CORE_PROJECT".to_string(), project.to_string()));
@@ -1210,7 +1211,9 @@ fn sts_endpoint_url(region: &str) -> Result<Url, CloudMintError> {
         )));
     }
     Url::parse(&format!("https://sts.{region}.amazonaws.com/")).map_err(|error| {
-        CloudMintError::Config(format!("invalid STS endpoint for region {region:?}: {error}"))
+        CloudMintError::Config(format!(
+            "invalid STS endpoint for region {region:?}: {error}"
+        ))
     })
 }
 
@@ -1268,10 +1271,7 @@ mod tests {
         assert_eq!(sanitize_role_session_name("a b"), "a-b");
         assert_eq!(sanitize_role_session_name(""), "multitool");
         assert_eq!(sanitize_role_session_name("x"), "multitool");
-        assert_eq!(
-            sanitize_role_session_name(&"n".repeat(80)).len(),
-            64
-        );
+        assert_eq!(sanitize_role_session_name(&"n".repeat(80)).len(), 64);
     }
 
     #[test]
@@ -1335,9 +1335,7 @@ region = us-west-2
                 .unwrap()
         };
         let param = |form: &[(String, String)], key: &str| {
-            form.iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.clone())
+            form.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
         };
 
         // No role, no policy: a plain re-key of the caller.
@@ -1346,9 +1344,16 @@ region = us-west-2
 
         // A policy without a role federates, so AWS intersects the caller's
         // access with the leash — this is what makes reuse safe.
-        let federated =
-            aws_sts_form(None, None, Some("arn:aws:iam::aws:policy/ReadOnlyAccess"), None, 900, "claude code", false)
-                .unwrap();
+        let federated = aws_sts_form(
+            None,
+            None,
+            Some("arn:aws:iam::aws:policy/ReadOnlyAccess"),
+            None,
+            900,
+            "claude code",
+            false,
+        )
+        .unwrap();
         assert_eq!(action(&federated), "GetFederationToken");
         assert_eq!(
             param(&federated, "PolicyArns.member.1.arn").as_deref(),
@@ -1369,16 +1374,25 @@ region = us-west-2
         )
         .unwrap();
         assert_eq!(action(&assumed), "AssumeRole");
-        assert_eq!(param(&assumed, "ExternalId").as_deref(), Some("customer-123"));
+        assert_eq!(
+            param(&assumed, "ExternalId").as_deref(),
+            Some("customer-123")
+        );
         assert!(param(&assumed, "Policy").is_some());
 
         // Temporary caller material can only assume a role: STS refuses the
         // other two actions, and re-exporting it would be unbounded.
         assert!(aws_sts_form(None, None, None, None, 900, "agent", true).is_err());
-        assert!(
-            aws_sts_form(None, None, Some("arn:aws:iam::aws:policy/ReadOnlyAccess"), None, 900, "agent", true)
-                .is_err()
-        );
+        assert!(aws_sts_form(
+            None,
+            None,
+            Some("arn:aws:iam::aws:policy/ReadOnlyAccess"),
+            None,
+            900,
+            "agent",
+            true
+        )
+        .is_err());
         assert!(aws_sts_form(
             Some("arn:aws:iam::123456789012:role/Agents"),
             None,
@@ -1439,7 +1453,7 @@ region = us-west-2
             assert!(!is_env_var_name(bad), "{bad}");
         }
 
-        // `multitool cloud env` output is eval'd, so a pushed session that
+        // `aka cloud env` output is eval'd, so a pushed session that
         // exports a name-shaped-like-a-command is refused on arrival rather
         // than at the shell.
         let sessions = PushedSessions::default();

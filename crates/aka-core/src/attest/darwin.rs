@@ -147,13 +147,19 @@ fn sysctl_proc(pid: i32) -> Option<(i32, u64)> {
     }
     let ppid = i32::from_ne_bytes(buf[kinfo::E_PPID..kinfo::E_PPID + 4].try_into().ok()?);
     // `p_starttime` is a `timeval`: two 64-bit words on this ABI.
-    let secs = i64::from_ne_bytes(buf[kinfo::P_STARTTIME..kinfo::P_STARTTIME + 8].try_into().ok()?);
+    let secs = i64::from_ne_bytes(
+        buf[kinfo::P_STARTTIME..kinfo::P_STARTTIME + 8]
+            .try_into()
+            .ok()?,
+    );
     let usecs = i64::from_ne_bytes(
         buf[kinfo::P_STARTTIME + 8..kinfo::P_STARTTIME + 16]
             .try_into()
             .ok()?,
     );
-    let start = (secs as u64).checked_mul(1_000_000)?.checked_add(usecs as u64)?;
+    let start = (secs as u64)
+        .checked_mul(1_000_000)?
+        .checked_add(usecs as u64)?;
     Some((ppid, start))
 }
 
@@ -161,7 +167,13 @@ fn pid_path(pid: i32) -> Option<String> {
     // PROC_PIDPATHINFO_MAXSIZE is 4 * MAXPATHLEN.
     let mut buf = vec![0u8; 4 * 1024];
     // SAFETY: buf is writable for the length passed.
-    let len = unsafe { proc_pidpath(pid, buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32) };
+    let len = unsafe {
+        proc_pidpath(
+            pid,
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            buf.len() as u32,
+        )
+    };
     if len <= 0 {
         return None;
     }
@@ -209,7 +221,8 @@ fn signing_info(pid: i32) -> Option<CodeIdentity> {
         return None;
     }
     // SAFETY: +1 from the Copy-rule call above; the wrapper takes ownership.
-    let info: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_create_rule(info) };
+    let info: CFDictionary<CFString, CFType> =
+        unsafe { CFDictionary::wrap_under_create_rule(info) };
 
     let identifier = dict_string(&info, unsafe { kSecCodeInfoIdentifier })?;
     let team_id = dict_string(&info, unsafe { kSecCodeInfoTeamIdentifier });
@@ -303,7 +316,8 @@ fn own_team() -> Option<String> {
         return None;
     }
     // SAFETY: +1 from the Copy-rule call above.
-    let info: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_create_rule(info) };
+    let info: CFDictionary<CFString, CFType> =
+        unsafe { CFDictionary::wrap_under_create_rule(info) };
     dict_string(&info, unsafe { kSecCodeInfoTeamIdentifier })
 }
 

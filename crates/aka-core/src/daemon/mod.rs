@@ -289,10 +289,7 @@ pub struct Authed {
 /// carries it in here. Extensions cannot be set from the wire, so this is only
 /// ever reachable by in-process callers.
 #[derive(Clone)]
-pub(crate) struct ForwardedIdentity(
-    pub crate::attest::AgentIdentity,
-    pub Option<String>,
-);
+pub(crate) struct ForwardedIdentity(pub crate::attest::AgentIdentity, pub Option<String>);
 
 /// Who is asking, in the three forms an approval needs: the label for the
 /// activity log, what the OS proved for the prompt, and the run a window binds
@@ -305,9 +302,7 @@ pub(crate) struct Requester<'a> {
     pub scope: Option<&'a str>,
 }
 
-pub(crate) fn request_identity(
-    parts: &Parts,
-) -> (crate::attest::AgentIdentity, Option<String>) {
+pub(crate) fn request_identity(parts: &Parts) -> (crate::attest::AgentIdentity, Option<String>) {
     if let Some(forwarded) = parts.extensions.get::<ForwardedIdentity>() {
         return (forwarded.0.clone(), forwarded.1.clone());
     }
@@ -2942,7 +2937,7 @@ async fn post_cloud_session(
                             "env": env_object,
                             "credentials": session.credentials,
                             "example": format!(
-                                "eval \"$(multitool cloud env {})\"",
+                                "eval \"$(aka cloud env {})\"",
                                 session.connection
                             ),
                         }),

@@ -33,7 +33,13 @@ async fn refresh(handle: &AppHandle, install_id: &str) {
     let Some(pins) = handle.try_state::<Arc<LeashPins>>() else {
         return;
     };
-    refresh_once(state.brokers.backend(), install_id, clock.inner(), pins.inner()).await;
+    refresh_once(
+        state.brokers.backend(),
+        install_id,
+        clock.inner(),
+        pins.inner(),
+    )
+    .await;
 }
 
 /// Start the refresher for the app's lifetime.

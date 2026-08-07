@@ -394,8 +394,8 @@ export function shellArgument(value: string): string {
  * single source for both the add flow's Connect step and the detail pane. */
 export function cloudConnectCommand(provider: CloudProvider, name: string): string {
   return provider === 'aws'
-    ? `multitool cloud install ${shellArgument(name)}`
-    : `eval "$(multitool cloud env ${shellArgument(name)})"`;
+    ? `aka cloud install ${shellArgument(name)}`
+    : `eval "$(aka cloud env ${shellArgument(name)})"`;
 }
 
 /** A copy-ready first Azure call. Minted tokens don't sign in the Azure CLI

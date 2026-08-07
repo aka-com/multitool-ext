@@ -147,10 +147,11 @@ unsafe impl Sync for OutsideClickMonitors {}
 /// macOS mouse-down monitors (global + local) that dismiss the tray panel
 /// when the user clicks outside it. Keyboard focus loss (Cmd-Tab, etc.) does not.
 #[cfg(target_os = "macos")]
-static DROPDOWN_OUTSIDE_CLICK_MONITORS: Mutex<OutsideClickMonitors> = Mutex::new(OutsideClickMonitors {
-    global: None,
-    local: None,
-});
+static DROPDOWN_OUTSIDE_CLICK_MONITORS: Mutex<OutsideClickMonitors> =
+    Mutex::new(OutsideClickMonitors {
+        global: None,
+        local: None,
+    });
 /// Tray / notification navigation can happen before a webview installs its
 /// event listener. Keep one pending open (and optional approval deep-link)
 /// per request surface so the destination can drain it after boot instead of
@@ -672,7 +673,11 @@ fn show_dropdown_requests(app: &AppHandle) {
         return;
     }
     *DROPDOWN_REQUESTS_PENDING.lock().unwrap() = Some(None);
-    let _ = app.emit_to(DROPDOWN, EVT_OPEN_REQUESTS, OpenRequestsPayload { id: None });
+    let _ = app.emit_to(
+        DROPDOWN,
+        EVT_OPEN_REQUESTS,
+        OpenRequestsPayload { id: None },
+    );
 }
 
 /// Show the macOS dropdown through NSPanel rather than Tauri's `show` and
@@ -1496,7 +1501,10 @@ mod tests {
             width: 24.0,
             height: 24.0,
         };
-        assert_eq!(dropdown_origin(anchor, 330.0, 400.0, Some(WORK)), (1047, 30));
+        assert_eq!(
+            dropdown_origin(anchor, 330.0, 400.0, Some(WORK)),
+            (1047, 30)
+        );
     }
 
     #[test]

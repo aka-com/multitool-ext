@@ -1104,7 +1104,7 @@ function mockConnectRemote(url: string, token: string | null): unknown {
     throw 'the remote broker could not be reached: connection refused';
   }
   if (token?.includes('badtoken')) {
-    throw 'the broker rejected the management token; re-issue it with `multitool manage token` and enter the new one';
+    throw 'the broker rejected the management token; re-issue it with `aka manage token` and enter the new one';
   }
   mockPicked = true;
   mockBroker = {
@@ -1906,7 +1906,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       const expiresAt = record.endpoint?.expires_at ?? '';
       if (kind === 'ssh' && requireAuth) {
         shownSecret = secret;
-        example = `multitool ssh-agent ${connection.name}`;
+        example = `aka ssh-agent ${connection.name}`;
       }
       record.endpoint = kind === 'ssh'
         ? {
@@ -1968,7 +1968,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       const example = connection.type === 'pg' ? `DATABASE_URL="${dsn}"`
         : connection.type === 'ssh'
           ? endpoint.require_auth
-            ? `multitool ssh-agent ${connection.name}`
+            ? `aka ssh-agent ${connection.name}`
             : `SSH_AUTH_SOCK="${dsn}" ${sshInvocationCommand({ ...connection, target: connTarget(connection) })}`
         : `curl -H "Authorization: Bearer ${secret}" ${dsn}/`;
       return {

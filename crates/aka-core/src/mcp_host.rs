@@ -143,11 +143,7 @@ impl Caller {
     /// scope string: every session sharing `""` would share one approval
     /// window, which is the opposite of what run-keying is for. Without an id
     /// there is no run to bind to, so the window falls back to the label.
-    fn for_session(
-        label: impl Into<String>,
-        session_id: Option<&str>,
-        session: &Session,
-    ) -> Self {
+    fn for_session(label: impl Into<String>, session_id: Option<&str>, session: &Session) -> Self {
         Self {
             label: label.into(),
             identity: session.identity.clone(),

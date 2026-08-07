@@ -26,7 +26,7 @@
 //! - the broker serving agents — the daemon keeps injecting credentials into
 //!   live sessions and answering new ones, by design, because an agent run
 //!   should not die because a laptop lid closed;
-//! - the `multitool` CLI, which drives its own broker instance;
+//! - the `aka` CLI, which drives its own broker instance;
 //! - anything already executing as the user with the app's code identity.
 //!
 //! So this defends against someone sitting down at an unattended, unlocked
@@ -222,7 +222,11 @@ impl AppLock {
     /// Engage the lock from an automatic policy. The explicit action uses
     /// `lock_now`, which deliberately does not depend on this preference.
     pub fn lock(&self, app: &AppHandle) {
-        if !lock_request_allowed(self.settings().enabled, false, platform_capability().available) {
+        if !lock_request_allowed(
+            self.settings().enabled,
+            false,
+            platform_capability().available,
+        ) {
             return;
         }
         self.engage(app);
@@ -232,7 +236,11 @@ impl AppLock {
     /// platform cannot authenticate, since that would strand the user with
     /// no way back into their own credentials.
     pub fn lock_now(&self, app: &AppHandle) {
-        if !lock_request_allowed(self.settings().enabled, true, platform_capability().available) {
+        if !lock_request_allowed(
+            self.settings().enabled,
+            true,
+            platform_capability().available,
+        ) {
             return;
         }
         self.engage(app);
@@ -331,9 +339,7 @@ pub fn lock_if_hidden(app: &AppHandle) {
 /// state says otherwise.
 pub fn require_unlocked(app: &AppHandle) -> Result<(), String> {
     match app.try_state::<Arc<AppLock>>() {
-        Some(lock) if lock.is_locked() => {
-            Err("Multitool is locked. Unlock it to continue.".into())
-        }
+        Some(lock) if lock.is_locked() => Err("Multitool is locked. Unlock it to continue.".into()),
         _ => Ok(()),
     }
 }
@@ -354,9 +360,10 @@ fn platform_capability() -> Capability {
     // fall back to the policy we actually evaluate (biometry-or-password).
     // `canEvaluatePolicy` is cheap and puts up no UI.
     let context = unsafe { LAContext::new() };
-    let biometry =
-        unsafe { context.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics) }
-            .is_ok();
+    let biometry = unsafe {
+        context.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics)
+    }
+    .is_ok();
     let context = unsafe { LAContext::new() };
     match unsafe { context.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthentication) } {
         Ok(()) => Capability {

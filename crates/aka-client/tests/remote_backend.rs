@@ -216,7 +216,7 @@ async fn bad_tokens_and_dead_brokers_map_to_distinct_errors() {
         ManageError::InvalidManageToken {
             detail: Some(
                 "manage routes require this broker's management token (issue one on the broker \
-                 host with `multitool manage token`)"
+                 host with `aka manage token`)"
                     .into()
             )
         }

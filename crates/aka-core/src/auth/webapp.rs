@@ -47,11 +47,7 @@ async fn index(root: axum::Extension<WebRoot>, state: State<AppState>) -> Respon
     serve(&root.0 .0, "index.html", &state).await
 }
 
-async fn asset(
-    root: axum::Extension<WebRoot>,
-    state: State<AppState>,
-    uri: Uri,
-) -> Response {
+async fn asset(root: axum::Extension<WebRoot>, state: State<AppState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     // A single-page app owns its routes: anything that is not a file on
     // disk is one of its paths, and the shell resolves it client-side. An
@@ -198,11 +194,26 @@ mod tests {
 
     #[test]
     fn content_types_are_declared_never_guessed() {
-        assert_eq!(content_type(Path::new("a/index.html")), "text/html; charset=utf-8");
-        assert_eq!(content_type(Path::new("a/app.js")), "text/javascript; charset=utf-8");
-        assert_eq!(content_type(Path::new("a/app.css")), "text/css; charset=utf-8");
+        assert_eq!(
+            content_type(Path::new("a/index.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            content_type(Path::new("a/app.js")),
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            content_type(Path::new("a/app.css")),
+            "text/css; charset=utf-8"
+        );
         // Anything unrecognized is a download, not something to execute.
-        assert_eq!(content_type(Path::new("a/thing.wasm")), "application/octet-stream");
-        assert_eq!(content_type(Path::new("a/noext")), "application/octet-stream");
+        assert_eq!(
+            content_type(Path::new("a/thing.wasm")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            content_type(Path::new("a/noext")),
+            "application/octet-stream"
+        );
     }
 }

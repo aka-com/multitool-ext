@@ -209,7 +209,7 @@ fn fatal_startup(app: &tauri::App, e: CoreError) -> ! {
         CoreError::BrokerStateBusy(_) => (
             "Broker state is being edited",
             MessageDialogKind::Warning,
-            format!("{e}.\n\nWait for the multitool command to finish, then relaunch Multitool."),
+            format!("{e}.\n\nWait for the aka command to finish, then relaunch Multitool."),
         ),
         CoreError::Vault(_) => (
             "Keychain access failed",

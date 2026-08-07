@@ -167,7 +167,10 @@ impl ManagePrincipal {
 
     /// Attribution for the activity log. Records the authenticated actor —
     /// not, as before, whichever proxy happened to be the socket peer.
-    pub fn decision_context(&self, peer: Option<std::net::SocketAddr>) -> crate::types::DecisionContext {
+    pub fn decision_context(
+        &self,
+        peer: Option<std::net::SocketAddr>,
+    ) -> crate::types::DecisionContext {
         crate::types::DecisionContext {
             approver: Some(self.label.clone()),
             surface: crate::types::DecisionSurface::Remote { peer },
@@ -413,8 +416,7 @@ fn legacy(state: &AppState, parts: &Parts, token: String) -> Result<ManagePrinci
         return Err(refuse(
             StatusCode::UNAUTHORIZED,
             "manage_token_retired",
-            "this broker no longer accepts the management token; sign in with a passkey"
-                .into(),
+            "this broker no longer accepts the management token; sign in with a passkey".into(),
         ));
     }
     match state
@@ -445,10 +447,10 @@ fn legacy(state: &AppState, parts: &Parts, token: String) -> Result<ManagePrinci
             }
             let detail = if error == crate::identity::TokenError::Expired {
                 "the management token has expired; issue a fresh one on the \
-                 broker host with `multitool manage token`"
+                 broker host with `aka manage token`"
             } else {
                 "manage routes require this broker's management token \
-                 (issue one on the broker host with `multitool manage token`)"
+                 (issue one on the broker host with `aka manage token`)"
             };
             Err(refuse(
                 StatusCode::UNAUTHORIZED,
@@ -558,15 +560,21 @@ impl FromRequestParts<AppState> for ManagePrincipal {
         parts: &mut Parts,
         _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<ManagePrincipal>().cloned().ok_or_else(|| {
-            // Only reachable if a route were mounted outside the layer.
-            tracing::error!("a manage handler ran with no principal; the auth layer is missing");
-            refuse(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
-                "this route is misconfigured".into(),
-            )
-        })
+        parts
+            .extensions
+            .get::<ManagePrincipal>()
+            .cloned()
+            .ok_or_else(|| {
+                // Only reachable if a route were mounted outside the layer.
+                tracing::error!(
+                    "a manage handler ran with no principal; the auth layer is missing"
+                );
+                refuse(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "this route is misconfigured".into(),
+                )
+            })
     }
 }
 
@@ -640,8 +648,12 @@ mod tests {
         let stale = Some(Utc::now() - chrono::Duration::hours(3));
         let fresh = Some(Utc::now() - chrono::Duration::seconds(30));
 
-        assert!(web(stale).satisfies(Scope::SecretsReveal, StepUp::BrowserSession).is_err());
-        assert!(web(fresh).satisfies(Scope::SecretsReveal, StepUp::BrowserSession).is_ok());
+        assert!(web(stale)
+            .satisfies(Scope::SecretsReveal, StepUp::BrowserSession)
+            .is_err());
+        assert!(web(fresh)
+            .satisfies(Scope::SecretsReveal, StepUp::BrowserSession)
+            .is_ok());
         // The desktop's live 2FA countdown polls; a timer that prompts is
         // not a security control, it is an outage.
         assert!(desktop(stale)
@@ -676,7 +688,9 @@ mod tests {
             .expect_err("automation must not step up");
         assert_eq!(refusal.status(), StatusCode::UNAUTHORIZED);
         // Holding every scope does not help: there is no person to confirm.
-        assert!(automation.satisfies(Scope::IdentityManage, StepUp::No).is_ok());
+        assert!(automation
+            .satisfies(Scope::IdentityManage, StepUp::No)
+            .is_ok());
     }
 
     #[test]
@@ -690,7 +704,9 @@ mod tests {
             ScopeSet::all(),
             None,
         );
-        assert!(legacy.satisfies(Scope::IdentityManage, StepUp::Always).is_ok());
+        assert!(legacy
+            .satisfies(Scope::IdentityManage, StepUp::Always)
+            .is_ok());
         assert!(legacy
             .satisfies(Scope::SecretsReveal, StepUp::BrowserSession)
             .is_ok());

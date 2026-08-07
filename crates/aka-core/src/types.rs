@@ -668,7 +668,11 @@ impl ConnectionConfig {
                     // The origin is part of the destination: the same
                     // profile name on another machine is another account.
                     let region = region.as_deref().unwrap_or("profile");
-                    let machine = if origin.is_empty() { "?" } else { origin.as_str() };
+                    let machine = if origin.is_empty() {
+                        "?"
+                    } else {
+                        origin.as_str()
+                    };
                     match role_arn {
                         Some(role) => format!("aws:{region}:{machine}:{profile}:{role}"),
                         None => format!("aws:{region}:{machine}:{profile}"),
@@ -682,9 +686,7 @@ impl ConnectionConfig {
                     Some(sub) => format!("azure:{tenant_id}:{sub}"),
                     None => format!("azure:{tenant_id}"),
                 },
-                CloudProvider::Gcp {
-                    project, scope, ..
-                } => match project {
+                CloudProvider::Gcp { project, scope, .. } => match project {
                     Some(project) => format!("gcp:{project}"),
                     None => format!("gcp:{}", scope.split_whitespace().next().unwrap_or("sa")),
                 },
@@ -1097,7 +1099,7 @@ pub struct DirectEndpoint {
     /// "can list a directory" to "can read the vault".
     ///
     /// Off by default because stock `ssh` cannot send an extension: an
-    /// authenticated endpoint is reached through `multitool ssh-agent`, which
+    /// authenticated endpoint is reached through `aka ssh-agent`, which
     /// supplies the proof and forwards. PG and HTTP endpoints ignore this —
     /// their protocols present the secret already.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

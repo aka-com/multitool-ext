@@ -4860,7 +4860,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
     const setup = state.remoteSetup;
     const setupInstructions =
       '# To start a remote instance, run this behind a TLS proxy or tunnel:\n'
-      + 'multitool serve --listen 0.0.0.0:4780\nmultitool manage token';
+      + 'aka serve --listen 0.0.0.0:4780\nmultitool manage token';
     const sameBroker = setup.url.trim() === ''
       || setup.url.trim().replace(/\/+$/, '') === (state.broker.url ?? '');
     const hasSaved = state.broker.has_saved_token && sameBroker;
@@ -4869,7 +4869,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
     const urlReady = setup.url.trim() !== '';
     const enrollInstructions =
       '# On the broker host, open enrollment for your first passkey:\n'
-      + 'multitool manage enroll';
+      + 'aka manage enroll';
     return (
       <div className="broker-pane" role="form" aria-label="Connect to hosted Multitool">
         <div className="bp-icon"><Icon markup={ICONS.appIcon} /></div>

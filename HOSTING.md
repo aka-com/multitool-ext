@@ -25,7 +25,7 @@ domain per broker. It is not a multi-tenant identity or policy service.
 
 ## Process layout
 
-`multitool serve` always uses an isolated broker root so it never shares the
+`aka serve` always uses an isolated broker root so it never shares the
 desktop app's production store (`~/.aka`). Defaults:
 
 | Precedence | Source |
@@ -36,12 +36,12 @@ desktop app's production store (`~/.aka`). Defaults:
 
 State is `Paths::under` that root: `<root>/data` and `<root>/sock` (socket,
 shared agent key, first-start manage token, lock). Manage the live process with
-`multitool … --root <same>` or, once TCP is up, `--broker <public-url>`. The
+`aka … --root <same>` or, once TCP is up, `--broker <public-url>`. The
 desktop app continues to use the production layout for **This Mac**.
 
 ## Network boundary
 
-`multitool serve --listen` speaks plaintext HTTP. Put an authenticated TLS reverse
+`aka serve --listen` speaks plaintext HTTP. Put an authenticated TLS reverse
 proxy or private tunnel in front of it and advertise only the HTTPS origin
 with `--public-url`. TCP does not expose `/v1/pair`; provision the shared agent
 key out of band. Restrict both the control listener and proxy with host
@@ -69,7 +69,7 @@ Management tokens are stored in a plaintext 0600 file on non-macOS clients;
 prefer `AKA_MANAGE_TOKEN` in CI. The default management-token lifetime is 30
 days. A never-managed broker writes one bounded first-start credential to its
 owner-only socket directory (`<root>/sock/manage-token`).
-`multitool manage token --root <root>` consumes it to perform the first
+`aka manage token --root <root>` consumes it to perform the first
 authenticated online rotation; subsequent rotations require the still current
 saved or environment token and do not stop the broker.
 

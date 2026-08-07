@@ -10,11 +10,11 @@ repo_root="$(cd "$script_dir/.." >/dev/null && pwd)"
 cd "$repo_root"
 
 packages=(
-  multitool-darwin-arm64
-  multitool-darwin-x64
-  multitool-linux-arm64
-  multitool-linux-x64
-  multitool
+  aka-agent-darwin-arm64
+  aka-agent-darwin-x64
+  aka-agent-linux-arm64
+  aka-agent-linux-x64
+  aka-agent
 )
 
 # `npm publish --dry-run` never authenticates with the registry, so it can
@@ -28,7 +28,11 @@ if ! npm_user="$(npm whoami 2>/dev/null)"; then
 fi
 
 for package in "${packages[@]}"; do
-  published="@aka-com/$package"
+  if [[ "$package" == "aka-agent" ]]; then
+    published="$package"
+  else
+    published="@aka-com/$package"
+  fi
   if ! view_output="$(npm view "$published" maintainers --json 2>&1)"; then
     if [[ "$view_output" == *"E404"* ]]; then
       echo "$published is not published yet; npm will verify scope access on first publish."
@@ -58,6 +62,11 @@ node scripts/npm/sync-versions.mjs --check
 node scripts/npm/verify-package.mjs --all
 
 for package in "${packages[@]}"; do
-  echo "publishing @aka-com/$package"
+  if [[ "$package" == "aka-agent" ]]; then
+    published="$package"
+  else
+    published="@aka-com/$package"
+  fi
+  echo "publishing $published"
   (cd "npm/$package" && npm publish "$@")
 done

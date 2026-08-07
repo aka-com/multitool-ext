@@ -45,10 +45,9 @@ pub fn observe(app: AppHandle, lock: Arc<AppLock>) {
         let workspace = NSWorkspace::sharedWorkspace();
         let workspace_center = workspace.notificationCenter();
 
-        for name in [
-            unsafe { NSWorkspaceWillSleepNotification },
-            unsafe { NSWorkspaceSessionDidResignActiveNotification },
-        ] {
+        for name in [unsafe { NSWorkspaceWillSleepNotification }, unsafe {
+            NSWorkspaceSessionDidResignActiveNotification
+        }] {
             let app = app.clone();
             let lock = lock.clone();
             let block = RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {

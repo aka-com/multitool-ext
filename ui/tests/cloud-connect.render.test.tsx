@@ -147,9 +147,9 @@ test('a cloud walkthrough hands over the command that mints, per provider', () =
   const expected: Record<string, string> = {
     // Only the AWS CLI has a credential_process hook, so only AWS gets a
     // profile written once; the others export into the shell each time.
-    'aws-cli': "multitool cloud install 'aws-prod'",
-    'gcp-cli': `eval "$(multitool cloud env 'gcp-prod')"`,
-    azure: `eval "$(multitool cloud env 'azure-prod')"`,
+    'aws-cli': "aka cloud install 'aws-prod'",
+    'gcp-cli': `eval "$(aka cloud env 'gcp-prod')"`,
+    azure: `eval "$(aka cloud env 'azure-prod')"`,
   };
   for (const [optionId, command] of Object.entries(expected)) {
     const container = renderCloud(optionId);
@@ -209,7 +209,7 @@ test('the cloud walkthrough asks for something that needs the credential', () =>
     .map((block) => block.textContent ?? '')
     .find((text) => text.includes('Multitool connection'));
   assert.ok(prompt, 'step 3 offers a prompt naming the tool');
-  assert.ok(prompt.includes("multitool cloud install 'aws-prod'"), 'it mints before asking');
+  assert.ok(prompt.includes("aka cloud install 'aws-prod'"), 'it mints before asking');
   assert.ok(prompt.includes('15 minutes'), 'it warns the session expires');
   assert.ok(prompt.includes('"aws-prod"'), 'it names the tool the broker knows');
 });

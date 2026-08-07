@@ -1,7 +1,7 @@
-//! `multitool mcp`: a stdio ⇄ streamable-HTTP MCP bridge.
+//! `aka mcp`: a stdio ⇄ streamable-HTTP MCP bridge.
 //!
 //! Every MCP client that can launch a stdio server — Claude Code, Claude
-//! Desktop, Codex, custom harnesses — can be pointed at `multitool mcp` and needs
+//! Desktop, Codex, custom harnesses — can be pointed at `aka mcp` and needs
 //! no token pasting and no port discovery: the bridge reads this computer's
 //! shared key from the broker's token file and finds the MCP host through
 //! the broker's discovery manifest (the MCP host's loopback port is dynamic,
@@ -69,7 +69,7 @@ async fn discover_mcp_url(socket: &Path) -> Result<String, String> {
             Ok(manifest) => {
                 if !reported_protocol_skew {
                     if let Some(warning) = agent_protocol_warning(&manifest) {
-                        eprintln!("multitool mcp: warning: {warning}");
+                        eprintln!("aka mcp: warning: {warning}");
                         reported_protocol_skew = true;
                     }
                 }
@@ -78,7 +78,7 @@ async fn discover_mcp_url(socket: &Path) -> Result<String, String> {
                 }
                 if !reported_no_mcp {
                     eprintln!(
-                        "multitool mcp: the broker is running but its MCP host is not; \
+                        "aka mcp: the broker is running but its MCP host is not; \
                          open the Multitool app (waiting)"
                     );
                     reported_no_mcp = true;
@@ -86,7 +86,7 @@ async fn discover_mcp_url(socket: &Path) -> Result<String, String> {
             }
             Err(_) if !reported_waiting => {
                 eprintln!(
-                    "multitool mcp: waiting for the Multitool broker at {}",
+                    "aka mcp: waiting for the Multitool broker at {}",
                     socket.display()
                 );
                 reported_waiting = true;
@@ -692,7 +692,7 @@ fn one_line(message: &str) -> Option<String> {
     match serde_json::from_str::<serde_json::Value>(message) {
         Ok(value) => Some(value.to_string()),
         Err(_) => {
-            eprintln!("multitool mcp: dropped a non-JSON frame from the MCP host");
+            eprintln!("aka mcp: dropped a non-JSON frame from the MCP host");
             None
         }
     }

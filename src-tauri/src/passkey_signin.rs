@@ -161,10 +161,11 @@ async fn catch_code(
         let target = loop {
             // Bound each read: a connection that stalls mid-request must not
             // hold the one accept slot until the outer browser timeout.
-            let read = match tokio::time::timeout(CALLBACK_READ_TIMEOUT, stream.read(&mut chunk)).await {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break None,
-                Ok(Ok(read)) => read,
-            };
+            let read =
+                match tokio::time::timeout(CALLBACK_READ_TIMEOUT, stream.read(&mut chunk)).await {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break None,
+                    Ok(Ok(read)) => read,
+                };
             buffer.extend_from_slice(&chunk[..read]);
             if let Some(head) = buffer
                 .windows(4)
@@ -287,9 +288,7 @@ async fn exchange(
             .map(str::to_string)
     };
     Ok(SignedIn {
-        access: Zeroizing::new(
-            field("access_token").ok_or("the broker returned no access token")?,
-        ),
+        access: Zeroizing::new(field("access_token").ok_or("the broker returned no access token")?),
         expires_in: parsed
             .get("expires_in")
             .and_then(serde_json::Value::as_i64)
@@ -367,7 +366,9 @@ mod tests {
         let a = random(32);
         let b = random(32);
         assert_ne!(a, b);
-        assert!(a.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        assert!(a
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
     }
 
     #[test]
@@ -412,13 +413,18 @@ mod tests {
         let caught = tokio::spawn(async move { catch_code(listener, "s").await });
         let client = reqwest::Client::new();
         // A browser probe, then an error redirect, then the real thing.
-        let _ = client.get(format!("http://127.0.0.1:{port}/favicon.ico")).send().await;
+        let _ = client
+            .get(format!("http://127.0.0.1:{port}/favicon.ico"))
+            .send()
+            .await;
         let _ = client
             .get(format!("http://127.0.0.1:{port}/callback?state=s"))
             .send()
             .await;
         let _ = client
-            .get(format!("http://127.0.0.1:{port}/callback?code=akacode_ok&state=s"))
+            .get(format!(
+                "http://127.0.0.1:{port}/callback?code=akacode_ok&state=s"
+            ))
             .send()
             .await;
         assert_eq!(caught.await.unwrap().unwrap().as_str(), "akacode_ok");

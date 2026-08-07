@@ -4,7 +4,7 @@
 //! drive a [`LocalBackend`] so a remote shell exercises exactly the code
 //! path an in-process shell does. Authorization is the management token
 //! (`akamgr_…`) — a credential distinct from the agent key, closed until
-//! `multitool manage token` issues one. Agent keys never authenticate here and
+//! `aka manage token` issues one. Agent keys never authenticate here and
 //! the manage token never authenticates the agent plane.
 //!
 //! Failures cross the wire as the `aka-api` [`ManageError`] serialization,
@@ -222,7 +222,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auth/sessions", get(list_browser_sessions))
         .route("/auth/sessions/{id}", delete(revoke_browser_session))
         .route("/auth/devices", get(list_devices))
-        .route("/auth/devices/{id}", patch(rename_device).delete(revoke_device))
+        .route(
+            "/auth/devices/{id}",
+            patch(rename_device).delete(revoke_device),
+        )
         .route("/auth/tokens", get(list_automation).post(mint_automation))
         .route("/auth/tokens/{id}", delete(revoke_automation))
         // One layer authenticates and authorizes every route above, and
@@ -343,11 +346,13 @@ async fn revoke_management_token(
     principal: ManagePrincipal,
 ) -> Response {
     let revoked = match principal.legacy_token() {
-        Some(current) => state
-            .broker
-            .identity
-            .revoke_manage_token_with_token(&state.broker.workspace, current)
-            .await,
+        Some(current) => {
+            state
+                .broker
+                .identity
+                .revoke_manage_token_with_token(&state.broker.workspace, current)
+                .await
+        }
         // A passkey holder closing the manage API they are not using.
         None => state
             .broker
@@ -407,10 +412,7 @@ async fn heartbeat_approval_surface(
     }
 }
 
-async fn release_approval_surface(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn release_approval_surface(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     ok(json!({
         "released": state.broker.manage_bus().release_approval_surface(&id),
     }))
@@ -626,27 +628,18 @@ async fn edit_secret(
     respond(state.manage.edit_secret(id, body).await)
 }
 
-async fn secret_totp_code(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn secret_totp_code(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.secret_totp_code(id).await)
 }
 
-async fn delete_secret(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn delete_secret(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.delete_secret(id).await)
 }
 
 /// Release a value for the client to show on screen, after the user has
 /// asked for that secret by name and confirmed it. The core audits the
 /// reveal as it releases the value.
-async fn reveal_secret(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn reveal_secret(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(
         state
             .manage
@@ -664,10 +657,7 @@ async fn reveal_secret(
 /// audit purposes, whatever the client does next. (The local flow audits
 /// through `note_secret_copied` after its own clipboard write; there is no
 /// honor-system note route for remote clients.)
-async fn secret_value_for_copy(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn secret_value_for_copy(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     let result = state.manage.secret_value_for_copy(id).await;
     if result.is_ok() {
         if let Ok(meta) = state
@@ -686,9 +676,7 @@ async fn secret_value_for_copy(
 
 /* -------------------------- 1Password provider -------------------------- */
 
-async fn list_onepassword_integrations(
-    State(state): State<AppState>,
-) -> Response {
+async fn list_onepassword_integrations(State(state): State<AppState>) -> Response {
     respond(state.manage.list_onepassword_integrations().await)
 }
 
@@ -725,17 +713,11 @@ async fn delete_onepassword_integration(
     respond(state.manage.delete_onepassword_integration(id).await)
 }
 
-async fn onepassword_health(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn onepassword_health(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.onepassword_health(id).await)
 }
 
-async fn onepassword_vaults(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn onepassword_vaults(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.onepassword_vaults(id).await)
 }
 
@@ -851,10 +833,7 @@ async fn patch_connection(
     )
 }
 
-async fn delete_connection(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn delete_connection(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.delete_connection(id).await)
 }
 
@@ -865,10 +844,7 @@ async fn reorder_connections(
     respond(state.manage.reorder_connections(body.ordered_ids).await)
 }
 
-async fn test_connection(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn test_connection(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.test_connection(id).await)
 }
 
@@ -1033,10 +1009,7 @@ async fn set_endpoint_require_auth(
     )
 }
 
-async fn list_mcp_tools(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn list_mcp_tools(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.list_mcp_tools(id).await)
 }
 
@@ -1049,17 +1022,11 @@ async fn mcp_status(
     respond(state.manage.mcp_status(id, options).await)
 }
 
-async fn issue_endpoint(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn issue_endpoint(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.issue_endpoint(id).await)
 }
 
-async fn renew_endpoint(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn renew_endpoint(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.renew_endpoint(id).await)
 }
 
@@ -1071,24 +1038,15 @@ async fn set_endpoint_expiry(
     respond(state.manage.set_endpoint_expiry(id, body.expire).await)
 }
 
-async fn get_endpoint(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn get_endpoint(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.get_endpoint(id).await)
 }
 
-async fn copy_endpoint(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn copy_endpoint(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(state.manage.copy_endpoint(id).await)
 }
 
-async fn revoke_endpoint(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn revoke_endpoint(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     respond(
         state
             .manage
@@ -1113,17 +1071,11 @@ async fn mcp_auth_start(
     respond(result.map_err(ManageError::from))
 }
 
-async fn mcp_auth_state(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn mcp_auth_state(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     ok(state.broker.ui_mcp_auth_state(&id))
 }
 
-async fn mcp_auth_cancel(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn mcp_auth_cancel(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
     ok(json!({ "cancelled": state.broker.ui_cancel_mcp_auth(&id) }))
 }
 
@@ -1210,10 +1162,7 @@ async fn sessions(State(state): State<AppState>) -> Response {
     respond(state.manage.sessions().await)
 }
 
-async fn close_session(
-    State(state): State<AppState>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn close_session(State(state): State<AppState>, Path(id): Path<u64>) -> Response {
     respond(
         state
             .manage
@@ -1241,10 +1190,7 @@ struct ActivityPageQuery {
 /// desktop view's ceiling so a default read and the app's own read agree.
 const ACTIVITY_VIEW_LIMIT: usize = 500;
 
-async fn activity(
-    State(state): State<AppState>,
-    Query(query): Query<ActivityQuery>,
-) -> Response {
+async fn activity(State(state): State<AppState>, Query(query): Query<ActivityQuery>) -> Response {
     let limit = query.limit.unwrap_or(ACTIVITY_VIEW_LIMIT);
     respond(state.manage.activity(limit).await)
 }

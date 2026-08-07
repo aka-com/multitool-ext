@@ -348,7 +348,7 @@ impl FormError {
             ManageError::InvalidManageToken { detail } => Self::global(
                 "system",
                 "invalid_manage_token",
-                "The broker rejected the management token — re-enter it from `multitool manage token`",
+                "The broker rejected the management token — re-enter it from `aka manage token`",
                 detail,
             ),
             ManageError::Unreachable { message } => Self::global(
@@ -2227,7 +2227,7 @@ fn ssh_scp_command(connection: &aka_api::ConnectionDto, socket: &str) -> String 
         .unwrap_or_default();
     if endpoint_requires_auth(connection) {
         return format!(
-            "multitool ssh-agent {} -- scp{port} {} <file> {destination}:",
+            "aka ssh-agent {} -- scp{port} {} <file> {destination}:",
             shell_quoted(&connection.name),
             ssh_flags()
         );
@@ -2272,7 +2272,7 @@ fn ssh_config_block(connection: &aka_api::ConnectionDto, socket: &str) -> Option
         lines.insert(
             0,
             format!(
-                "# Needs a forwarder running: multitool ssh-agent {} --socket {forwarder}",
+                "# Needs a forwarder running: aka ssh-agent {} --socket {forwarder}",
                 shell_quoted(&connection.name)
             ),
         );
@@ -2686,7 +2686,9 @@ fn capture_screen_region_blocking(app: AppHandle) -> ScreenRegionCapture {
         use std::time::Duration;
 
         let main = app.get_webview_window(crate::windows::MAIN);
-        let was_visible = main.as_ref().is_some_and(|window| window.is_visible().unwrap_or(false));
+        let was_visible = main
+            .as_ref()
+            .is_some_and(|window| window.is_visible().unwrap_or(false));
         if let Some(window) = &main {
             let _ = window.hide();
         }
@@ -2952,9 +2954,10 @@ mod tests {
             std::fs::write(golden_path, text).expect("write into-spec-golden.json");
             return;
         }
-        let committed: Value =
-            serde_json::from_str(include_str!("../../ui/tests/fixtures/into-spec-golden.json"))
-                .expect("into-spec-golden.json is valid JSON");
+        let committed: Value = serde_json::from_str(include_str!(
+            "../../ui/tests/fixtures/into-spec-golden.json"
+        ))
+        .expect("into-spec-golden.json is valid JSON");
         assert_eq!(
             produced, committed,
             "into_spec output drifted from the committed golden; re-run with \

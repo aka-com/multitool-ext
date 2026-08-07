@@ -2233,9 +2233,7 @@ fn validate_config_and_bind_secrets(
                     session_ttl_secs, ..
                 } => *session_ttl_secs,
             };
-            if !(MIN_CLOUD_SESSION_TTL_SECS..=MAX_CLOUD_SESSION_TTL_SECS)
-                .contains(&requested_ttl)
-            {
+            if !(MIN_CLOUD_SESSION_TTL_SECS..=MAX_CLOUD_SESSION_TTL_SECS).contains(&requested_ttl) {
                 return Err(CoreError::InvalidConnectionField {
                     field: ConnectionField::Template,
                     message: format!(

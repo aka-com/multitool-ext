@@ -339,7 +339,7 @@ fn resolve_for_store(
 ///
 /// There is no store marker to consult and nothing to fail loudly over: a
 /// binary that cannot reach the data-protection keychain falls back, finds
-/// nothing there, and costs the user one `multitool manage login`. Losing a secret
+/// nothing there, and costs the user one `aka manage login`. Losing a secret
 /// value that way would be unrecoverable, which is why [`resolve`] refuses
 /// instead.
 pub fn best_effort<A: KeychainApi + ?Sized>(api: &A) -> Keychain {
@@ -487,7 +487,7 @@ pub fn read_migrating<A: KeychainApi + ?Sized>(
 
 /// The macOS Keychain vault: one item per secret, keyed by the secret's stable
 /// UUID under a fixed service. Dev roots use a root-scoped service so
-/// `multitool serve` (default `~/.akaserver`, or any `--root`) can never create
+/// `aka serve` (default `~/.akaserver`, or any `--root`) can never create
 /// or rotate production vault state.
 pub struct KeychainVault<A: KeychainApi> {
     api: Arc<A>,

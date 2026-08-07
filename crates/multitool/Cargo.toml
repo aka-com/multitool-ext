@@ -6,7 +6,7 @@ license.workspace = true
 description = "Multitool command line: broker, MCP bridge, and headless management"
 
 [[bin]]
-name = "multitool"
+name = "aka"
 path = "src/main.rs"
 
 [dependencies]

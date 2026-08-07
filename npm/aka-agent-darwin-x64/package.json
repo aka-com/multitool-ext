@@ -1,14 +1,14 @@
 {
-  "name": "@aka-com/multitool-linux-arm64",
-  "version": "0.2.0",
-  "description": "Multitool CLI binary for Linux (arm64, glibc). Install @aka-com/multitool instead of installing this directly.",
+  "name": "@aka-com/aka-agent-darwin-x64",
+  "version": "0.3.0",
+  "description": "The aka CLI binary for macOS (Intel). Install aka-agent instead of installing this directly.",
   "homepage": "https://github.com/aka-com/multitool",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aka-com/multitool.git"
   },
   "files": [
-    "bin/multitool",
+    "bin/aka",
     "bin/multitool-onepassword"
   ],
   "engines": {
@@ -18,10 +18,10 @@
     "prepublishOnly": "node ../../scripts/npm/verify-package.mjs"
   },
   "os": [
-    "linux"
+    "darwin"
   ],
   "cpu": [
-    "arm64"
+    "x64"
   ],
   "publishConfig": {
     "access": "public"

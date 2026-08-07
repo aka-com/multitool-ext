@@ -2,7 +2,7 @@
 //
 // Matrix row: things that happen to the broker rather than to one
 // connection — a restart, a key rotation, state that must survive both, and
-// the `multitool` commands the sandbox walkthrough tells people to run.
+// the `aka` commands the sandbox walkthrough tells people to run.
 
 import assert from 'node:assert/strict';
 import { readFile, rm } from 'node:fs/promises';
@@ -42,7 +42,7 @@ test('a second broker refuses to serve the same state', async () => {
   assert.match(result.stderr, /already listening|already running|lease|lock/i);
 });
 
-test('`multitool status` reports a running broker, and a stopped one', async () => {
+test('`aka status` reports a running broker, and a stopped one', async () => {
   const running = await run(multitoolBinary(), ['status', '--root', broker.root], { timeoutMs: 30_000 });
   assert.equal(running.code, 0, running.stderr);
   assert.match(`${running.stdout}${running.stderr}`, /broker/i);
@@ -53,7 +53,7 @@ test('`multitool status` reports a running broker, and a stopped one', async () 
   await rm(elsewhere, { recursive: true, force: true });
 });
 
-test('`multitool activity` reads the audit trail while the broker runs', async () => {
+test('`aka activity` reads the audit trail while the broker runs', async () => {
   await broker.call({ connection: connectionNames.http, method: 'GET', path: '/authenticated' });
   const result = await run(
     multitoolBinary(),
@@ -67,7 +67,7 @@ test('`multitool activity` reads the audit trail while the broker runs', async (
   assert.ok(!result.stdout.includes(sandbox.httpToken));
 });
 
-test('default `multitool dsn` exports eval into a working psql session', async () => {
+test('default `aka dsn` exports eval into a working psql session', async () => {
   const result = await run(
     'sh',
     [
@@ -92,7 +92,7 @@ test('default `multitool dsn` exports eval into a working psql session', async (
   assert.ok(session, 'the CLI labels its own activity');
 });
 
-test('`multitool instructions` matches what the broker serves agents', async () => {
+test('`aka instructions` matches what the broker serves agents', async () => {
   const served = await broker.agentRaw('GET', '/instructions', { token: null });
   const printed = await run(multitoolBinary(), ['instructions', '--root', broker.root], {
     timeoutMs: 30_000,
@@ -101,7 +101,7 @@ test('`multitool instructions` matches what the broker serves agents', async () 
   assert.equal(printed.stdout.trim(), served.text.trim());
 });
 
-test('`multitool skill` emits the same document as a skill file', async () => {
+test('`aka skill` emits the same document as a skill file', async () => {
   const printed = await run(multitoolBinary(), ['skill', '--root', broker.root], { timeoutMs: 30_000 });
   assert.equal(printed.code, 0, printed.stderr);
   assert.ok(printed.stdout.includes(broker.socketPath));

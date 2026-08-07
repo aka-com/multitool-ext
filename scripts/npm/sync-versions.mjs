@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Keep the npm distribution's package versions in lock-step with the Cargo
-// workspace version — the single source of truth the `multitool` binary reports
+// workspace version — the single source of truth the `aka` binary reports
 // via `--version`. Covers the five package.json files under npm/ and the
 // main package's exact-pinned optionalDependencies on the platform packages.
 //
@@ -17,12 +17,12 @@ const repoRoot = path.resolve(
   ".."
 );
 
-const MAIN_PACKAGE = "multitool";
+const MAIN_PACKAGE = "aka-agent";
 const PLATFORM_PACKAGES = [
-  "multitool-darwin-arm64",
-  "multitool-darwin-x64",
-  "multitool-linux-arm64",
-  "multitool-linux-x64",
+  "aka-agent-darwin-arm64",
+  "aka-agent-darwin-x64",
+  "aka-agent-linux-arm64",
+  "aka-agent-linux-x64",
 ];
 const publishedName = (directory) => `@aka-com/${directory}`;
 

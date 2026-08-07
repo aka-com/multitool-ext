@@ -23,7 +23,7 @@ A copy of this walkthrough formatted for the browser is in
   sandbox:*` scripts and TypeScript test runner; `bash scripts/sandbox-up.sh`
   works without it.
 - Rust with Cargo, if you use the headless broker or run `sandbox:test` (the
-  test harness builds `multitool` before it starts its isolated brokers)
+  test harness builds `aka` before it starts its isolated brokers)
 - `curl`, `ssh-keygen`, `ssh-keyscan`, and the Postgres `psql` client
 - Multitool Desktop: the desktop app, or the headless broker
   (`cargo run -p multitool -- serve`) on any platform
@@ -153,9 +153,9 @@ pnpm run sandbox:test -- dev/sandbox/tests/ssh.test.ts  # one file
 AKA_SANDBOX_SLOW=1 pnpm run sandbox:test               # + the minute-scale cases
 ```
 
-The command checks that all four services are up, builds `multitool`, and runs the
+The command checks that all four services are up, builds `aka`, and runs the
 tests in `dev/sandbox/tests/`. Each test file
-starts its own `multitool serve` on a throwaway root, seeds the sandbox
+starts its own `aka serve` on a throwaway root, seeds the sandbox
 services as connections, and then speaks the real wire planes: the
 control plane over the broker's Unix socket, the manage plane the desktop
 app uses (including an attached request inbox that answers confirmation
@@ -178,7 +178,7 @@ connection:
 | `mcp.test.ts` | MCP over the HTTP plane, tool subsets, elicitations, the broker's MCP host |
 | `endpoints.test.ts` | direct endpoints for all three types: issue, use, rotate, revoke |
 | `manage-plane.test.ts` | the app's configuration surface and its validation |
-| `lifecycle.test.ts` | restart, key rotation, and the `multitool` commands this walkthrough names |
+| `lifecycle.test.ts` | restart, key rotation, and the `aka` commands this walkthrough names |
 | `unsupported.test.ts` | the matrix's empty cells — behaviour Multitool does not implement |
 
 Cases for behaviour that does not exist yet (per-statement Postgres
@@ -228,8 +228,8 @@ Silicon and amd64 hosts; update each tag and digest together after
 reviewing a new upstream release. The walkthrough above adds each
 service through Multitool Desktop; the same checks run headless on Linux
 (where the desktop app does not build) by seeding a throwaway root with
-`multitool conn add --root …` (the MCP connection needs `--mcp-path /mcp`),
-starting `multitool serve --root …`, and driving the broker over its Unix
+`aka conn add --root …` (the MCP connection needs `--mcp-path /mcp`),
+starting `aka serve --root …`, and driving the broker over its Unix
 socket the way an agent would. Bare `serve` would use `~/.akaserver` instead
 of the production desktop store.
 

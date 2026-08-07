@@ -1,8 +1,8 @@
 // One disposable headless broker per test file.
 //
 // The desktop app is macOS-only, so this suite drives what the sandbox
-// README calls the headless path: `multitool manage token` mints a management
-// credential offline, `multitool serve --root <tmp>` runs the broker with its
+// README calls the headless path: `aka manage token` mints a management
+// credential offline, `aka serve --root <tmp>` runs the broker with its
 // state under a throwaway directory, and the tests then speak the two wire
 // planes an agent and the app speak — the control plane over the Unix
 // socket, and the manage plane at /v1/manage.
@@ -168,14 +168,14 @@ export interface StartOptions {
 /* -------------------------------- harness --------------------------------- */
 
 export function multitoolBinary(): string {
-  const configured = process.env.AKA_MULTITOOL_BIN;
+  const configured = process.env.AKA_CLI_BIN;
   if (configured) return configured;
-  for (const candidate of ['target/debug/multitool', 'target/release/multitool']) {
+  for (const candidate of ['target/debug/aka', 'target/release/aka']) {
     const path = join(repoRoot, candidate);
     if (existsSync(path)) return path;
   }
   throw new Error(
-    'no `multitool` binary found — run `cargo build -p multitool` or set AKA_MULTITOOL_BIN ' +
+    'no `aka` binary found — run `cargo build -p multitool` or set AKA_CLI_BIN ' +
       '(`pnpm run sandbox:test` does this for you)',
   );
 }
@@ -202,7 +202,7 @@ export class Broker {
     const issued = await run(binary, ['manage', 'token', '--root', root], { timeoutMs: 30_000 });
     const manageToken = issued.stdout.trim().split('\n').pop() ?? '';
     if (!manageToken.startsWith('akamgr_')) {
-      throw new Error(`\`multitool manage token\` did not print a token: ${issued.stderr}`);
+      throw new Error(`\`aka manage token\` did not print a token: ${issued.stderr}`);
     }
 
     const broker = await Broker.launch(root, manageToken, options);

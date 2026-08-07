@@ -18,15 +18,16 @@ const repoRoot = path.resolve(
 const npmRoot = path.join(repoRoot, "npm");
 
 const PLATFORM_PACKAGES = {
-  "multitool-darwin-arm64": { os: "darwin", cpu: "arm64", format: "macho" },
-  "multitool-darwin-x64": { os: "darwin", cpu: "x64", format: "macho" },
-  "multitool-linux-arm64": { os: "linux", cpu: "arm64", format: "elf" },
-  "multitool-linux-x64": { os: "linux", cpu: "x64", format: "elf" },
+  "aka-agent-darwin-arm64": { os: "darwin", cpu: "arm64", format: "macho" },
+  "aka-agent-darwin-x64": { os: "darwin", cpu: "x64", format: "macho" },
+  "aka-agent-linux-arm64": { os: "linux", cpu: "arm64", format: "elf" },
+  "aka-agent-linux-x64": { os: "linux", cpu: "x64", format: "elf" },
 };
-const MAIN_PACKAGE = "multitool";
+const MAIN_PACKAGE = "aka-agent";
 const ALL_PACKAGES = [...Object.keys(PLATFORM_PACKAGES), MAIN_PACKAGE];
 const REQUIRED_NODE_ENGINE = ">=22";
-const publishedName = (directory) => `@aka-com/${directory}`;
+const publishedName = (directory) =>
+  directory === MAIN_PACKAGE ? MAIN_PACKAGE : `@aka-com/${directory}`;
 
 function fail(message) {
   throw new Error(`npm package verification failed: ${message}`);
@@ -34,6 +35,14 @@ function fail(message) {
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, "utf8"));
+}
+
+function verifyExactStrings(actual, expected, label) {
+  const got = [...(actual ?? [])].sort();
+  const want = [...expected].sort();
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    fail(`${label} must be exactly ${want.join(", ")}`);
+  }
 }
 
 function workspaceVersion() {
@@ -117,19 +126,24 @@ function verifyPlatformPackage(directory, expectedVersion) {
   if (manifest.cpu?.length !== 1 || manifest.cpu[0] !== expected.cpu) {
     fail(`${name} must declare cpu ${expected.cpu}`);
   }
+  verifyExactStrings(
+    manifest.files,
+    ["bin/aka", "bin/multitool-onepassword"],
+    `${name} published files`
+  );
 
-  const binary = path.join(packageDir, "bin", "multitool");
+  const binary = path.join(packageDir, "bin", "aka");
   try {
     accessSync(binary, constants.R_OK | constants.X_OK);
   } catch {
-    fail(`${name} is missing an executable bin/multitool; build and stage it first`);
+    fail(`${name} is missing an executable bin/aka; build and stage it first`);
   }
-  if (!statSync(binary).isFile()) fail(`${name}/bin/multitool is not a regular file`);
+  if (!statSync(binary).isFile()) fail(`${name}/bin/aka is not a regular file`);
 
   const identity = binaryIdentity(binary);
   if (identity.format !== expected.format || identity.cpu !== expected.cpu) {
     fail(
-      `${name}/bin/multitool is ${identity.format}-${identity.cpu}, expected ` +
+      `${name}/bin/aka is ${identity.format}-${identity.cpu}, expected ` +
         `${expected.format}-${expected.cpu}`
     );
   }
@@ -156,15 +170,15 @@ function verifyPlatformPackage(directory, expectedVersion) {
 
   if (process.platform === expected.os && process.arch === expected.cpu) {
     const result = spawnSync(binary, ["--version"], { encoding: "utf8" });
-    if (result.error) fail(`${name}/bin/multitool --version: ${result.error.message}`);
+    if (result.error) fail(`${name}/bin/aka --version: ${result.error.message}`);
     if (result.status !== 0) {
-      fail(`${name}/bin/multitool --version exited with status ${result.status}`);
+      fail(`${name}/bin/aka --version exited with status ${result.status}`);
     }
     const actual = result.stdout.trim();
-    if (actual !== `multitool ${expectedVersion}`) {
+    if (actual !== `aka ${expectedVersion}`) {
       fail(
-        `${name}/bin/multitool reports ${JSON.stringify(actual)}, expected ` +
-          `${JSON.stringify(`multitool ${expectedVersion}`)}`
+        `${name}/bin/aka reports ${JSON.stringify(actual)}, expected ` +
+          `${JSON.stringify(`aka ${expectedVersion}`)}`
       );
     }
   }
@@ -176,26 +190,32 @@ function verifyPlatformPackage(directory, expectedVersion) {
 
 function verifyMainPackage(expectedVersion) {
   const { packageDir, manifest } = verifyManifest(MAIN_PACKAGE, expectedVersion);
-  const launcher = path.join(packageDir, "bin", "multitool.js");
+  const launcher = path.join(packageDir, "bin", "aka.js");
   try {
     accessSync(launcher, constants.R_OK);
   } catch {
-    fail("@aka-com/multitool is missing bin/multitool.js");
+    fail("aka-agent is missing bin/aka.js");
   }
-  for (const command of ["multitool", "mfa", "agentmfa"]) {
-    if (manifest.bin?.[command] !== "bin/multitool.js") {
-      fail(`@aka-com/multitool must expose the ${command} compatibility command`);
-    }
+  const commands = Object.keys(manifest.bin ?? {});
+  if (commands.length !== 1 || commands[0] !== "aka" || manifest.bin.aka !== "bin/aka.js") {
+    fail("aka-agent must expose only aka through bin/aka.js");
   }
+  verifyExactStrings(manifest.files, ["bin/aka.js"], "aka-agent published files");
+  const expectedDependencies = Object.keys(PLATFORM_PACKAGES).map(publishedName);
+  verifyExactStrings(
+    Object.keys(manifest.optionalDependencies ?? {}),
+    expectedDependencies,
+    "aka-agent optional dependencies"
+  );
   for (const directory of Object.keys(PLATFORM_PACKAGES)) {
     const name = publishedName(directory);
     if (manifest.optionalDependencies?.[name] !== expectedVersion) {
       fail(
-        `@aka-com/multitool optionalDependency ${name} must be pinned to ${expectedVersion}`
+        `aka-agent optionalDependency ${name} must be pinned to ${expectedVersion}`
       );
     }
   }
-  console.log(`verified @aka-com/multitool@${expectedVersion} launcher`);
+  console.log(`verified aka-agent@${expectedVersion} launcher`);
 }
 
 function packageNameFromEnvironment() {

@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "aka-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "aka-client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aka-api",
  "aka-core",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "aka-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aka-api",
  "async-trait",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "aka-sandbox"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "serde_json",
@@ -3261,7 +3261,7 @@ dependencies = [
 
 [[package]]
 name = "multitool"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aka-api",
  "aka-client",

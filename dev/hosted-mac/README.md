@@ -8,11 +8,11 @@ plain HTTP on the address you give it.
 
 ## 1. On the broker Mac
 
-Choose one way to put `multitool` on your `PATH`:
+Choose one way to put `aka` on your `PATH`:
 
 ```sh
 # Published CLI:
-npm install -g @aka-com/multitool
+npm install -g aka-agent
 
 # Or, from the root of a source checkout:
 cargo build --release -p multitool
@@ -27,22 +27,22 @@ Then:
 # --public-url is what remote clients will reach it at through your proxy.
 # Override the root with --root or AKA_SERVER_ROOT; never shares the desktop
 # app's production store (~/.aka), so both can run on one Mac.
-multitool serve --listen 127.0.0.1:4780 --public-url https://broker.example.dev
+aka serve --listen 127.0.0.1:4780 --public-url https://broker.example.dev
 ```
 
-On its first start, `multitool serve` writes a bounded, owner-only bootstrap
+On its first start, `aka serve` writes a bounded, owner-only bootstrap
 credential to `~/.akaserver/sock/manage-token` (mode 0600). In another
 terminal, rotate and store it while the broker remains live (same `--root`):
 
 ```sh
 # Printed once — only its hash and the locally stored replacement remain.
-multitool manage token --root ~/.akaserver
+aka manage token --root ~/.akaserver
 
 # Future rotations authenticate with the saved current token.
-multitool manage token --root ~/.akaserver --ttl-days 90
+aka manage token --root ~/.akaserver --ttl-days 90
 
 # Close the manage API entirely.
-multitool manage token --root ~/.akaserver --revoke
+aka manage token --root ~/.akaserver --revoke
 ```
 
 Seed tools live with the same `--root`, or from the desktop after you connect
@@ -51,8 +51,8 @@ as a remote broker. Offline seed before first serve also needs
 
 The first successful rotation removes the bootstrap file. To rotate from
 another machine, first store the current token with
-`multitool manage login --broker https://broker.example.dev`, then run
-`multitool manage token --broker https://broker.example.dev`.
+`aka manage login --broker https://broker.example.dev`, then run
+`aka manage token --broker https://broker.example.dev`.
 
 Notes:
 
@@ -62,19 +62,19 @@ Notes:
   A headless Mac mini works with auto-login enabled. Items are stored
   `AfterFirstUnlock`, so the broker keeps reading once the Mac has been
   unlocked once after boot; it cannot read before that.
-- **`multitool serve` uses a root-scoped Keychain service and the login
+- **`aka serve` uses a root-scoped Keychain service and the login
   keychain when unsigned.** The data-protection keychain that makes reads
   silent is gated on a `keychain-access-groups` entitlement, which the
-  unsigned `multitool` binary does not carry. On a headless box that means
-  an approval dialog per secret, per build of `multitool` — click *Always
-  Allow* once per item, or sign your own `multitool` build.
-  `multitool status --root ~/.akaserver` prints which keychain is in use.
+  unsigned `aka` binary does not carry. On a headless box that means
+  an approval dialog per secret, per build of `aka` — click *Always
+  Allow* once per item, or sign your own `aka` build.
+  `aka status --root ~/.akaserver` prints which keychain is in use.
   The desktop app's production vault is a different Keychain service, so
   the two stores do not share secret items.
-- **MCP host**: `multitool serve` starts the in-process Rust host automatically.
+- **MCP host**: `aka serve` starts the in-process Rust host automatically.
   Remote MCP clients use `<public-url>/mcp`.
 - `/v1/pair` is not served on the TCP listener: remote clients get the
-  shared agent key from you (`multitool key --root ~/.akaserver`; it lives in
+  shared agent key from you (`aka key --root ~/.akaserver`; it lives in
   `~/.akaserver/sock/token`), and the desktop app manages the broker with
   the `akamgr_…` token only.
 
@@ -113,7 +113,7 @@ For agents on other machines to use the **Postgres** data plane, serve it
 on a reachable address:
 
 ```sh
-multitool serve --listen 127.0.0.1:4780 --public-url https://broker.example.dev \
+aka serve --listen 127.0.0.1:4780 --public-url https://broker.example.dev \
     --data-plane-listen 0.0.0.0 --advertise-host broker.lan
 ```
 

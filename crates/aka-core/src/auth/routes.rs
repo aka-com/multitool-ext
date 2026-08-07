@@ -78,7 +78,11 @@ fn relying_party(state: &AppState) -> Result<&Arc<RelyingParty>, Response> {
             .err()
             .map(|error| error.detail())
             .unwrap_or_else(|| "passkey sign-in is not available here".into());
-        error(StatusCode::SERVICE_UNAVAILABLE, "passkeys_unavailable", detail)
+        error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "passkeys_unavailable",
+            detail,
+        )
     })
 }
 
@@ -298,7 +302,10 @@ async fn register_options(
     }
 
     let account = state.broker.auth.owner();
-    let handle = account.as_ref().map(|a| a.handle).unwrap_or_else(Uuid::new_v4);
+    let handle = account
+        .as_ref()
+        .map(|a| a.handle)
+        .unwrap_or_else(Uuid::new_v4);
     let display = account
         .as_ref()
         .map(|a| a.display_name.clone())
@@ -347,7 +354,11 @@ async fn register_finish(
         Ok(passkey) => passkey,
         Err(error_value) => return auth_error(error_value),
     };
-    let credential = match state.broker.auth.finish_registration(account, label, passkey) {
+    let credential = match state
+        .broker
+        .auth
+        .finish_registration(account, label, passkey)
+    {
         Ok(credential) => credential,
         Err(error_value) => return auth_error(error_value),
     };
@@ -491,11 +502,9 @@ fn open_session(
         "expires_at": issued.session.expires_at,
     }))
     .into_response();
-    if let Ok(value) = axum::http::HeaderValue::from_str(&set_cookie(
-        origin,
-        issued.cookie.as_str(),
-        max_age,
-    )) {
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&set_cookie(origin, issued.cookie.as_str(), max_age))
+    {
         response
             .headers_mut()
             .insert(axum::http::header::SET_COOKIE, value);
@@ -590,9 +599,11 @@ fn check_redirect(redirect: &str) -> Result<(), String> {
         _ => false,
     };
     if !loopback {
-        return Err("the redirect URI must be a loopback address (127.0.0.1 or [::1]), \
+        return Err(
+            "the redirect URI must be a loopback address (127.0.0.1 or [::1]), \
                     not a hostname"
-            .into());
+                .into(),
+        );
     }
     if url.port().is_none() {
         return Err("the redirect URI must name the callback's port".into());
@@ -636,7 +647,7 @@ async fn authorize_page(
             StatusCode::CONFLICT,
             page(
                 "<h1>No passkey is enrolled</h1><p class=detail>Run \
-                 <code>multitool manage enroll</code> on the broker host, then \
+                 <code>aka manage enroll</code> on the broker host, then \
                  open the link it prints.</p>",
                 &nonce,
             ),
@@ -686,14 +697,19 @@ async fn authorize_submit(
     let csrf = headers
         .get(CSRF_HEADER)
         .and_then(|value| value.to_str().ok());
-    let verified = match state.broker.auth.verify_session(&value, Some(csrf.unwrap_or_default())) {
+    let verified = match state
+        .broker
+        .auth
+        .verify_session(&value, Some(csrf.unwrap_or_default()))
+    {
         Ok(verified) => verified,
         Err(error_value) => return auth_error(error_value),
     };
     // Authorizing a device is an `identity:manage` act with `Always` step-up:
     // the session must be freshly authenticated, not merely live.
     let fresh = verified.authenticated_at.is_some_and(|at| {
-        chrono::Utc::now() - at < chrono::Duration::from_std(super::RECENT_AUTH_WINDOW).unwrap_or_default()
+        chrono::Utc::now() - at
+            < chrono::Duration::from_std(super::RECENT_AUTH_WINDOW).unwrap_or_default()
     });
     if !fresh {
         return error(
@@ -805,7 +821,9 @@ async fn token(
             }
         }
     };
-    let expires_in = (issued.access_expires_at - chrono::Utc::now()).num_seconds().max(0);
+    let expires_in = (issued.access_expires_at - chrono::Utc::now())
+        .num_seconds()
+        .max(0);
     Json(json!({
         "access_token": issued.access.as_str(),
         "token_type": "Bearer",
@@ -1007,7 +1025,10 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert_eq!(cookie(&headers, SESSION_COOKIE).as_deref(), Some("akases_abc"));
+        assert_eq!(
+            cookie(&headers, SESSION_COOKIE).as_deref(),
+            Some("akases_abc")
+        );
         assert_eq!(cookie(&headers, "missing"), None);
     }
 
@@ -1023,7 +1044,8 @@ mod tests {
 
     #[test]
     fn the_cookie_is_http_only_and_strict_and_secure_on_https() {
-        let https = PublicOrigin::from_configured_public_url(Some("https://broker.example")).unwrap();
+        let https =
+            PublicOrigin::from_configured_public_url(Some("https://broker.example")).unwrap();
         let value = set_cookie(&https, "akases_abc", 3600);
         assert!(value.contains("HttpOnly"));
         assert!(value.contains("Secure"));

@@ -36,6 +36,8 @@ fi
 
 if [[ -z "$output" ]]; then
   output="$repo_root/target/$target/multitool-onepassword"
+elif [[ "$output" != /* ]]; then
+  output="$repo_root/$output"
 fi
 mkdir -p "$(dirname "$output")"
 

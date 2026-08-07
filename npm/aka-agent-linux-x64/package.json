@@ -1,14 +1,14 @@
 {
-  "name": "@aka-com/multitool-linux-x64",
-  "version": "0.2.0",
-  "description": "Multitool CLI binary for Linux (x64, glibc). Install @aka-com/multitool instead of installing this directly.",
+  "name": "@aka-com/aka-agent-linux-x64",
+  "version": "0.3.0",
+  "description": "The aka CLI binary for Linux (x64, glibc). Install aka-agent instead of installing this directly.",
   "homepage": "https://github.com/aka-com/multitool",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aka-com/multitool.git"
   },
   "files": [
-    "bin/multitool",
+    "bin/aka",
     "bin/multitool-onepassword"
   ],
   "engines": {

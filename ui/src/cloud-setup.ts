@@ -21,8 +21,8 @@ function shellArgument(value: string): string {
 export function cloudSetupCommand(connection: { name: string; cloud?: CloudInfo | null }): string {
   const name = shellArgument(connection.name);
   return connection.cloud?.provider === 'aws'
-    ? `multitool cloud install ${name}`
-    : `eval "$(multitool cloud env ${name})"`;
+    ? `aka cloud install ${name}`
+    : `eval "$(aka cloud env ${name})"`;
 }
 
 /** The CLI this connection's minted session is for, named as its vendor does. */

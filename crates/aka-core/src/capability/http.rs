@@ -2081,8 +2081,8 @@ pub(crate) async fn render_connection_injection(
                 // From here the minted token is an ordinary bearer header:
                 // injection, redirect re-application, and response redaction
                 // all follow the same path as a template credential.
-                let mut value =
-                    HeaderValue::from_str(&format!("Bearer {}", &*bearer.token)).map_err(|_| {
+                let mut value = HeaderValue::from_str(&format!("Bearer {}", &*bearer.token))
+                    .map_err(|_| {
                         "the minted access token is not a valid header value".to_string()
                     })?;
                 value.set_sensitive(true);

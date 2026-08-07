@@ -42,12 +42,12 @@ pub mod darwin;
 use serde::{Deserialize, Serialize};
 
 /// How far up the process tree to look before giving up. Deep enough to step
-/// over a shell wrapper or two (`sh -c "multitool mcp"`, a terminal
+/// over a shell wrapper or two (`sh -c "aka mcp"`, a terminal
 /// multiplexer), shallow enough that an unrelated ancestor cannot be reached.
 const MAX_DEPTH: usize = 4;
 
 /// Executables that launch other programs without being the program. Walking
-/// past these is what lets `sh -c "multitool mcp"` still attest as the agent
+/// past these is what lets `sh -c "aka mcp"` still attest as the agent
 /// that ran it.
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "env", "login", "script",
@@ -110,9 +110,8 @@ impl AgentIdentity {
 
     pub fn team_id(&self) -> Option<&str> {
         match self {
-            AgentIdentity::Verified { team_id, .. } | AgentIdentity::VerifiedSigner { team_id, .. } => {
-                Some(team_id)
-            }
+            AgentIdentity::Verified { team_id, .. }
+            | AgentIdentity::VerifiedSigner { team_id, .. } => Some(team_id),
             AgentIdentity::Unattested => None,
         }
     }
@@ -483,8 +482,13 @@ mod tests {
         FakePlatform::default()
             .own("TEAM1")
             .proc(100, 50, "/Applications/Claude.app/Contents/MacOS/Claude")
-            .signed(100, "TEAM1", "com.anthropic.claude-desktop", Some("Claude Desktop"))
-            .proc(200, 100, "/usr/local/bin/multitool")
+            .signed(
+                100,
+                "TEAM1",
+                "com.anthropic.claude-desktop",
+                Some("Claude Desktop"),
+            )
+            .proc(200, 100, "/usr/local/bin/aka")
             .signed(200, "TEAM1", "com.aka.multitool", None)
     }
 
@@ -534,10 +538,10 @@ mod tests {
 
     #[test]
     fn shell_wrappers_are_walked_past() {
-        // `claude` → `sh -c "multitool mcp"` → helper.
+        // `claude` → `sh -c "aka mcp"` → helper.
         let p = claude_desktop()
             .proc(150, 100, "/bin/sh")
-            .proc(200, 150, "/usr/local/bin/multitool");
+            .proc(200, 150, "/usr/local/bin/aka");
         assert_eq!(attest(&p, p.peer(200)).program(), Some("Claude Desktop"));
     }
 
@@ -550,7 +554,7 @@ mod tests {
             .proc(103, 102, "/bin/sh")
             .proc(104, 103, "/bin/sh")
             .proc(105, 104, "/bin/sh")
-            .proc(200, 105, "/usr/local/bin/multitool");
+            .proc(200, 105, "/usr/local/bin/aka");
         assert_eq!(attest(&p, p.peer(200)), AgentIdentity::Unattested);
     }
 
@@ -562,7 +566,7 @@ mod tests {
         let p = claude_desktop()
             .proc(150, 100, "/opt/homebrew/bin/node")
             .signed(150, "TEAM9", "org.nodejs.node", Some("Node.js"))
-            .proc(200, 150, "/usr/local/bin/multitool");
+            .proc(200, 150, "/usr/local/bin/aka");
         assert_eq!(attest(&p, p.peer(200)), AgentIdentity::Unattested);
     }
 
@@ -570,7 +574,7 @@ mod tests {
     fn a_versioned_python_still_classifies_as_an_interpreter() {
         let p = claude_desktop()
             .proc(150, 100, "/opt/homebrew/bin/python3.12")
-            .proc(200, 150, "/usr/local/bin/multitool");
+            .proc(200, 150, "/usr/local/bin/aka");
         assert_eq!(attest(&p, p.peer(200)), AgentIdentity::Unattested);
     }
 
@@ -596,7 +600,7 @@ mod tests {
 
     #[test]
     fn reparented_to_launchd_attests_nothing() {
-        let p = claude_desktop().proc(200, 1, "/usr/local/bin/multitool");
+        let p = claude_desktop().proc(200, 1, "/usr/local/bin/aka");
         assert_eq!(attest(&p, p.peer(200)), AgentIdentity::Unattested);
     }
 
@@ -643,10 +647,7 @@ mod tests {
         // Not an error: the same answer a caller that presented none gets, so
         // a forged string buys nothing a plain connection would not have.
         let tickets = AttestationTickets::default();
-        assert_eq!(
-            tickets.redeem("akaatt_deadbeef"),
-            AgentIdentity::Unattested
-        );
+        assert_eq!(tickets.redeem("akaatt_deadbeef"), AgentIdentity::Unattested);
     }
 
     #[test]
@@ -677,7 +678,10 @@ mod tests {
             Some("Someone")
         );
         // No recognizable shape: pass it through rather than mangle it.
-        assert_eq!(signer_org("Anthropic, PBC").as_deref(), Some("Anthropic, PBC"));
+        assert_eq!(
+            signer_org("Anthropic, PBC").as_deref(),
+            Some("Anthropic, PBC")
+        );
         assert_eq!(signer_org("").as_deref(), None);
     }
 }

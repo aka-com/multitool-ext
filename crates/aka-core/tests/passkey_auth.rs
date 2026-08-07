@@ -129,14 +129,20 @@ async fn post_json(base: &str, path: &str, origin: Option<&str>, body: Value) ->
     let response = request.send().await.unwrap();
     let status = response.status().as_u16();
     let text = response.text().await.unwrap();
-    (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    )
 }
 
 fn authorize_query(overrides: &[(&str, &str)]) -> String {
     let mut params = vec![
         ("client_id", "multitool-desktop"),
         ("redirect_uri", "http://127.0.0.1:51234/callback"),
-        ("code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"),
+        (
+            "code_challenge",
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        ),
         ("code_challenge_method", "S256"),
         ("state", "opaque"),
         ("device_name", "Test Mac"),
@@ -225,7 +231,11 @@ async fn web_harness() -> (Harness, tempfile::TempDir) {
     let port = probe.local_addr().unwrap().port();
     drop(probe);
     let bundle = tempfile::tempdir().unwrap();
-    std::fs::write(bundle.path().join("index.html"), "<!doctype html><title>app</title>").unwrap();
+    std::fs::write(
+        bundle.path().join("index.html"),
+        "<!doctype html><title>app</title>",
+    )
+    .unwrap();
     std::fs::create_dir_all(bundle.path().join("assets")).unwrap();
     std::fs::write(bundle.path().join("assets/app-a1b2c3.js"), "export {}").unwrap();
     std::fs::write(bundle.path().join("secret.pem"), "PRIVATE KEY").unwrap();
@@ -295,7 +305,10 @@ async fn the_web_app_is_served_from_the_same_origin_as_its_api() {
 
     // The API keeps no-store even though the bundle is mounted.
     let (_, _, headers) = get(&h.base, "/v1/auth/config").await;
-    assert_eq!(headers.get(reqwest::header::CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(
+        headers.get(reqwest::header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
 }
 
 #[tokio::test]
@@ -416,7 +429,8 @@ async fn a_cloud_pusher_token_reaches_its_two_routes_and_nothing_else() {
         ("GET", "/v1/manage/activity"),
         ("GET", "/v1/manage/identity/agent-key"),
     ] {
-        let (status, body) = manage(router.clone(), method, uri, Some(&token), None, None, None).await;
+        let (status, body) =
+            manage(router.clone(), method, uri, Some(&token), None, None, None).await;
         assert_eq!(status, 403, "{method} {uri} must be refused: {body}");
         assert_eq!(body["reason"], json!("insufficient_scope"));
         // The refusal says what it does hold, so an operator can fix it.
@@ -656,7 +670,8 @@ async fn the_management_token_still_works_everywhere() {
         ("GET", "/v1/manage/settings"),
         ("GET", "/v1/manage/whoami"),
     ] {
-        let (status, body) = manage(router.clone(), method, uri, Some(&token), None, None, None).await;
+        let (status, body) =
+            manage(router.clone(), method, uri, Some(&token), None, None, None).await;
         assert_eq!(status, 200, "{method} {uri}: {body}");
     }
     // Including the step-up routes, which it is exempt from because it has
@@ -738,7 +753,10 @@ async fn revoking_a_device_ends_its_event_stream_and_releases_its_lease() {
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(
-        response.headers().get("x-aka-approval-surface-status").unwrap(),
+        response
+            .headers()
+            .get("x-aka-approval-surface-status")
+            .unwrap(),
         "active"
     );
     let mut body = response.bytes_stream();
@@ -753,7 +771,10 @@ async fn revoking_a_device_ends_its_event_stream_and_releases_its_lease() {
         while (body.next().await).is_some() {}
     })
     .await;
-    assert!(ended.is_ok(), "the stream must end when the device is revoked");
+    assert!(
+        ended.is_ok(),
+        "the stream must end when the device is revoked"
+    );
     drop(body);
 
     // And the capability goes with it, so confirmed traffic fails closed
@@ -764,7 +785,10 @@ async fn revoking_a_device_ends_its_event_stream_and_releases_its_lease() {
         }
     })
     .await;
-    assert!(released.is_ok(), "the approval-surface lease must be released");
+    assert!(
+        released.is_ok(),
+        "the approval-surface lease must be released"
+    );
 }
 
 /* --------------------- retiring the management token --------------------- */
@@ -996,7 +1020,10 @@ async fn the_authorize_page_refuses_a_request_it_cannot_trust() {
             "a challenge that is not a digest",
             authorize_query(&[("code_challenge", "short")]),
         ),
-        ("no state to bind the reply", authorize_query(&[("state", "")])),
+        (
+            "no state to bind the reply",
+            authorize_query(&[("state", "")]),
+        ),
         (
             // The one that matters most: a code is a bearer credential, and
             // where the browser will send it is the only thing protecting it.
@@ -1023,7 +1050,7 @@ async fn the_authorize_page_says_so_when_nothing_is_enrolled() {
     let (status, body, _) = get(&h.base, &format!("/authorize?{}", authorize_query(&[]))).await;
     assert_eq!(status, 409);
     let html = body.as_str().unwrap();
-    assert!(html.contains("multitool manage enroll"), "{html}");
+    assert!(html.contains("aka manage enroll"), "{html}");
 }
 
 #[tokio::test]
@@ -1058,8 +1085,7 @@ async fn a_post_from_another_origin_is_refused() {
         // A name that merely contains ours.
         Some("https://localhost.evil.test"),
     ] {
-        let (status, body) =
-            post_json(&h.base, "/v1/auth/signin/options", origin, json!({})).await;
+        let (status, body) = post_json(&h.base, "/v1/auth/signin/options", origin, json!({})).await;
         assert_eq!(status, 403, "origin {origin:?} must not post here");
         assert_eq!(body["reason"], json!("cross_origin"));
     }

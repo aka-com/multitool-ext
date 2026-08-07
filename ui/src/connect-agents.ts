@@ -310,7 +310,7 @@ export interface ConnectClient {
   /** The walkthrough pane's copy-button label. */
   copyLabel: string;
   snippet: (env: ConnectClientEnv) => string;
-  /** This client launches `multitool mcp`, which must be installed separately. */
+  /** This client launches `aka mcp`, which must be installed separately. */
   requiresCli?: boolean;
   /** Its Quick Start snippet is shell commands, so CLI installation can be
    * prepended to the same runnable block. */
@@ -325,7 +325,7 @@ export interface ConnectClient {
   note?: string;
 }
 
-export const CLI_INSTALL_COMMAND = 'npm install -g @aka-com/multitool';
+export const CLI_INSTALL_COMMAND = 'npm install -g aka-agent';
 
 /** Connection-guide steps include the CLI prerequisite as its own first step
  * for clients that launch the stdio bridge. */
@@ -334,18 +334,18 @@ export function connectGuideSteps(client: ConnectClient, env: ConnectClientEnv):
   if (!client.requiresCli) return steps;
   return [{
     title: 'Install the Multitool CLI',
-    detail: 'Install the multitool command globally and keep it available on PATH. Requires Node.js 22 or newer.',
+    detail: 'Install the aka command globally and keep it available on PATH. Requires Node.js 22 or newer.',
     snippet: CLI_INSTALL_COMMAND,
   }, ...steps];
 }
 
 const SNIPPETS: Record<string, (env: ConnectClientEnv) => string> = {
-  'claude-code': () => 'claude mcp add multitool -- multitool mcp --client claude-code',
+  'claude-code': () => 'claude mcp add multitool -- aka mcp --client claude-code',
   'claude-desktop': () =>
     '{\n'
     + '  "mcpServers": {\n'
     + '    "multitool": {\n'
-    + '      "command": "multitool",\n'
+    + '      "command": "aka",\n'
     + '      "args": [\n'
     + '        "mcp",\n'
     + '        "--client",\n'
@@ -354,7 +354,7 @@ const SNIPPETS: Record<string, (env: ConnectClientEnv) => string> = {
     + '    }\n'
     + '  }\n'
     + '}',
-  codex: () => '[mcp_servers.multitool]\ncommand = "multitool"\nargs = ["mcp", "--client", "codex"]',
+  codex: () => '[mcp_servers.multitool]\ncommand = "aka"\nargs = ["mcp", "--client", "codex"]',
   mcp: (env: ConnectClientEnv) =>
     `# the MCP URL's port moves with restarts — read mcp_url from the manifest\n`
     + `curl -fsS --unix-socket ${env.socket} http://localhost/.well-known/agent-broker.json\n\n`
@@ -455,7 +455,7 @@ export const CONNECT_CLIENTS: ConnectClient[] = [
       },
       {
         title: 'Or skip HTTP entirely',
-        detail: 'After installing the Multitool CLI, clients that launch stdio servers can run multitool mcp directly.',
+        detail: 'After installing the Multitool CLI, clients that launch stdio servers can run aka mcp directly.',
         snippet: CLI_INSTALL_COMMAND,
       },
     ],
@@ -632,7 +632,7 @@ export function sshDirectCommand(
   // it is the command shown — an address that cannot be used is worse than no
   // address, because it looks like a working one.
   if (requireAuth) {
-    return `multitool ssh-agent ${shellWord(connection.name ?? '')} -- ${sshInvocationCommand(connection)}`;
+    return `aka ssh-agent ${shellWord(connection.name ?? '')} -- ${sshInvocationCommand(connection)}`;
   }
   return `${sshAuthSockAssignment(socket)} ${sshInvocationCommand(connection)}`;
 }

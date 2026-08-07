@@ -27,15 +27,12 @@ const ROOT_GROUPS: &[(&str, &[&str])] = &[
 ];
 
 const ROOT_WORKFLOWS: &[(&str, &str)] = &[
-    ("Set up an agent", "multitool skill --write"),
-    ("Connect an MCP client", "multitool mcp"),
-    ("Run a headless broker", "multitool serve [--listen …]"),
-    ("Open Postgres", "eval \"$(multitool dsn <conn>)\" && psql"),
-    (
-        "Open SSH",
-        "export SSH_AUTH_SOCK=\"$(multitool ssh <conn>)\"",
-    ),
-    ("Open a cloud CLI", "eval \"$(multitool cloud env <conn>)\""),
+    ("Set up an agent", "aka skill --write"),
+    ("Connect an MCP client", "aka mcp"),
+    ("Run a headless broker", "aka serve [--listen …]"),
+    ("Open Postgres", "eval \"$(aka dsn <conn>)\" && psql"),
+    ("Open SSH", "export SSH_AUTH_SOCK=\"$(aka ssh <conn>)\""),
+    ("Open a cloud CLI", "eval \"$(aka cloud env <conn>)\""),
 ];
 
 fn terminal_width() -> u16 {
@@ -429,8 +426,8 @@ fn render_args(command: &Command, color: bool) -> String {
 fn render_help(command: &Command, color: bool, root: bool) -> String {
     let title = if root {
         match command.get_version() {
-            Some(version) => format!("multitool {version}"),
-            None => "multitool".into(),
+            Some(version) => format!("aka {version}"),
+            None => "aka".into(),
         }
     } else {
         command
@@ -465,7 +462,7 @@ fn render_help(command: &Command, color: bool, root: bool) -> String {
         ));
         output.push_str(&dim(
             color,
-            "Run `multitool <command> --help` for command-specific options.",
+            "Run `aka <command> --help` for command-specific options.",
         ));
         output.push('\n');
     } else if let Some(after) = command

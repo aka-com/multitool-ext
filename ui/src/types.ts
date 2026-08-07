@@ -145,7 +145,7 @@ export interface AgentAccess {
     /**
      * SSH only: the agent socket refuses to list or sign until the caller
      * presents the endpoint secret. Changes what the row can say — such a
-     * socket is reached through `multitool ssh-agent`, not by pointing
+     * socket is reached through `aka ssh-agent`, not by pointing
      * `IdentityAgent` straight at the path.
      */
     require_auth?: boolean;

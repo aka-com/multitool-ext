@@ -1789,7 +1789,7 @@ async fn require_endpoint_auth(h: &Harness) -> String {
         "an authenticated endpoint surfaces the secret a client has to send"
     );
     assert!(
-        info.example.contains("multitool ssh-agent"),
+        info.example.contains("aka ssh-agent"),
         "the example must name the forwarder that can send it: {}",
         info.example
     );
@@ -2011,7 +2011,7 @@ async fn reissuing_an_endpoint_keeps_it_authenticated() {
     let reissued = h.issue_ssh_endpoint().await;
     assert_ne!(reissued.secret, first, "the secret rotates");
     assert!(
-        !reissued.secret.is_empty() && reissued.example.contains("multitool ssh-agent"),
+        !reissued.secret.is_empty() && reissued.example.contains("aka ssh-agent"),
         "the socket still requires authentication after a rotation"
     );
 

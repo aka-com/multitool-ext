@@ -1,4 +1,4 @@
-// Running child processes: the `multitool` CLI, `ssh`, `ssh-keyscan`.
+// Running child processes: the `aka` CLI, `ssh`, `ssh-keyscan`.
 
 import { spawn, type SpawnOptions } from 'node:child_process';
 

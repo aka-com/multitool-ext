@@ -154,7 +154,7 @@ test('a stock ssh client logs in through the socket', async (t) => {
   );
 });
 
-test('the `multitool ssh` binary opens a socket a stock client can use', async (t) => {
+test('the `aka ssh` binary opens a socket a stock client can use', async (t) => {
   if (!sshClient) return t.skip('no ssh client on PATH');
   const opened = await run(
     multitoolBinary(),
@@ -163,7 +163,7 @@ test('the `multitool ssh` binary opens a socket a stock client can use', async (
   );
   assert.equal(opened.code, 0, opened.stderr);
   const authSock = opened.stdout.trim();
-  assert.ok(existsSync(authSock), `multitool returned a live socket: ${authSock}`);
+  assert.ok(existsSync(authSock), `aka returned a live socket: ${authSock}`);
 
   const result = await sshCommand(authSock, 'echo cli-spawn-ok');
   assert.equal(result.code, 0, result.stderr);

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install the built `multitool` CLI into a user-local directory already on PATH.
+# Install the built `aka` CLI into a user-local directory already on PATH.
 #
 #   bash scripts/install.sh              use newest existing debug/release binary
 #   bash scripts/install.sh --build      build release, then install
@@ -13,7 +13,7 @@ set -euo pipefail
 #   PREFIX        install to $PREFIX/bin (default PREFIX=$HOME/.local → ~/.local/bin)
 #
 # Prompts Y/n before installing (Enter accepts the default Yes). The prompt
-# reports whether an existing multitool file or symlink would be replaced.
+# reports whether an existing aka file or symlink would be replaced.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 repo_root="$(cd "$script_dir/.." >/dev/null && pwd)"
@@ -26,14 +26,14 @@ usage() {
   cat <<'EOF'
 Usage: scripts/install.sh [options]
 
-Install the multitool CLI into a user-local PATH directory.
+Install the aka CLI into a user-local PATH directory.
 
 By default this does not build. It installs the most recently modified binary
-among target/debug/multitool and target/release/multitool (timestamps shown).
+among target/debug/aka and target/release/aka (timestamps shown).
 
 Options:
   --build       Build before install (default profile: release)
-  --debug       With --build: build target/debug/multitool
+  --debug       With --build: build target/debug/aka
   -h, --help    Show this help
 
 Environment:
@@ -65,9 +65,9 @@ else
   install_dir="$prefix/bin"
 fi
 
-debug_src="$repo_root/target/debug/multitool"
-release_src="$repo_root/target/release/multitool"
-dest="$install_dir/multitool"
+debug_src="$repo_root/target/debug/aka"
+release_src="$repo_root/target/release/aka"
+dest="$install_dir/aka"
 
 # Format mtime for display; empty string if missing.
 mtime_display() {
@@ -107,13 +107,13 @@ echo "           $(mtime_display "$release_src")"
 
 if [[ "$do_build" -eq 1 ]]; then
   echo
-  echo "Building multitool ($profile)..."
+  echo "Building aka ($profile)..."
   if [[ "$profile" == release ]]; then
     cargo build --release -p multitool
   else
     cargo build -p multitool
   fi
-  src="$repo_root/target/$profile/multitool"
+  src="$repo_root/target/$profile/aka"
 else
   debug_m="$(mtime_epoch "$debug_src")"
   release_m="$(mtime_epoch "$release_src")"
@@ -162,7 +162,7 @@ if [[ ! -w "$install_dir" ]]; then
   exit 1
 fi
 
-existing_note="no existing multitool there"
+existing_note="no existing aka there"
 if [[ -e "$dest" || -L "$dest" ]]; then
   if [[ -L "$dest" ]]; then
     target="$(readlink "$dest" || true)"
@@ -185,7 +185,7 @@ case ":$PATH:" in
 esac
 
 echo
-echo "Install multitool ($profile) to $dest$path_note"
+echo "Install aka ($profile) to $dest$path_note"
 echo "  source:  $src"
 echo "  dest:    $existing_note"
 echo
@@ -202,11 +202,11 @@ esac
 install -m 755 "$src" "$dest"
 echo "Installed $dest"
 
-if command -v multitool >/dev/null 2>&1; then
-  resolved="$(command -v multitool)"
+if command -v aka >/dev/null 2>&1; then
+  resolved="$(command -v aka)"
   if [[ "$resolved" == "$dest" ]]; then
     echo "on PATH as: $resolved"
   else
-    echo "note: \`command -v multitool\` resolves to $resolved (not $dest)"
+    echo "note: \`command -v aka\` resolves to $resolved (not $dest)"
   fi
 fi

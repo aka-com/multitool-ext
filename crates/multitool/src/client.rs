@@ -1,7 +1,7 @@
 //! Shared client for talking to a running broker over its Unix control
 //! socket: minimal HTTP, shared-key loading, and authenticated capability
-//! opens. `multitool mcp` builds its discovery loop on the low-level pieces;
-//! `multitool dsn` and `multitool ssh` drive [`open_session`] directly.
+//! opens. `aka mcp` builds its discovery loop on the low-level pieces;
+//! `aka dsn` and `aka ssh` drive [`open_session`] directly.
 
 use std::path::Path;
 
@@ -31,8 +31,8 @@ impl std::fmt::Display for OpenSessionError {
             Self::NoBroker { socket } => write!(
                 f,
                 "no broker is running at {} — start Multitool for the local store \
-                 (~/.aka), or `multitool serve` (default ~/.akaserver) / \
-                 `multitool serve --root …` for a headless root",
+                 (~/.aka), or `aka serve` (default ~/.akaserver) / \
+                 `aka serve --root …` for a headless root",
                 socket.display()
             ),
             Self::Refused { status, detail, .. } => {

@@ -1409,15 +1409,16 @@ fn schedule_escalation(
             let mid_generation = generation;
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(mid_delay).await;
-                let still_waiting = mid_app.try_state::<RequestAttention>().is_some_and(
-                    |attention| {
-                        let inner = attention.inner.lock().unwrap();
-                        inner.escalation_generation == mid_generation
-                            && mid_subjects
-                                .iter()
-                                .any(|subject| inner.notification_subject_is_active(subject))
-                    },
-                );
+                let still_waiting =
+                    mid_app
+                        .try_state::<RequestAttention>()
+                        .is_some_and(|attention| {
+                            let inner = attention.inner.lock().unwrap();
+                            inner.escalation_generation == mid_generation
+                                && mid_subjects
+                                    .iter()
+                                    .any(|subject| inner.notification_subject_is_active(subject))
+                        });
                 if still_waiting && !crate::windows::request_surface_focused() {
                     crate::windows::surface_for_approval(&mid_app);
                 }
@@ -2021,10 +2022,8 @@ fn macos_notification_system_settings() -> Option<NotificationSystemSettings> {
 pub async fn refresh_notification_system_settings(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
-        let Ok(Some(settings)) = tauri::async_runtime::spawn_blocking(
-            macos_notification_system_settings,
-        )
-        .await
+        let Ok(Some(settings)) =
+            tauri::async_runtime::spawn_blocking(macos_notification_system_settings).await
         else {
             return;
         };
@@ -2789,7 +2788,9 @@ mod tests {
             expiration_delivery_plan(&[one], settings(NotificationMode::Always, true), false)
                 .unwrap();
         assert_eq!(single.title, "A Multitool request expired");
-        assert!(single.body.contains("An agent was refused access to github"));
+        assert!(single
+            .body
+            .contains("An agent was refused access to github"));
         assert_eq!(single.action, Some(NotificationAction::ViewDetails));
         assert!(expiration_delivery_plan(
             &pending.requests,

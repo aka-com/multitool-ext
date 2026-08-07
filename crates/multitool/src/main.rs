@@ -1,33 +1,33 @@
-//! `multitool` CLI.
+//! `aka` CLI.
 //!
-//! - `multitool skill` emits the `/instructions` content as a checked-in
+//! - `aka skill` emits the `/instructions` content as a checked-in
 //!   skill file, the same content the daemon serves, so the convention
 //!   layer can't drift from the daemon.
-//! - `multitool serve` runs a headless broker under its own root (default
+//! - `aka serve` runs a headless broker under its own root (default
 //!   `~/.akaserver`, overridable with `--root` or `AKA_SERVER_ROOT`) so it
 //!   never shares the desktop app's production store. Use `--listen` for the
 //!   remote/hosted control plane.
-//! - `multitool secret add|list|rename|replace|rm` and
-//!   `multitool conn add|list|show|update|rename|rm|enable|disable|test` manage the
+//! - `aka secret add|list|rename|replace|rm` and
+//!   `aka conn add|list|show|update|rename|rm|enable|disable|test` manage the
 //!   store from the terminal — the dev/headless counterpart of the app's
 //!   Secrets and Tools tabs — with the same validation, so a `serve --root`
 //!   harness never hand-writes (sealed) store files. Mutations beyond
 //!   seeding run through the broker's own `ui_*` layer, so audit entries
 //!   and access/endpoint side effects cannot drift from the app.
-//! - `multitool sessions`, `multitool requests`, and `multitool settings` expose the remaining
+//! - `aka sessions`, `aka requests`, and `aka settings` expose the remaining
 //!   day-to-day broker visibility and lifecycle controls without requiring
 //!   the desktop UI. The request command can hold a leased headless inbox and
 //!   answer approvals or elicitations.
-//! - `multitool dsn` / `multitool ssh` open data-plane sessions on a running broker.
+//! - `aka dsn` / `aka ssh` open data-plane sessions on a running broker.
 //!   Postgres prints shell-safe `PG*` exports by default so the ticket stays
 //!   out of argv; SSH prints the `SSH_AUTH_SOCK` path.
-//! - `multitool key` / `multitool status` / `multitool activity` are the operator's view:
+//! - `aka key` / `aka status` / `aka activity` are the operator's view:
 //!   the shared agent key (and its rotation), whether a broker is up and
 //!   what it serves, and the audit trail.
 //! - Management commands work online too: against the running local
 //!   broker over its socket, or a hosted broker via `--broker <url>` —
 //!   both through the manage API, authorized by the management token
-//!   (`multitool manage login` stores it). With no broker running they fall
+//!   (`aka manage login` stores it). With no broker running they fall
 //!   back to the offline construction above.
 
 use std::os::unix::fs::FileTypeExt as _;
@@ -89,10 +89,10 @@ fn parse_manage_ttl_days(value: &str) -> Result<u64, String> {
 
 const DEFAULT_MANAGE_TOKEN_TTL_DAYS: u64 = 30;
 
-/// Env override for `multitool serve`'s default root when `--root` is omitted.
+/// Env override for `aka serve`'s default root when `--root` is omitted.
 const SERVER_ROOT_ENV: &str = "AKA_SERVER_ROOT";
 
-/// Clap help/error colors, matched to the `multitool serve` banner palette:
+/// Clap help/error colors, matched to the `aka serve` banner palette:
 /// green headings, cyan syntax, yellow invalid, red errors.
 const CLI_STYLES: Styles = Styles::styled()
     .header(AnsiColor::Green.on_default().bold())
@@ -130,7 +130,7 @@ fn parse_field_value(value: &str) -> Result<String, String> {
 
 #[derive(Parser)]
 #[command(
-    name = "multitool",
+    name = "aka",
     version,
     about = "Secrets broker CLI for AI agents",
     styles = CLI_STYLES
@@ -179,7 +179,7 @@ enum Command {
     },
     /// Print shell completions.
     ///
-    /// `multitool completions zsh > "${fpath[1]}/_multitool"`, or source it from your
+    /// `aka completions zsh > "${fpath[1]}/_aka"`, or source it from your
     /// shell's rc file. The script is generated from this CLI's own command
     /// tree, so it cannot drift from the commands it completes.
     Completions {
@@ -265,7 +265,7 @@ enum Command {
     },
     /// Stdio bridge to the local MCP host.
     ///
-    /// Point any MCP client at `multitool mcp` — it reads this computer's
+    /// Point any MCP client at `aka mcp` — it reads this computer's
     /// shared key and discovers the MCP endpoint itself, so configs stay static.
     Mcp {
         /// Bridge to a broker rooted here instead of the default layout.
@@ -280,7 +280,7 @@ enum Command {
     ///
     /// By default prints shell-safe PG* exports (PGHOST, PGPORT, PGDATABASE,
     /// PGUSER, PGPASSWORD, PGSSLMODE):
-    /// `eval "$(multitool dsn analytics)" && psql`. The ticket stays out of argv.
+    /// `eval "$(aka dsn analytics)" && psql`. The ticket stays out of argv.
     Dsn {
         /// The pg connection's name.
         connection: String,
@@ -302,7 +302,7 @@ enum Command {
     },
     /// Open SSH (prints SSH_AUTH_SOCK).
     ///
-    /// `export SSH_AUTH_SOCK="$(multitool ssh production)"` — then stock
+    /// `export SSH_AUTH_SOCK="$(aka ssh production)"` — then stock
     /// `ssh`/`git`/`scp`/`rsync` work while the broker signs only for the
     /// connection's pinned user and server host key. The command prints the
     /// destination, the pinned fingerprint, the absolute deadline, and the
@@ -859,7 +859,7 @@ enum ConnCommand {
         /// ssh: make the agent socket refuse to list or sign until the caller
         /// presents the endpoint secret, so finding the socket is no longer
         /// enough to use it. Stock `ssh` cannot send the extension that does
-        /// this — reach an authenticated endpoint through `multitool ssh-agent`.
+        /// this — reach an authenticated endpoint through `aka ssh-agent`.
         #[arg(long, conflicts_with_all = ["revoke", "no_require_auth"])]
         require_auth: bool,
         /// ssh: stop requiring authentication on the agent socket, returning
@@ -867,7 +867,7 @@ enum ConnCommand {
         #[arg(long, conflicts_with = "revoke")]
         no_require_auth: bool,
         /// Print only the pasteable address (the base URL / DSN / agent
-        /// socket), for `$(multitool conn endpoint <name> --url)`.
+        /// socket), for `$(aka conn endpoint <name> --url)`.
         #[arg(long, conflicts_with = "secret")]
         url: bool,
         /// Print only the endpoint secret (empty for SSH, whose socket path
@@ -1040,7 +1040,7 @@ enum ConnKind {
 
 #[derive(Subcommand)]
 enum CloudCommand {
-    /// Print shell exports for stock cloud CLIs (`eval "$(multitool cloud env …)"`).
+    /// Print shell exports for stock cloud CLIs (`eval "$(aka cloud env …)"`).
     Env {
         /// The cloud connection's name.
         connection: String,
@@ -1134,7 +1134,7 @@ fn endpoint_action_supported(action: EndpointAction, online: bool) -> Result<(),
     if matches!(action, EndpointAction::Issue | EndpointAction::Renew) && !online {
         Err(
             "direct endpoint issuance and renewal require a running broker to own the listener; \
-             start Multitool for the local store, or `multitool serve` / `multitool serve --root …` \
+             start Multitool for the local store, or `aka serve` / `aka serve --root …` \
              for a headless root, then retry",
         )
     } else {
@@ -1612,7 +1612,7 @@ fn store_paths(root: Option<&Path>) -> Paths {
     }
 }
 
-/// Default directory for bare `multitool serve`: `~/.akaserver`.
+/// Default directory for bare `aka serve`: `~/.akaserver`.
 fn default_server_root() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| {
         "could not determine the home directory for the default serve root (~/.akaserver); \
@@ -1622,7 +1622,7 @@ fn default_server_root() -> Result<PathBuf, String> {
     Ok(home.join(".akaserver"))
 }
 
-/// Resolve `multitool serve`'s root.
+/// Resolve `aka serve`'s root.
 ///
 /// Precedence: explicit `--root` > non-empty `AKA_SERVER_ROOT` > `default_root`
 /// (normally `~/.akaserver`). The env value is used as-is; shells expand `~`
@@ -1807,7 +1807,7 @@ fn cmd_secret_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         return;
     }
     if secrets.is_empty() {
-        ack_dim("no secrets configured (add one with `multitool secret add <name>`)");
+        ack_dim("no secrets configured (add one with `aka secret add <name>`)");
         return;
     }
     let rows = secrets.into_iter().map(|dto| {
@@ -1848,9 +1848,8 @@ impl Managed {
     fn run_gated<T>(&self, call: impl std::future::Future<Output = ManageResult<T>>) -> T {
         if self.approval_surface_attached() {
             if presentation::stderr_is_tty() {
-                let spinner = presentation::Spinner::start(
-                    "Waiting for confirmation in the Multitool app…",
-                );
+                let spinner =
+                    presentation::Spinner::start("Waiting for confirmation in the Multitool app…");
                 let value = self.run(call);
                 spinner.stop("Confirmation received");
                 return value;
@@ -1890,7 +1889,7 @@ fn warn_version_skew(profile: &serde_json::Value) {
     let cli_version = env!("CARGO_PKG_VERSION");
     if broker_version != cli_version {
         warn_line(format!(
-            "warning: broker version {broker_version} differs from multitool CLI version {cli_version}; \
+            "warning: broker version {broker_version} differs from aka CLI version {cli_version}; \
              update them together before making changes"
         ));
     }
@@ -1902,7 +1901,7 @@ fn manage_token_store(paths: &Paths) -> TokenStore {
 
 /// Resolve the management token for `key` (a manage URL, or the local
 /// socket path): the AKA_MANAGE_TOKEN environment variable wins, then the
-/// token stored by `multitool manage login`.
+/// token stored by `aka manage login`.
 fn manage_token(paths: &Paths, key: &str) -> Option<Zeroizing<String>> {
     if let Ok(token) = std::env::var("AKA_MANAGE_TOKEN") {
         let token = Zeroizing::new(token);
@@ -1957,7 +1956,7 @@ fn management_backend_with_create(
                 ExitCode::Authentication,
                 format!(
                     "no management token for {url} — set AKA_MANAGE_TOKEN, or store \
-                 one with `multitool manage login --broker {url}` (issued by `multitool \
+                 one with `aka manage login --broker {url}` (issued by `aka \
                  manage token` on the broker host)"
                 ),
             );
@@ -1990,9 +1989,9 @@ fn management_backend_with_create(
                 ExitCode::Authentication,
                 format!(
                     "a broker is running on {key}.\n\
-                 To edit it live, run `multitool manage token` to consume its \
+                 To edit it live, run `aka manage token` to consume its \
                  first-start credential or rotate a saved token, store a token \
-                 with `multitool manage login`, or set AKA_MANAGE_TOKEN."
+                 with `aka manage login`, or set AKA_MANAGE_TOKEN."
                 ),
             );
         };
@@ -2056,7 +2055,7 @@ fn secret_dto(managed: &Managed, name: &str) -> SecretDto {
         Some(dto) => dto,
         None => die_with(
             ExitCode::NotFound,
-            format!("no secret named {name:?} (see `multitool secret list`)"),
+            format!("no secret named {name:?} (see `aka secret list`)"),
         ),
     }
 }
@@ -2067,7 +2066,7 @@ fn conn_dto(managed: &Managed, name: &str) -> ConnectionDto {
         Some(dto) => dto,
         None => die_with(
             ExitCode::NotFound,
-            format!("no connection named {name:?} (see `multitool conn list`)"),
+            format!("no connection named {name:?} (see `aka conn list`)"),
         ),
     }
 }
@@ -2111,7 +2110,9 @@ fn cmd_secret_replace(
             new_origin: None,
         },
     ));
-    ack(format!("replaced the value of secret {name} ({byte_len} bytes)"));
+    ack(format!(
+        "replaced the value of secret {name} ({byte_len} bytes)"
+    ));
 }
 
 fn cmd_secret_rm(name: String, root: Option<PathBuf>, url: Option<String>) {
@@ -2304,9 +2305,10 @@ fn conn_config(args: &ConnAdd) -> Result<ConnectionConfig, String> {
                             &args.cloud_client_secret_ref,
                         )?,
                         subscription_id: args.cloud_subscription_id.clone(),
-                        scope: args.cloud_scope.clone().unwrap_or_else(|| {
-                            "https://management.azure.com/.default".into()
-                        }),
+                        scope: args
+                            .cloud_scope
+                            .clone()
+                            .unwrap_or_else(|| "https://management.azure.com/.default".into()),
                         session_ttl_secs: ttl,
                     },
                 }),
@@ -2351,7 +2353,7 @@ fn cmd_conn_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         return;
     }
     if connections.is_empty() {
-        ack_dim("no connections configured (add one with `multitool conn add`)");
+        ack_dim("no connections configured (add one with `aka conn add`)");
         return;
     }
     let rows = connections.into_iter().map(|dto| {
@@ -2492,7 +2494,7 @@ fn cmd_conn_show(name: String, root: Option<PathBuf>, url: Option<String>, json:
                         endpoint
                             .dsn
                             .as_deref()
-                            .unwrap_or("issued; use `multitool conn endpoint` to copy"),
+                            .unwrap_or("issued; use `aka conn endpoint` to copy"),
                         endpoint.kind,
                         // Whether the socket is a standing signing oracle for anything
                         // that can open it is the most consequential fact about an SSH
@@ -2702,7 +2704,7 @@ fn watch_requests(managed: &Managed) {
     let surface_id = dto_id(&surface.id);
     guide(
         "request inbox attached; press Ctrl-C to detach\n\
-         answer from another terminal with `multitool requests --approve ID` or `--deny ID`",
+         answer from another terminal with `aka requests --approve ID` or `--deny ID`",
     );
 
     let backend = managed.backend.clone();
@@ -2997,7 +2999,9 @@ fn cmd_conn_confirm(name: String, root: Option<PathBuf>, url: Option<String>, on
             );
         }
     } else {
-        ack_dim(format!("traffic confirmation was already {state} for {name}"));
+        ack_dim(format!(
+            "traffic confirmation was already {state} for {name}"
+        ));
     }
 }
 
@@ -3127,7 +3131,9 @@ fn cmd_conn_audit_statements(
             );
         }
     } else {
-        ack_dim(format!("statement recording was already {state} for {name}"));
+        ack_dim(format!(
+            "statement recording was already {state} for {name}"
+        ));
     }
 }
 
@@ -3151,11 +3157,7 @@ fn cmd_conn_test(name: String, root: Option<PathBuf>, url: Option<String>, json:
     if report.ok {
         if !json {
             let color = stderr_use_color();
-            eprintln!(
-                "{} {}",
-                paint::bold_green(color, "ok:"),
-                report.detail
-            );
+            eprintln!("{} {}", paint::bold_green(color, "ok:"), report.detail);
         }
     } else {
         if !json {
@@ -3164,11 +3166,7 @@ fn cmd_conn_test(name: String, root: Option<PathBuf>, url: Option<String>, json:
                 Some(kind) => format!("failed ({kind:?}):"),
                 None => "failed:".into(),
             };
-            eprintln!(
-                "{} {}",
-                paint::bold_red(color, &prefix),
-                report.detail
-            );
+            eprintln!("{} {}", paint::bold_red(color, &prefix), report.detail);
         }
         exit_with(ExitCode::TestFailed);
     }
@@ -3257,7 +3255,7 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
                 ExitCode::NotFound,
                 format!(
                     "no direct endpoint issued for {name} — start the broker and retry with \
-                         `multitool conn endpoint {name} --issue`"
+                         `aka conn endpoint {name} --issue`"
                 ),
             ),
         },
@@ -3281,7 +3279,7 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
             guide(format!(
                 "the agent socket for {name} {}",
                 if require_auth {
-                    "now requires the endpoint secret — reach it through `multitool ssh-agent`"
+                    "now requires the endpoint secret — reach it through `aka ssh-agent`"
                 } else {
                     "no longer requires the endpoint secret"
                 }
@@ -3301,14 +3299,14 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
             ExitCode::Usage,
             format!(
                 "the direct endpoint for {name} has expired — renew it with \
-                 `multitool conn endpoint {name} --renew`"
+                 `aka conn endpoint {name} --renew`"
             ),
         );
     }
     if expired {
         warn_line(format!(
             "expired — renew without changing this address with \
-             `multitool conn endpoint {name} --renew`"
+             `aka conn endpoint {name} --renew`"
         ));
     }
     if action == EndpointAction::Issue {
@@ -3363,7 +3361,7 @@ fn doc_paths(root: Option<PathBuf>) -> Paths {
     }
 }
 
-const GENERATED_SKILL_MARKER: &str = "<!-- Generated by `multitool skill`. Do not edit:";
+const GENERATED_SKILL_MARKER: &str = "<!-- Generated by `aka skill`. Do not edit:";
 
 fn generated_skill_file(content: &str) -> bool {
     content.contains(GENERATED_SKILL_MARKER)
@@ -3490,7 +3488,7 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
         Err(ManageError::InvalidManageToken { detail }) => die_with(
             ExitCode::Authentication,
             detail.unwrap_or_else(|| {
-                "the broker rejected this management token — issue a fresh one with `multitool manage token`"
+                "the broker rejected this management token — issue a fresh one with `aka manage token`"
                     .into()
             }),
         ),
@@ -3553,7 +3551,7 @@ fn online_manage_token(
                         ExitCode::Authentication,
                         format!(
                             "AKA_MANAGE_TOKEN is empty; set the current token or run \
-                             `multitool manage login --broker {url}`"
+                             `aka manage login --broker {url}`"
                         ),
                     );
                 }
@@ -3568,7 +3566,7 @@ fn online_manage_token(
                     ExitCode::Authentication,
                     format!(
                         "no current management token for {url} — set AKA_MANAGE_TOKEN \
-                         or store one with `multitool manage login --broker {url}`; initial \
+                         or store one with `aka manage login --broker {url}`; initial \
                          bootstrap must be run on the broker host"
                     ),
                 );
@@ -3894,10 +3892,7 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>) {
 /// reports it.
 fn cmd_manage_legacy(restore: bool, retire: bool, root: Option<PathBuf>) {
     if restore == retire {
-        die_with(
-            ExitCode::Usage,
-            "choose one of --retire or --restore",
-        );
+        die_with(ExitCode::Usage, "choose one of --retire or --restore");
     }
     require_existing_root_for_read(root.as_deref(), false);
     let paths = store_paths(root.as_deref());
@@ -4102,7 +4097,7 @@ fn cmd_dsn(
 /// definition for why each is present and why `IdentitiesOnly` is not.
 use aka_core::capability::ssh::SSH_BROKER_OPTIONS;
 
-/// The stderr lines accompanying `multitool ssh`'s socket path.
+/// The stderr lines accompanying `aka ssh`'s socket path.
 ///
 /// Everything here was already in the broker's response and thrown away: the
 /// destination to actually type (an imported alias is not `user@host`), the
@@ -4198,12 +4193,7 @@ fn ssh_config_block(body: &serde_json::Value, auth_sock: &str, destination: &str
     block
 }
 
-fn cmd_cloud_env(
-    connection: String,
-    root: Option<PathBuf>,
-    client: Option<String>,
-    json: bool,
-) {
+fn cmd_cloud_env(connection: String, root: Option<PathBuf>, client: Option<String>, json: bool) {
     let client = Some(client.unwrap_or_else(|| "multitool-cloud".to_string()));
     let body = open_session("/v1/cloud/session", &connection, root, client);
     if json {
@@ -4265,11 +4255,7 @@ fn cmd_cloud_creds(
     }
     let client = Some(client.unwrap_or_else(|| "multitool-cloud".to_string()));
     let body = open_session("/v1/cloud/session", &connection, root, client);
-    let format = if json {
-        CloudCredsFormat::Json
-    } else {
-        format
-    };
+    let format = if json { CloudCredsFormat::Json } else { format };
     match format {
         CloudCredsFormat::Json => print_json(&body),
         CloudCredsFormat::Env => {
@@ -4343,7 +4329,7 @@ fn cmd_cloud_install(
     let exe = std::env::current_exe()
         .ok()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "multitool".into());
+        .unwrap_or_else(|| "aka".into());
     let mut process = format!(
         "{} cloud creds {}",
         aws_process_quote(&exe),
@@ -4360,7 +4346,12 @@ fn cmd_cloud_install(
         // A profile-reuse connection may pin no region at all (host is bare
         // "aws"): the minted credentials carry the profile's own region, so
         // the emitted stanza simply omits the region line.
-        "aws" | "" if dto.host.as_deref().is_some_and(|h| h == "aws" || h.starts_with("aws:")) => {
+        "aws" | ""
+            if dto
+                .host
+                .as_deref()
+                .is_some_and(|h| h == "aws" || h.starts_with("aws:")) =>
+        {
             let region = dto
                 .host
                 .as_deref()
@@ -4416,7 +4407,9 @@ fn cmd_cloud_install(
                     );
                 }
                 _ => {
-                    println!("# Short-lived GCP access token (service-account key stays in Multitool)");
+                    println!(
+                        "# Short-lived GCP access token (service-account key stays in Multitool)"
+                    );
                     println!("eval \"$({env_cmd})\"");
                     println!("# CLOUDSDK_AUTH_ACCESS_TOKEN is set for gcloud; e.g.:");
                     println!("# gcloud storage ls");
@@ -4477,7 +4470,7 @@ fn cmd_ssh_agent(
         die_with(
             ExitCode::NoBroker,
             "the endpoint socket is served by a running broker; start Multitool for the local \
-             store, or `multitool serve` / `multitool serve --root …` for a headless root, then retry",
+             store, or `aka serve` / `aka serve --root …` for a headless root, then retry",
         );
     }
     let connection_id = dto_id(&dto.id);
@@ -4486,7 +4479,7 @@ fn cmd_ssh_agent(
             ExitCode::NotFound,
             format!(
                 "no direct endpoint is issued for {connection} — issue one with \
-                 `multitool conn endpoint {connection} --issue --require-auth`"
+                 `aka conn endpoint {connection} --issue --require-auth`"
             ),
         );
     };
@@ -4495,7 +4488,7 @@ fn cmd_ssh_agent(
             ExitCode::Usage,
             format!(
                 "the direct endpoint for {connection} has expired — renew it with \
-                 `multitool conn endpoint {connection} --renew`"
+                 `aka conn endpoint {connection} --renew`"
             ),
         );
     }
@@ -4531,17 +4524,17 @@ fn cmd_ssh_agent(
         .unwrap_or_else(|error| die(format!("could not bind a local agent socket: {error}")));
         let path = socket.path().display().to_string();
         if command.is_empty() {
-            // Same shape as `multitool ssh`: guidance on stderr, the one pasteable
+            // Same shape as `aka ssh`: guidance on stderr, the one pasteable
             // value on stdout, so `$(…)` captures only the path. Unlike
-            // `multitool ssh` the path dies with this process, so the export is
+            // `aka ssh` the path dies with this process, so the export is
             // only useful to another terminal while this one is running.
             eprintln!("  serving {connection}'s endpoint until you press Ctrl-C");
             eprintln!("  in another terminal:  export SSH_AUTH_SOCK=\"{path}\"");
-            // Not `$(multitool ssh-agent …)`: this command does not exit, so a
+            // Not `$(aka ssh-agent …)`: this command does not exit, so a
             // command substitution around it waits forever. The socket dies
             // with this process, which is also why the path is only useful
             // while it is on screen.
-            eprintln!("  or run the client here:  multitool ssh-agent {connection} -- ssh ...");
+            eprintln!("  or run the client here:  aka ssh-agent {connection} -- ssh ...");
             println!("{path}");
             socket
                 .serve(upstream, secret, async {
@@ -4562,7 +4555,7 @@ fn cmd_ssh_agent(
                 status = child.wait().await.ok();
             })
             .await;
-        // The command's status is this command's status: `multitool ssh-agent x --
+        // The command's status is this command's status: `aka ssh-agent x --
         // ssh host` must fail when the ssh does, or a script wrapping it
         // cannot tell.
         let Some(status) = status else { return };
@@ -4746,7 +4739,7 @@ fn print_status_report(report: &StatusReport) {
                     "  ",
                     "version",
                     format!(
-                        "broker {version}, multitool CLI {} (protocol {protocol})",
+                        "broker {version}, aka CLI {} (protocol {protocol})",
                         report.cli_version
                     )
                 )
@@ -4757,7 +4750,7 @@ fn print_status_report(report: &StatusReport) {
                     color,
                     "  ",
                     "version",
-                    format!("broker {version}, multitool CLI {}", report.cli_version)
+                    format!("broker {version}, aka CLI {}", report.cli_version)
                 )
             ),
         }
@@ -4767,7 +4760,12 @@ fn print_status_report(report: &StatusReport) {
     } else if report.transport == "unix" {
         println!(
             "{}",
-            colon_field(color, "  ", "MCP host", paint::bold_yellow(color, "not running"))
+            colon_field(
+                color,
+                "  ",
+                "MCP host",
+                paint::bold_yellow(color, "not running")
+            )
         );
     }
     if let Some(client_id) = &report.client_id {
@@ -4826,9 +4824,8 @@ fn print_status_report(report: &StatusReport) {
             if approval_surface_attached {
                 policy.push("confirm: on".to_string());
             } else {
-                policy.push(
-                    "confirm: on; no approval surface — traffic will be refused".to_string(),
-                );
+                policy
+                    .push("confirm: on; no approval surface — traffic will be refused".to_string());
             }
         }
         // A direct endpoint outlives any session and is revoked separately, so
@@ -4836,11 +4833,7 @@ fn print_status_report(report: &StatusReport) {
         if tool.endpoint {
             policy.push("direct endpoint issued".into());
         }
-        let access = if tool.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
+        let access = if tool.enabled { "enabled" } else { "disabled" };
         vec![
             tool.name.clone(),
             tool.kind.clone(),
@@ -5066,7 +5059,7 @@ fn local_status(root: Option<PathBuf>) -> Result<StatusReport, StatusFailure> {
                 Vec::new(),
                 Vec::new(),
                 Some(
-                    "no management token configured; run `multitool manage login` to include tools"
+                    "no management token configured; run `aka manage login` to include tools"
                         .into(),
                 ),
             ),
@@ -5110,7 +5103,7 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
                     paint::bold_yellow(
                         stderr_use_color(),
                         format!(
-                            "warning: broker version {} differs from multitool CLI version {}; update them together before making changes",
+                            "warning: broker version {} differs from aka CLI version {}; update them together before making changes",
                             report.broker_version.as_deref().unwrap_or("unknown"),
                             report.cli_version
                         )
@@ -5267,7 +5260,7 @@ fn cmd_mcp(root: Option<PathBuf>, client: Option<String>) {
     }
 }
 
-/// Everything `multitool serve` accepts, bundled so the call site stays legible.
+/// Everything `aka serve` accepts, bundled so the call site stays legible.
 struct ServeArgs {
     root: Option<PathBuf>,
     listen: Option<std::net::SocketAddr>,
@@ -5304,12 +5297,7 @@ fn stdout_use_color() -> bool {
 
 /// `label: value` line used by status / conn show (and the offline status
 /// diagnostic). Indent is applied before the painted label.
-fn colon_field(
-    color: bool,
-    indent: &str,
-    label: &str,
-    value: impl std::fmt::Display,
-) -> String {
+fn colon_field(color: bool, indent: &str, label: &str, value: impl std::fmt::Display) -> String {
     let label = paint::bold_cyan(color, label);
     let value = value.to_string();
     if value.is_empty() {
@@ -5343,7 +5331,7 @@ fn warn_line(message: impl std::fmt::Display) {
 /// Parse argv with clap's validation and the generated Multitool help view.
 fn configured_cli_command(color: bool) -> clap::Command {
     // Propagate CLI_STYLES from the root command onto every subcommand so
-    // `multitool serve --help`, `multitool conn show --help`, etc. match the
+    // `aka serve --help`, `aka conn show --help`, etc. match the
     // top-level palette, and align clap errors with our help renderer.
     // Color is configured before build so clap propagates it to every child.
     let mut cmd = if color {
@@ -5380,7 +5368,7 @@ enum McpBannerStatus {
     Failed(String),
 }
 
-/// Inputs for the `multitool serve` ready banner. Formatted once as plain
+/// Inputs for the `aka serve` ready banner. Formatted once as plain
 /// lines (for tests and non-TTY) and printed with optional color on a TTY.
 struct ServeBanner {
     socket: PathBuf,
@@ -5439,7 +5427,7 @@ impl ServeBanner {
             out.push(format_label(
                 "Rotate",
                 format!(
-                    "`multitool manage token{}` while the broker is live",
+                    "`aka manage token{}` while the broker is live",
                     self.root_flag
                 ),
             ));
@@ -5447,7 +5435,7 @@ impl ServeBanner {
             out.push(format_label(
                 "Manage",
                 format!(
-                    "`multitool <cmd>{}` or `--broker <url>` when listening",
+                    "`aka <cmd>{}` or `--broker <url>` when listening",
                     self.root_flag
                 ),
             ));
@@ -5455,7 +5443,7 @@ impl ServeBanner {
                 out.push(format_label(
                     "Token",
                     format!(
-                        "`multitool manage token{}` (or --broker), then enter it in the app",
+                        "`aka manage token{}` (or --broker), then enter it in the app",
                         self.root_flag
                     ),
                 ));
@@ -5475,7 +5463,7 @@ impl ServeBanner {
         out.push(format_label(
             "Skill",
             format!(
-                "`multitool skill --write{}` (or --broker when listening)",
+                "`aka skill --write{}` (or --broker when listening)",
                 self.root_flag
             ),
         ));
@@ -5498,10 +5486,7 @@ impl ServeBanner {
                 "TCP",
                 format!("{addr}  (plaintext; put TLS in front)"),
             )),
-            None => out.push(format_label(
-                "TCP",
-                "off — add --listen 127.0.0.1:4780",
-            )),
+            None => out.push(format_label("TCP", "off — add --listen 127.0.0.1:4780")),
         }
         match (&self.tcp_addr, &self.public_url) {
             (_, Some(url)) => out.push(format_label("Public URL", url)),
@@ -5516,10 +5501,7 @@ impl ServeBanner {
         }
         match (&self.public_url, &self.web_root) {
             (_, Some(path)) => out.push(format_label("UI", path.display())),
-            (Some(_), None) => out.push(format_label(
-                "UI",
-                "off — add --web-root dist/ui",
-            )),
+            (Some(_), None) => out.push(format_label("UI", "off — add --web-root dist/ui")),
             (None, None) => out.push(format_label(
                 "UI",
                 "off — also needs --public-url; then --web-root dist/ui",
@@ -5586,7 +5568,11 @@ fn split_label_line(line: &str) -> Option<(&str, &str)> {
     let (label_field, value) = rest.split_at(11);
     let value = value.strip_prefix(' ')?;
     let label = label_field.trim_end();
-    if label.is_empty() || label.chars().any(|c| !(c.is_ascii_alphanumeric() || c == ' ')) {
+    if label.is_empty()
+        || label
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == ' '))
+    {
         return None;
     }
     // Multi-word labels we actually use.
@@ -5768,7 +5754,10 @@ fn cmd_serve(args: ServeArgs) {
     eprintln!(
         "  {} {}",
         paint::bold_cyan(color, format!("{:11}", "Shutdown")),
-        paint::dim(color, format!("{signal} received; draining active sessions"))
+        paint::dim(
+            color,
+            format!("{signal} received; draining active sessions")
+        )
     );
     daemon.stop_accepting();
     let sessions = broker.begin_shutdown();
@@ -5827,9 +5816,7 @@ mod tests {
 
     #[test]
     fn generated_help_is_grouped_and_does_not_drift() {
-        let help = match configured_cli_command(false)
-            .try_get_matches_from(["multitool", "--help"])
-        {
+        let help = match configured_cli_command(false).try_get_matches_from(["aka", "--help"]) {
             Ok(_) => panic!("--help unexpectedly parsed as a command"),
             Err(error) => error.to_string(),
         };
@@ -5842,22 +5829,25 @@ mod tests {
             "bare help should orient with workflows:\n{help}"
         );
         assert!(!help.contains("EXIT CODES"), "{help}");
-        assert!(!help.contains("multitool run"), "{help}");
-        assert_eq!(help.matches("Write or print the agent skill file").count(), 1);
+        assert!(!help.contains("aka run"), "{help}");
+        assert_eq!(
+            help.matches("Write or print the agent skill file").count(),
+            1
+        );
 
-        let bare = match configured_cli_command(false).try_get_matches_from(["multitool"]) {
+        let bare = match configured_cli_command(false).try_get_matches_from(["aka"]) {
             Ok(_) => panic!("a commandless invocation unexpectedly parsed"),
             Err(error) => error.to_string(),
         };
         assert!(bare.contains("COMMON WORKFLOWS"), "{bare}");
 
         let nested = match configured_cli_command(false)
-            .try_get_matches_from(["multitool", "conn", "show", "--help"])
+            .try_get_matches_from(["aka", "conn", "show", "--help"])
         {
             Ok(_) => panic!("nested --help unexpectedly parsed as a command"),
             Err(error) => error.to_string(),
         };
-        assert!(nested.contains("multitool conn show"), "{nested}");
+        assert!(nested.contains("aka conn show"), "{nested}");
         assert!(nested.contains("ARGUMENTS"), "{nested}");
         assert!(nested.contains("--broker <BROKER>"), "{nested}");
     }
@@ -5909,7 +5899,10 @@ mod tests {
 
     #[test]
     fn colon_field_paints_label_and_keeps_plain_value() {
-        assert_eq!(colon_field(false, "  ", "vault", "keychain"), "  vault: keychain");
+        assert_eq!(
+            colon_field(false, "  ", "vault", "keychain"),
+            "  vault: keychain"
+        );
         assert_eq!(colon_field(false, "", "name", "github"), "name: github");
         assert_eq!(colon_field(false, "  ", "tools", ""), "  tools:");
         let colored = colon_field(true, "  ", "MCP host", "http://x");
@@ -5920,17 +5913,13 @@ mod tests {
 
     #[test]
     fn generated_help_obeys_color_mode() {
-        let colored = match configured_cli_command(true)
-            .try_get_matches_from(["multitool", "--help"])
-        {
+        let colored = match configured_cli_command(true).try_get_matches_from(["aka", "--help"]) {
             Ok(_) => panic!("--help unexpectedly parsed as a command"),
             Err(error) => error.render().ansi().to_string(),
         };
         assert!(colored.contains('\u{1b}'));
 
-        let plain = match configured_cli_command(false)
-            .try_get_matches_from(["multitool", "--help"])
-        {
+        let plain = match configured_cli_command(false).try_get_matches_from(["aka", "--help"]) {
             Ok(_) => panic!("--help unexpectedly parsed as a command"),
             Err(error) => error.to_string(),
         };
@@ -5995,7 +5984,7 @@ mod tests {
 
     #[test]
     fn management_tokens_default_to_a_bounded_ttl() {
-        let cli = Cli::try_parse_from(["multitool", "manage", "token"]).unwrap();
+        let cli = Cli::try_parse_from(["aka", "manage", "token"]).unwrap();
         let Command::Manage {
             command: ManageCommand::Token {
                 ttl_days, revoke, ..
@@ -6009,7 +5998,7 @@ mod tests {
         assert!(parse_manage_ttl_days("0").is_err());
         assert!(parse_manage_ttl_days("3651").is_err());
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "manage",
             "token",
             "--broker",
@@ -6025,7 +6014,11 @@ mod tests {
     fn serve_root_prefers_explicit_then_env_then_default() {
         let default = PathBuf::from("/default/akaserver");
         assert_eq!(
-            resolve_serve_root(Some(PathBuf::from("/explicit")), Some("/from-env"), default.clone()),
+            resolve_serve_root(
+                Some(PathBuf::from("/explicit")),
+                Some("/from-env"),
+                default.clone()
+            ),
             PathBuf::from("/explicit")
         );
         assert_eq!(
@@ -6036,10 +6029,7 @@ mod tests {
             resolve_serve_root(None, Some("  /from-env  "), default.clone()),
             PathBuf::from("/from-env")
         );
-        assert_eq!(
-            resolve_serve_root(None, Some(""), default.clone()),
-            default
-        );
+        assert_eq!(resolve_serve_root(None, Some(""), default.clone()), default);
         assert_eq!(
             resolve_serve_root(None, Some("   "), default.clone()),
             default
@@ -6050,7 +6040,10 @@ mod tests {
     #[test]
     fn default_server_root_is_home_akaserver() {
         let root = default_server_root().expect("HOME should be set in tests");
-        assert_eq!(root.file_name().and_then(|n| n.to_str()), Some(".akaserver"));
+        assert_eq!(
+            root.file_name().and_then(|n| n.to_str()),
+            Some(".akaserver")
+        );
         let paths = Paths::under(&root);
         assert_eq!(paths.data_dir, root.join("data"));
         assert_eq!(paths.socket_dir, root.join("sock"));
@@ -6060,39 +6053,35 @@ mod tests {
     fn agent_plane_labels_and_serve_flags_are_validated_by_clap() {
         for command in ["dsn", "ssh"] {
             assert!(Cli::try_parse_from([
-                "multitool",
+                "aka",
                 command,
                 "production",
                 "--client",
                 "honest\r\nX-Forged: yes",
             ])
             .is_err());
-            assert!(Cli::try_parse_from([
-                "multitool",
-                command,
-                "production",
-                "--client",
-                "ci-runner"
-            ])
-            .is_ok());
+            assert!(
+                Cli::try_parse_from(["aka", command, "production", "--client", "ci-runner"])
+                    .is_ok()
+            );
         }
 
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "serve",
             "--public-url",
             "https://broker.example.test",
         ])
         .is_err());
-        assert!(Cli::try_parse_from(["multitool", "serve", "--data-plane-insecure"]).is_err());
+        assert!(Cli::try_parse_from(["aka", "serve", "--data-plane-insecure"]).is_err());
         for flag in ["--session-idle-timeout", "--session-max-ttl"] {
-            assert!(Cli::try_parse_from(["multitool", "serve", flag, "0"]).is_err());
-            assert!(Cli::try_parse_from(["multitool", "serve", flag, "1"]).is_ok());
+            assert!(Cli::try_parse_from(["aka", "serve", flag, "0"]).is_err());
+            assert!(Cli::try_parse_from(["aka", "serve", flag, "1"]).is_ok());
         }
-        assert!(Cli::try_parse_from(["multitool", "serve", "--no-mcp"]).is_ok());
-        assert!(Cli::try_parse_from(["multitool", "serve", "--no-sidecar"]).is_ok());
+        assert!(Cli::try_parse_from(["aka", "serve", "--no-mcp"]).is_ok());
+        assert!(Cli::try_parse_from(["aka", "serve", "--no-sidecar"]).is_ok());
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "serve",
             "--listen",
             "127.0.0.1:4780",
@@ -6341,13 +6330,13 @@ mod tests {
     fn aws_credential_process_quotes_paths_and_connection_names() {
         let command = format!(
             "{} cloud creds {} --root {}",
-            aws_process_quote("/Applications/Multitool Preview/multitool"),
+            aws_process_quote("/Applications/Multitool Preview/aka"),
             aws_process_quote("Production AWS"),
             aws_process_quote("/tmp/vault \"copy\"")
         );
         assert_eq!(
             command,
-            "\"/Applications/Multitool Preview/multitool\" cloud creds \"Production AWS\" --root \"/tmp/vault \\\"copy\\\"\""
+            "\"/Applications/Multitool Preview/aka\" cloud creds \"Production AWS\" --root \"/tmp/vault \\\"copy\\\"\""
         );
     }
 
@@ -6364,7 +6353,7 @@ mod tests {
 
     #[test]
     fn json_is_global_across_read_commands() {
-        let cli = Cli::try_parse_from(["multitool", "status", "--json"]).unwrap();
+        let cli = Cli::try_parse_from(["aka", "status", "--json"]).unwrap();
         assert!(cli.json);
         assert!(matches!(
             cli.command,
@@ -6373,7 +6362,7 @@ mod tests {
                 broker: None,
             }
         ));
-        let cli = Cli::try_parse_from(["multitool", "--json", "secret", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["aka", "--json", "secret", "list"]).unwrap();
         assert!(cli.json);
         assert!(matches!(
             cli.command,
@@ -6385,8 +6374,7 @@ mod tests {
 
     #[test]
     fn endpoint_lifecycle_flags_parse_and_conflict() {
-        let cli =
-            Cli::try_parse_from(["multitool", "conn", "endpoint", "database", "--issue"]).unwrap();
+        let cli = Cli::try_parse_from(["aka", "conn", "endpoint", "database", "--issue"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Conn {
@@ -6398,8 +6386,7 @@ mod tests {
             }
         ));
 
-        let cli =
-            Cli::try_parse_from(["multitool", "conn", "endpoint", "database", "--revoke"]).unwrap();
+        let cli = Cli::try_parse_from(["aka", "conn", "endpoint", "database", "--revoke"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Conn {
@@ -6412,35 +6399,19 @@ mod tests {
         ));
 
         assert!(Cli::try_parse_from([
-            "multitool",
-            "conn",
-            "endpoint",
-            "database",
-            "--issue",
-            "--revoke",
+            "aka", "conn", "endpoint", "database", "--issue", "--revoke",
         ])
         .is_err());
         assert!(Cli::try_parse_from([
-            "multitool",
-            "conn",
-            "endpoint",
-            "database",
-            "--revoke",
-            "--secret",
+            "aka", "conn", "endpoint", "database", "--revoke", "--secret",
         ])
         .is_err());
     }
 
     #[test]
     fn response_credential_flags_parse_and_conflict() {
-        let cli = Cli::try_parse_from([
-            "multitool",
-            "conn",
-            "response-credentials",
-            "api",
-            "--allow",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["aka", "conn", "response-credentials", "api", "--allow"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Conn {
@@ -6452,7 +6423,7 @@ mod tests {
             }
         ));
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "conn",
             "response-credentials",
             "api",
@@ -6461,7 +6432,7 @@ mod tests {
         ])
         .is_err());
         assert!(
-            Cli::try_parse_from(["multitool", "conn", "response-credentials", "api"]).is_ok(),
+            Cli::try_parse_from(["aka", "conn", "response-credentials", "api"]).is_ok(),
             "no flag reports the effective state"
         );
     }
@@ -6494,7 +6465,7 @@ mod tests {
         assert!(endpoint_action_supported(EndpointAction::Read, false).is_ok());
         assert!(endpoint_action_supported(EndpointAction::Revoke, false).is_ok());
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "conn",
             "endpoint",
             "production",
@@ -6514,7 +6485,7 @@ mod tests {
         assert_eq!(endpoint_require_auth(false, true), Some(false));
 
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "conn",
             "endpoint",
             "production",
@@ -6524,7 +6495,7 @@ mod tests {
         .is_err());
         // Revocation removes the endpoint, so a posture for it is nonsense.
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "conn",
             "endpoint",
             "production",
@@ -6533,7 +6504,7 @@ mod tests {
         ])
         .is_err());
         assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "conn",
             "endpoint",
             "production",
@@ -6548,7 +6519,7 @@ mod tests {
     #[test]
     fn the_ssh_agent_forwarder_passes_its_command_through_untouched() {
         let cli = Cli::try_parse_from([
-            "multitool",
+            "aka",
             "ssh-agent",
             "production",
             "--socket",
@@ -6573,7 +6544,7 @@ mod tests {
         assert_eq!(socket.as_deref(), Some(Path::new("/tmp/a.sock")));
         assert_eq!(command, ["ssh", "-o", "IdentitiesOnly=no", "prod"]);
 
-        let cli = Cli::try_parse_from(["multitool", "ssh-agent", "production"]).unwrap();
+        let cli = Cli::try_parse_from(["aka", "ssh-agent", "production"]).unwrap();
         let Command::SshAgent { command, .. } = cli.command else {
             panic!("expected the ssh-agent command");
         };
@@ -6648,20 +6619,15 @@ mod tests {
 
     #[test]
     fn skill_write_options_are_not_silently_ignored() {
-        assert!(Cli::try_parse_from(["multitool", "skill", "--path", "SKILL.md"]).is_err());
-        assert!(Cli::try_parse_from(["multitool", "skill", "--user"]).is_err());
+        assert!(Cli::try_parse_from(["aka", "skill", "--path", "SKILL.md"]).is_err());
+        assert!(Cli::try_parse_from(["aka", "skill", "--user"]).is_err());
+        assert!(Cli::try_parse_from(["aka", "skill", "--write", "--path", "SKILL.md"]).is_ok());
         assert!(
-            Cli::try_parse_from(["multitool", "skill", "--write", "--path", "SKILL.md"]).is_ok()
+            Cli::try_parse_from(["aka", "skill", "--broker", "https://broker.example.test"])
+                .is_ok()
         );
         assert!(Cli::try_parse_from([
-            "multitool",
-            "skill",
-            "--broker",
-            "https://broker.example.test"
-        ])
-        .is_ok());
-        assert!(Cli::try_parse_from([
-            "multitool",
+            "aka",
             "instructions",
             "--broker",
             "https://broker.example.test"
@@ -6920,7 +6886,10 @@ mod tests {
             at: "-".into(),
             ..entry
         };
-        assert_eq!(format_activity_line(&bare, false), "-  Agent access enabled");
+        assert_eq!(
+            format_activity_line(&bare, false),
+            "-  Agent access enabled"
+        );
     }
 
     #[test]
@@ -7129,8 +7098,8 @@ mod tests {
         assert!(text.contains("  Root        /tmp/root"));
         assert!(text.contains("  MCP         127.0.0.1:9"));
         assert!(text.contains("  Keychain    macOS login keychain"));
-        assert!(text.contains("`multitool <cmd> --root '/tmp/root'`"));
-        assert!(text.contains("`multitool manage token --root '/tmp/root'`"));
+        assert!(text.contains("`aka <cmd> --root '/tmp/root'`"));
+        assert!(text.contains("`aka manage token --root '/tmp/root'`"));
         assert!(text.contains("shared key → /tmp/root/sock/token"));
         assert!(text.contains("/v1/pair is not served on TCP"));
         // Optional control-plane group comes after operator + notes.
@@ -7166,9 +7135,9 @@ mod tests {
         assert!(text.contains(
             "  Public URL  off — also needs --listen; then --public-url http://127.0.0.1:4780"
         ));
-        assert!(text.contains(
-            "  UI          off — also needs --public-url; then --web-root dist/ui"
-        ));
+        assert!(
+            text.contains("  UI          off — also needs --public-url; then --web-root dist/ui")
+        );
         let skill_at = text.find("  Skill       ").expect("skill");
         let tcp_at = text.find("  TCP         off").expect("tcp off");
         let quit_at = text.find("  Quit        ").expect("quit");
@@ -7193,16 +7162,16 @@ mod tests {
         };
         let text = banner.lines().join("\n");
         assert!(text.contains("  First token /r/sock/manage-token"));
-        assert!(text.contains("`multitool manage token --root '/r'` while the broker is live"));
+        assert!(text.contains("`aka manage token --root '/r'` while the broker is live"));
         assert!(!text.contains("  Manage "));
         assert!(text.contains("  Data host   agents.example  (PG leg is plaintext)"));
         assert!(text.contains("  MCP         not started (bind failed)"));
         assert!(text.contains("  Warning     warning: 1 tool is set to confirm traffic"));
         assert!(text.contains("  TCP         127.0.0.1:1  (plaintext; put TLS in front)"));
         assert!(text.contains("  Public URL  off — add --public-url http://127.0.0.1:1"));
-        assert!(text.contains(
-            "  UI          off — also needs --public-url; then --web-root dist/ui"
-        ));
+        assert!(
+            text.contains("  UI          off — also needs --public-url; then --web-root dist/ui")
+        );
     }
 
     #[test]

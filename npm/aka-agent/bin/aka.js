@@ -1,29 +1,31 @@
 #!/usr/bin/env node
 "use strict";
 
-// Launcher for the `multitool` npm package. The real CLI is the prebuilt Rust
-// `multitool` binary shipped in the platform-specific package that npm selected via
-// optionalDependencies (multitool-<os>-<arch>); this script only resolves it
+// Launcher for the `aka-agent` npm package. The real CLI is the prebuilt Rust
+// `aka` binary shipped in the platform-specific package that npm selected via
+// optionalDependencies (aka-agent-<os>-<arch>); this script only resolves it
 // and hands over argv. There is deliberately no postinstall step and no
 // network access here: a credential broker's install should be inert.
 
 const { spawnSync } = require("child_process");
 
 const PLATFORM_PACKAGES = {
-  "darwin arm64": "@aka-com/multitool-darwin-arm64",
-  "darwin x64": "@aka-com/multitool-darwin-x64",
-  "linux arm64": "@aka-com/multitool-linux-arm64",
-  "linux x64": "@aka-com/multitool-linux-x64",
+  "darwin arm64": "@aka-com/aka-agent-darwin-arm64",
+  "darwin x64": "@aka-com/aka-agent-darwin-x64",
+  "linux arm64": "@aka-com/aka-agent-linux-arm64",
+  "linux x64": "@aka-com/aka-agent-linux-x64",
 };
 
 function fail(message) {
-  console.error(`multitool: ${message}`);
+  console.error(`aka: ${message}`);
   process.exit(1);
 }
 
 function resolveBinary() {
-  // Escape hatch for development and unusual layouts: point MULTITOOL_BIN at
-  // any `multitool` binary (e.g. target/release/multitool) and the launcher uses it.
+  // Escape hatch for development and unusual layouts: point AKA_BIN at any
+  // `aka` binary (e.g. target/release/aka) and the launcher uses it. Keep the
+  // former override names as compatibility fallbacks for local release tooling.
+  if (process.env.AKA_BIN) return process.env.AKA_BIN;
   if (process.env.MULTITOOL_BIN) return process.env.MULTITOOL_BIN;
   if (process.env.AGENTMFA_BIN) return process.env.AGENTMFA_BIN;
 
@@ -39,11 +41,11 @@ function resolveBinary() {
 
   let binPath;
   try {
-    binPath = require.resolve(`${pkg}/bin/multitool`);
+    binPath = require.resolve(`${pkg}/bin/aka`);
   } catch {
     fail(
       `the ${pkg} package holding the binary for ${key} is not installed.\n` +
-        "It is an optionalDependency of @aka-com/multitool: reinstall without " +
+        "It is an optionalDependency of aka-agent: reinstall without " +
         "--no-optional/--omit=optional, and make sure your package manager " +
         "installs platform-specific optional dependencies."
     );
@@ -56,8 +58,8 @@ function resolveBinary() {
   const got = require(`${pkg}/package.json`).version;
   if (want !== got) {
     fail(
-      `version mismatch: @aka-com/multitool@${want} resolved ${pkg}@${got}; ` +
-        "reinstall @aka-com/multitool to repair the pairing."
+      `version mismatch: aka-agent@${want} resolved ${pkg}@${got}; ` +
+        "reinstall aka-agent to repair the pairing."
     );
   }
   return binPath;

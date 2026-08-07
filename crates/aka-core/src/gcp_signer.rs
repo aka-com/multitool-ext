@@ -185,8 +185,7 @@ pub(crate) async fn fresh_bearer(
         .get("expires_in")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(3600);
-    let refresh_after =
-        Instant::now() + Duration::from_secs(lifetime).saturating_sub(EXPIRY_SLACK);
+    let refresh_after = Instant::now() + Duration::from_secs(lifetime).saturating_sub(EXPIRY_SLACK);
     let expires_at = chrono::Utc::now() + chrono::Duration::seconds(lifetime as i64);
     cache().lock().unwrap().insert(
         cache_key.to_string(),

@@ -1298,8 +1298,11 @@ impl ManagementBackend for RemoteBackend {
         &self,
         install_id: &str,
     ) -> ManageResult<Vec<aka_api::PushableConnectionDto>> {
-        self.post("/v1/manage/cloud/pushable", &serde_json::json!({ "install_id": install_id }))
-            .await
+        self.post(
+            "/v1/manage/cloud/pushable",
+            &serde_json::json!({ "install_id": install_id }),
+        )
+        .await
     }
 
     async fn push_cloud_session(&self, push: aka_api::CloudSessionPushDto) -> ManageResult<()> {
@@ -1357,7 +1360,9 @@ mod tests {
         let config = RemoteConfig::new(" https://broker.example.dev/ ", " akamgr_x ").unwrap();
         assert_eq!(config.base_url(), "https://broker.example.dev");
         assert_eq!(
-            futures::executor::block_on(config.bearer()).unwrap().as_str(),
+            futures::executor::block_on(config.bearer())
+                .unwrap()
+                .as_str(),
             "akamgr_x"
         );
 

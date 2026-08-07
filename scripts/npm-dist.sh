@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build the `multitool` CLI in release mode and stage it into the npm distribution
-# under npm/ (the main `@aka-com/multitool` launcher package plus scoped
+# Build the `aka` CLI in release mode and stage it into the npm distribution
+# under npm/ (the main `aka-agent` launcher package plus scoped
 # per-platform binary
 # packages). One invocation stages one target, or all supported targets when
 # the required Rust targets and cross-linkers are available.
@@ -14,8 +14,8 @@ set -euo pipefail
 #                                        package(s) and the main package into
 #                                        dist/npm/
 #
-# Publish order matters: every @aka-com/multitool-<os>-<arch> package must be
-# published before the main @aka-com/multitool package of the same version (npm/README.md has the
+# Publish order matters: every @aka-com/aka-agent-<os>-<arch> package must be
+# published before the main aka-agent package of the same version (npm/README.md has the
 # full runbook).
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
@@ -25,7 +25,7 @@ cd "$repo_root"
 # Keep build caches inside the repository so release builds work in clean or
 # sandboxed environments whose home-directory caches are read-only. npm sets
 # npm_config_cache before invoking scripts, so use our own override variable.
-export npm_config_cache="${MULTITOOL_NPM_CACHE:-${AGENTMFA_NPM_CACHE:-$repo_root/target/npm-cache}}"
+export npm_config_cache="${AKA_NPM_CACHE:-${MULTITOOL_NPM_CACHE:-${AGENTMFA_NPM_CACHE:-$repo_root/target/npm-cache}}}"
 export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$repo_root/target/zig-cache}"
 
 set_if_unset() {
@@ -132,10 +132,10 @@ fi
 
 for target in "${targets[@]}"; do
   case "$target" in
-    aarch64-apple-darwin)      platform_pkg="multitool-darwin-arm64" ;;
-    x86_64-apple-darwin)       platform_pkg="multitool-darwin-x64" ;;
-    aarch64-unknown-linux-gnu) platform_pkg="multitool-linux-arm64" ;;
-    x86_64-unknown-linux-gnu)  platform_pkg="multitool-linux-x64" ;;
+    aarch64-apple-darwin)      platform_pkg="aka-agent-darwin-arm64" ;;
+    x86_64-apple-darwin)       platform_pkg="aka-agent-darwin-x64" ;;
+    aarch64-unknown-linux-gnu) platform_pkg="aka-agent-linux-arm64" ;;
+    x86_64-unknown-linux-gnu)  platform_pkg="aka-agent-linux-x64" ;;
     *)
       echo "no npm platform package maps to Rust target '$target'." >&2
       echo "supported: aarch64-apple-darwin x86_64-apple-darwin" >&2
@@ -157,11 +157,11 @@ for target in "${targets[@]}"; do
   cargo build "${build_args[@]}"
 
   install -d "npm/$platform_pkg/bin"
-  install -m 0755 "$bin_dir/multitool" "npm/$platform_pkg/bin/multitool"
+  install -m 0755 "$bin_dir/aka" "npm/$platform_pkg/bin/aka"
   bash "$script_dir/build-onepassword-sidecar.sh" \
     --target "$target" \
     --output "npm/$platform_pkg/bin/multitool-onepassword"
-  echo "staged $bin_dir/multitool -> npm/$platform_pkg/bin/multitool"
+  echo "staged $bin_dir/aka -> npm/$platform_pkg/bin/aka"
   node scripts/npm/verify-package.mjs "npm/$platform_pkg"
 
   if [[ "$pack" -eq 1 ]]; then
@@ -171,7 +171,7 @@ for target in "${targets[@]}"; do
 done
 
 if [[ "$pack" -eq 1 ]]; then
-  node scripts/npm/verify-package.mjs "npm/multitool"
-  (cd npm/multitool && npm pack --pack-destination "$repo_root/dist/npm")
+  node scripts/npm/verify-package.mjs "npm/aka-agent"
+  (cd npm/aka-agent && npm pack --pack-destination "$repo_root/dist/npm")
   echo "tarballs written to dist/npm/"
 fi

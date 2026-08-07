@@ -9,7 +9,7 @@ default-members = ["crates/aka-api", "crates/aka-client", "crates/aka-core", "cr
 # core and CLI crates by package (`-p`) rather than the whole workspace.
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 

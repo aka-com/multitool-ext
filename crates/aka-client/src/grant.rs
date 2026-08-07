@@ -219,7 +219,8 @@ impl<T> BlockingLock<T> for tokio::sync::Mutex<T> {
     fn blocking_lock_or_replace(&self) -> tokio::sync::MutexGuard<'_, T> {
         // Uncontended by construction: the mutex was created two lines ago
         // and no other handle to it exists yet.
-        self.try_lock().expect("a just-created grant is uncontended")
+        self.try_lock()
+            .expect("a just-created grant is uncontended")
     }
 }
 
@@ -274,13 +275,7 @@ mod tests {
     #[tokio::test]
     async fn a_fresh_grant_serves_its_access_token_without_calling_out() {
         // The base URL points nowhere; reaching for the network would fail.
-        let grant = DeviceGrant::fresh(
-            "http://127.0.0.1:1",
-            "akaacc_abc",
-            600,
-            "akaref_abc",
-            None,
-        );
+        let grant = DeviceGrant::fresh("http://127.0.0.1:1", "akaacc_abc", 600, "akaref_abc", None);
         assert_eq!(grant.bearer().await.unwrap().as_str(), "akaacc_abc");
     }
 
@@ -371,7 +366,10 @@ mod tests {
         )
         .await;
         let grant = DeviceGrant::resume(&base, "akaref_abc", None);
-        let error = grant.bearer().await.expect_err("an unreadable rotation is fatal");
+        let error = grant
+            .bearer()
+            .await
+            .expect_err("an unreadable rotation is fatal");
         assert!(matches!(error, GrantError::SignInRequired(_)), "{error}");
         assert!(exhausted(&grant));
         // The stale token was not advanced to something bogus.

@@ -233,7 +233,7 @@ pub struct Broker {
     advertise_host: std::sync::OnceLock<String>,
     /// The in-process MCP host's loopback port (`None` while it is not
     /// running).
-    /// Advertised in the discovery manifest so `multitool mcp` and other bridges
+    /// Advertised in the discovery manifest so `aka mcp` and other bridges
     /// can find the MCP endpoint without a config file.
     mcp_host_port: Mutex<Option<u16>>,
     /// Monotonic signal for changes to the tools, resources, and prompts an
@@ -2605,10 +2605,7 @@ impl Broker {
                     // the forwarder: an address that looks usable and is not
                     // is worse than no address at all.
                     example: if endpoint.require_auth {
-                        format!(
-                            "multitool ssh-agent {} -- {target}",
-                            shell_word(&connection.name)
-                        )
+                        format!("aka ssh-agent {} -- {target}", shell_word(&connection.name))
                     } else {
                         format!("SSH_AUTH_SOCK=\"{sock}\" {target}")
                     },
@@ -3719,8 +3716,7 @@ impl Broker {
         // will anything still be able to authenticate? A passkey can start a
         // session, and an authorized device holds a grant that renews itself
         // indefinitely. With neither, retiring closes the plane.
-        let something_else_can_sign_in =
-            self.auth.is_enrolled() || !self.auth.devices().is_empty();
+        let something_else_can_sign_in = self.auth.is_enrolled() || !self.auth.devices().is_empty();
         if !on && !something_else_can_sign_in {
             return Err(CoreError::Vault(
                 "enrol a passkey or authorize a device before retiring the management \

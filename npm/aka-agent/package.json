@@ -1,8 +1,9 @@
 {
-  "name": "@aka-com/multitool",
-  "version": "0.2.0",
+  "name": "aka-agent",
+  "version": "0.3.0",
   "description": "Multitool credential broker for coding agents, without exposing credentials.",
   "keywords": [
+    "aka",
     "multitool",
     "agent-security",
     "credentials",
@@ -23,12 +24,10 @@
   },
   "bugs": "https://github.com/aka-com/multitool/issues",
   "bin": {
-    "multitool": "bin/multitool.js",
-    "mfa": "bin/multitool.js",
-    "agentmfa": "bin/multitool.js"
+    "aka": "bin/aka.js"
   },
   "files": [
-    "bin/multitool.js"
+    "bin/aka.js"
   ],
   "engines": {
     "node": ">=22"
@@ -41,10 +40,10 @@
     "linux"
   ],
   "optionalDependencies": {
-    "@aka-com/multitool-darwin-arm64": "0.2.0",
-    "@aka-com/multitool-darwin-x64": "0.2.0",
-    "@aka-com/multitool-linux-arm64": "0.2.0",
-    "@aka-com/multitool-linux-x64": "0.2.0"
+    "@aka-com/aka-agent-darwin-arm64": "0.3.0",
+    "@aka-com/aka-agent-darwin-x64": "0.3.0",
+    "@aka-com/aka-agent-linux-arm64": "0.3.0",
+    "@aka-com/aka-agent-linux-x64": "0.3.0"
   },
   "publishConfig": {
     "access": "public"

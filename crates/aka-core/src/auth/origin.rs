@@ -36,7 +36,7 @@ impl OriginError {
     pub fn detail(&self) -> String {
         match self {
             Self::NotConfigured => "passkey sign-in needs the URL people reach this broker at; \
-                 start it with `multitool serve --listen … --public-url https://broker.example`"
+                 start it with `aka serve --listen … --public-url https://broker.example`"
                 .into(),
             Self::Malformed(url) => format!(
                 "{url:?} is not an origin; --public-url takes a scheme, host, \
@@ -186,10 +186,7 @@ mod tests {
         let public = origin("https://broker.example").unwrap();
         assert_eq!(public.as_str(), "https://broker.example");
         assert_eq!(public.rp_id(), "broker.example");
-        assert_eq!(
-            public.url("/authorize"),
-            "https://broker.example/authorize"
-        );
+        assert_eq!(public.url("/authorize"), "https://broker.example/authorize");
     }
 
     #[test]

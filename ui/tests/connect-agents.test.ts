@@ -241,7 +241,7 @@ test('an authenticated endpoint is shown as the forwarder command, not a socket'
       port: 2222,
       target: 'deploy@prod.example.com:2222',
     }, true),
-    `multitool ssh-agent production -- ssh -p 2222 ${sshBrokerFlags()} production`,
+    `aka ssh-agent production -- ssh -p 2222 ${sshBrokerFlags()} production`,
   );
   // A name is free text and this lands on a command line.
   assert.equal(
@@ -253,7 +253,7 @@ test('an authenticated endpoint is shown as the forwarder command, not a socket'
       port: 22,
       target: 'deploy@prod.example.com',
     }, true),
-    `multitool ssh-agent 'prod box' -- ssh ${sshBrokerFlags()} production`,
+    `aka ssh-agent 'prod box' -- ssh ${sshBrokerFlags()} production`,
   );
 });
 
@@ -533,13 +533,13 @@ test('the hero sentence never names the cloud CLI twice', () => {
 });
 
 test('only AWS gets a durable profile; the others re-export per shell', () => {
-  assert.equal(cloudSetupCommand(AWS), "multitool cloud install 'aws-prod'");
-  assert.equal(cloudSetupCommand(GCP), `eval "$(multitool cloud env 'gcp-prod')"`);
-  assert.equal(cloudSetupCommand(AZURE), `eval "$(multitool cloud env 'azure-prod')"`);
+  assert.equal(cloudSetupCommand(AWS), "aka cloud install 'aws-prod'");
+  assert.equal(cloudSetupCommand(GCP), `eval "$(aka cloud env 'gcp-prod')"`);
+  assert.equal(cloudSetupCommand(AZURE), `eval "$(aka cloud env 'azure-prod')"`);
   // The name reaches a shell, so a quote in it must not end the argument.
   assert.equal(
     cloudSetupCommand({ name: "it's prod", cloud: GCP.cloud }),
-    `eval "$(multitool cloud env 'it'"'"'s prod')"`,
+    `eval "$(aka cloud env 'it'"'"'s prod')"`,
   );
 });
 

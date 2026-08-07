@@ -154,7 +154,7 @@ impl AuthError {
     pub fn detail(&self) -> String {
         match self {
             Self::NotEnrolled => {
-                "no passkey is enrolled on this broker yet; run `multitool manage enroll` \
+                "no passkey is enrolled on this broker yet; run `aka manage enroll` \
                  on the broker host to open enrollment"
                     .into()
             }
@@ -626,7 +626,10 @@ impl AuthStore {
     /// Take a parked registration ceremony. One use: once something answers
     /// the challenge it is gone whether the answer verified or not, so a
     /// captured response cannot be replayed against it.
-    pub fn take_registration(&self, handle: &Uuid) -> AuthResult<(Uuid, String, PasskeyRegistration)> {
+    pub fn take_registration(
+        &self,
+        handle: &Uuid,
+    ) -> AuthResult<(Uuid, String, PasskeyRegistration)> {
         let mut ephemeral = self.ephemera();
         ephemeral.prune(Utc::now());
         let pending = ephemeral
@@ -780,9 +783,9 @@ impl AuthStore {
     }
 
     fn prune_sessions(state: &mut AuthState, now: DateTime<Utc>) {
-        state
-            .sessions
-            .retain(|session| session.expires_at > now && session.last_seen_at + SESSION_IDLE > now);
+        state.sessions.retain(|session| {
+            session.expires_at > now && session.last_seen_at + SESSION_IDLE > now
+        });
     }
 
     /// Verify a session cookie.
@@ -811,8 +814,8 @@ impl AuthStore {
         if let Some(offered_csrf) = csrf {
             // Compare digests so the check does not run in time proportional
             // to a shared prefix.
-            let matches = shaped(offered_csrf, CSRF_PREFIX)
-                .is_some_and(|hash| hash == digest(&session.csrf));
+            let matches =
+                shaped(offered_csrf, CSRF_PREFIX).is_some_and(|hash| hash == digest(&session.csrf));
             if !matches {
                 return Err(AuthError::Invalid("that request's CSRF token"));
             }
@@ -1037,7 +1040,13 @@ impl AuthStore {
             self.persist(&state)?;
             snapshot
         };
-        let access = self.mint_access(account, device_id, scopes, ClientSurface::Desktop, authenticated_at)?;
+        let access = self.mint_access(
+            account,
+            device_id,
+            scopes,
+            ClientSurface::Desktop,
+            authenticated_at,
+        )?;
         Ok(IssuedTokens {
             access: access.0,
             access_expires_at: access.1,
@@ -1131,7 +1140,9 @@ impl AuthStore {
     }
 
     fn forget_access_for(&self, device: &Uuid) {
-        self.ephemera().access.retain(|_, live| live.device != *device);
+        self.ephemera()
+            .access
+            .retain(|_, live| live.device != *device);
     }
 
     pub fn devices(&self) -> Vec<DeviceGrant> {
@@ -1414,7 +1425,12 @@ mod tests {
         b64(&Sha256::digest(verifier.as_bytes()))
     }
 
-    fn code_for(store: &AuthStore, account: Uuid, verifier: &str, redirect: &str) -> Zeroizing<String> {
+    fn code_for(
+        store: &AuthStore,
+        account: Uuid,
+        verifier: &str,
+        redirect: &str,
+    ) -> Zeroizing<String> {
         store
             .mint_code(
                 account,
@@ -1466,7 +1482,12 @@ mod tests {
         let store = store();
         let account = enrolled(&store);
         let verifier = "a-high-entropy-verifier-value-0123456789";
-        let code = code_for(&store, account.id, verifier, "http://127.0.0.1:51234/callback");
+        let code = code_for(
+            &store,
+            account.id,
+            verifier,
+            "http://127.0.0.1:51234/callback",
+        );
         assert!(store
             .redeem_code(&code, verifier, "http://127.0.0.1:9999/callback")
             .is_err());

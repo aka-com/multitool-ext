@@ -10,7 +10,7 @@ one application, so your agents can use unmodified CLI tools like
 Install the CLI on macOS or Linux with:
 
 ```sh
-npm install -g @aka-com/multitool
+npm install -g aka-agent
 ```
 
 ## How it works
@@ -68,16 +68,16 @@ encode credential material into a new form.
    host, Postgres database, SSH server, or MCP server.
 
 2. **Create a secret.** Pin an API token, database password, or SSH key
-   inside the application, using the desktop app or `multitool secret add`.
+   inside the application, using the desktop app or `aka secret add`.
 
 3. **Give your agent the endpoint.** Each connection gets its own local
    credential-free endpoint, that you can provide to your agent as a
    DATABASE_URL, SSH endpoint, etc., while MCPs get a unified tool.
 
    ```sh
-   eval "$(multitool dsn analytics)" && psql             # ticket stays in PGPASSWORD
-   export SSH_AUTH_SOCK="$(multitool ssh production)"    # scoped signing agent
-   claude mcp add multitool -- multitool mcp             # unified MCP tool
+   eval "$(aka dsn analytics)" && psql             # ticket stays in PGPASSWORD
+   export SSH_AUTH_SOCK="$(aka ssh production)"    # scoped signing agent
+   claude mcp add multitool -- aka mcp             # unified MCP tool
    ```
 
    For each connection type, the broker injects the real credential on
@@ -92,11 +92,11 @@ Codex, Cursor, your own harness using `curl`.
 
 ### Compatibility with pre-rename installs
 
-The `mfa` and `agentmfa` executable names remain aliases for `multitool`.
-Existing `AGENTMFA_*` environment variables, `X-AgentMFA-Client` headers,
+The `aka-agent` package installs only the `aka` executable. Existing
+`AGENTMFA_*` environment variables, `X-AgentMFA-Client` headers,
 `agentmfa_*` MCP calls, `agentmfa://` resource URIs, and the former SSH-agent
-extension are accepted as fallbacks. New output and setup instructions use
-the Multitool names.
+extension are still accepted as protocol fallbacks. New output and setup
+instructions use `aka`.
 
 The application keeps its existing `com.aka.desktop` identity, `~/.aka` data
 directory, and Keychain services so upgrading does not create an empty vault
@@ -108,12 +108,12 @@ Agents that run shell commands don't need MCP at all: each connection
 is automatically exposed as a local endpoint, that automatically
 injects the credential on the upstream.
 
-- **Postgres** — `multitool dsn <connection>` prints shell-safe `PG*` exports with
+- **Postgres** — `aka dsn <connection>` prints shell-safe `PG*` exports with
   the short-lived ticket in `PGPASSWORD`, keeping it out of process-visible
   argv:
 
   ```sh
-  eval "$(multitool dsn analytics)"
+  eval "$(aka dsn analytics)"
   psql
   ```
 
@@ -123,12 +123,12 @@ injects the credential on the upstream.
   the connection. `--format uri` is available for compatibility but embeds
   the ticket in argv.
 
-- **SSH** — `multitool ssh <connection>` prints an `SSH_AUTH_SOCK` backed by a
+- **SSH** — `aka ssh <connection>` prints an `SSH_AUTH_SOCK` backed by a
   scoped signing agent; the private key never leaves the broker. Works
   with stock `ssh`, `git`, `scp`, and `rsync`:
 
   ```sh
-  export SSH_AUTH_SOCK="$(multitool ssh production)"
+  export SSH_AUTH_SOCK="$(aka ssh production)"
   ssh production uptime
   git push production main
   scp app.tar.gz production:/srv/app/
@@ -163,7 +163,7 @@ Use `multitool_status` first when a tool is missing or an upstream failed.
 **Claude Code**:
 
 ```sh
-claude mcp add multitool -- multitool mcp --client claude-code
+claude mcp add multitool -- aka mcp --client claude-code
 ```
 
 **Claude Desktop** in `claude_desktop_config.json`:
@@ -172,7 +172,7 @@ claude mcp add multitool -- multitool mcp --client claude-code
 {
   "mcpServers": {
     "multitool": {
-      "command": "multitool",
+      "command": "aka",
       "args": ["mcp", "--client", "claude-desktop"]
     }
   }
@@ -183,11 +183,11 @@ claude mcp add multitool -- multitool mcp --client claude-code
 
 ```toml
 [mcp_servers.multitool]
-command = "multitool"
+command = "aka"
 args = ["mcp", "--client", "codex"]
 ```
 
-Any client that launches stdio servers can run `multitool mcp` directly,
+Any client that launches stdio servers can run `aka mcp` directly,
 which discovers the broker and its key automatically.
 
 ## Contributing

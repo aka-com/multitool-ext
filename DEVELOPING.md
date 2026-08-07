@@ -58,7 +58,7 @@ pnpm run sandbox:test   # drive real brokers against them
 ```
 
 Each test file in `dev/sandbox/tests/` starts its own headless
-`multitool serve --root <tmp>` (never the desktop production store; bare
+`aka serve --root <tmp>` (never the desktop production store; bare
 `serve` defaults to `~/.akaserver`) and exercises real connections,
 including control socket, manage plane, Postgres proxy, SSH agent
 socket, MCP host, against the sandbox's HTTP, MCP, Postgres, and SSH
@@ -156,12 +156,12 @@ What that means while developing:
 - Items written by earlier builds are in the login keychain. They migrate on
   first read: copied across, original deleted. Each one may prompt once more
   on the way, and never again.
-- `multitool status` prints which keychain the store is on, and
+- `aka status` prints which keychain the store is on, and
   `<data-dir>/keychain.json` records it. A binary that cannot reach the
   data-protection keychain but finds a store recorded on it fails with an
   explanation rather than presenting an empty vault.
 - `AKA_KEYCHAIN=login` forces the old behaviour — the escape hatch for
-  running an unsigned `multitool` against a store the signed app owns.
+  running an unsigned `aka` against a store the signed app owns.
 
 ### If a signed build will not launch
 
@@ -204,7 +204,7 @@ Ask-before decision, pinned destination, and immediate revocation behavior.
 Destructive UI actions such as rotating the shared key use ordinary in-app
 confirmation dialogs.
 
-The unsigned `multitool` binary uses the login keychain for an offline edit, so macOS
+The unsigned `aka` binary uses the login keychain for an offline edit, so macOS
 may still show a Keychain access dialog for those reads. That is a consequence
 of the offline executable's Keychain access, not a Multitool presence policy;
 online CLI commands go through the broker and do not touch the Keychain.

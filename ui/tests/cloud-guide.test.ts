@@ -234,9 +234,9 @@ test('agent names fit the tightest provider constraints', () => {
 
 test('connect commands quote the connection name once, for every surface', () => {
   assert.equal(cloudConnectCommand('aws', "ray's prod"),
-    "multitool cloud install 'ray'\"'\"'s prod'");
+    "aka cloud install 'ray'\"'\"'s prod'");
   assert.equal(cloudConnectCommand('gcp', 'gcp-prod'),
-    'eval "$(multitool cloud env \'gcp-prod\')"');
+    'eval "$(aka cloud env \'gcp-prod\')"');
 });
 
 test('the Azure example call scopes to the subscription when known', () => {

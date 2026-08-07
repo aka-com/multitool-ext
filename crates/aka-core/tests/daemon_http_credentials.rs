@@ -1989,7 +1989,9 @@ fn cloud_aws_connection(h: &Harness, name: &str) {
 #[tokio::test]
 async fn cloud_aws_session_mints_temporary_credentials() {
     let (sts_port, _sts) = mock_sts().await;
-    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _env = STS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     std::env::set_var(
         "MULTITOOL_TEST_AWS_STS_URL",
         format!("http://127.0.0.1:{sts_port}/"),
@@ -2034,7 +2036,9 @@ async fn cloud_aws_session_mints_temporary_credentials() {
     assert_eq!(minted[0].outcome.as_deref(), Some("minted"));
     assert_eq!(minted[0].fields["provider"], "aws");
     assert!(
-        !serde_json::to_string(&minted[0]).unwrap().contains("temporary-secret"),
+        !serde_json::to_string(&minted[0])
+            .unwrap()
+            .contains("temporary-secret"),
         "minted credentials must not enter the activity log"
     );
 }
@@ -2042,7 +2046,9 @@ async fn cloud_aws_session_mints_temporary_credentials() {
 #[tokio::test]
 async fn cloud_connection_test_names_the_caller_identity() {
     let (sts_port, _sts) = mock_sts().await;
-    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _env = STS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     std::env::set_var(
         "MULTITOOL_TEST_AWS_STS_URL",
         format!("http://127.0.0.1:{sts_port}/"),
@@ -2074,10 +2080,7 @@ async fn cloud_session_refuses_non_cloud_connections() {
     let h = harness(BrokerConfig::default()).await;
     api_connection(&h, "github", up.port);
     let (status, body) = h
-        .post(
-            "/v1/cloud/session",
-            json!({ "connection": "github" }),
-        )
+        .post("/v1/cloud/session", json!({ "connection": "github" }))
         .await;
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["reason"], "wrong_connection_type");
@@ -2124,7 +2127,9 @@ async fn cloud_connections_refuse_out_of_range_session_ttls() {
 #[tokio::test]
 async fn cloud_aws_profile_federates_with_a_session_policy() {
     let (sts_port, _sts) = mock_sts().await;
-    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _env = STS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
 
     let dir = tempfile::tempdir().unwrap();
     let credentials = dir.path().join("credentials");
@@ -2157,9 +2162,7 @@ async fn cloud_aws_profile_federates_with_a_session_policy() {
                         origin_label: None,
                         role_arn: None,
                         external_id: None,
-                        session_policy_arn: Some(
-                            "arn:aws:iam::aws:policy/ReadOnlyAccess".into(),
-                        ),
+                        session_policy_arn: Some("arn:aws:iam::aws:policy/ReadOnlyAccess".into()),
                         session_policy: None,
                         session_ttl_secs: 900,
                     },
@@ -2199,7 +2202,10 @@ async fn cloud_aws_profile_federates_with_a_session_policy() {
     );
     // The profile's long-lived key never reaches the agent.
     let relayed = body.to_string();
-    assert!(!relayed.contains(AWS_SECRET_KEY), "profile key leaked: {relayed}");
+    assert!(
+        !relayed.contains(AWS_SECRET_KEY),
+        "profile key leaked: {relayed}"
+    );
 }
 
 /// A profile that only signs in through Identity Center cannot be minted
@@ -2207,7 +2213,9 @@ async fn cloud_aws_profile_federates_with_a_session_policy() {
 /// failing at STS with something cryptic.
 #[tokio::test]
 async fn cloud_aws_profile_refuses_sso_profiles() {
-    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _env = STS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config");
     std::fs::write(
@@ -2216,7 +2224,10 @@ async fn cloud_aws_profile_refuses_sso_profiles() {
     )
     .unwrap();
     std::env::set_var("AWS_CONFIG_FILE", &config);
-    std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", dir.path().join("creds-absent"));
+    std::env::set_var(
+        "AWS_SHARED_CREDENTIALS_FILE",
+        dir.path().join("creds-absent"),
+    );
 
     let h = harness(BrokerConfig::default()).await;
     h.broker
@@ -2260,7 +2271,9 @@ async fn cloud_aws_profile_refuses_sso_profiles() {
 /// be served by reading this broker's own ~/.aws, which is another account.
 #[tokio::test]
 async fn cloud_aws_profile_refuses_another_machines_files() {
-    let _env = STS_ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _env = STS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let credentials = dir.path().join("credentials");
     // This broker *can* read a profile by that name — that is the trap.
@@ -2301,7 +2314,10 @@ async fn cloud_aws_profile_refuses_another_machines_files() {
         .unwrap();
 
     let (status, body) = h
-        .post("/v1/cloud/session", json!({ "connection": "someone-elses" }))
+        .post(
+            "/v1/cloud/session",
+            json!({ "connection": "someone-elses" }),
+        )
         .await;
     std::env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
     std::env::remove_var("AWS_CONFIG_FILE");
@@ -2431,7 +2447,10 @@ async fn cloud_aws_profile_serves_a_pushed_session() {
         },
     )
     .await;
-    assert!(refused.is_err(), "a self-minting connection must refuse pushes");
+    assert!(
+        refused.is_err(),
+        "a self-minting connection must refuse pushes"
+    );
 }
 
 /// The list says which state a pushed connection is in, and deleting it
@@ -2631,11 +2650,7 @@ async fn cloud_gcp_session_mints_access_token() {
     let h = harness(BrokerConfig::default()).await;
     h.broker
         .store
-        .add_secret(
-            &h.broker.workspace,
-            "GCP_SA_KEY",
-            Zeroizing::new(key_json),
-        )
+        .add_secret(&h.broker.workspace, "GCP_SA_KEY", Zeroizing::new(key_json))
         .await
         .unwrap();
     h.broker
@@ -2685,7 +2700,11 @@ async fn cloud_gcp_session_mints_access_token() {
     assert_eq!(cached_status, 200, "{cached}");
     assert_eq!(cached["expires_at"], first_expiry);
     assert!(cached["expires_in_seconds"].as_u64().unwrap() <= 3600);
-    assert_eq!(exchanges.load(Ordering::SeqCst), 1, "second mint used the cache");
+    assert_eq!(
+        exchanges.load(Ordering::SeqCst),
+        1,
+        "second mint used the cache"
+    );
     let relayed = body.to_string();
     assert!(
         !relayed.contains("BEGIN PRIVATE KEY"),

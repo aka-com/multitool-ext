@@ -345,7 +345,7 @@ test('the MCP host exposes every wired connection as a tool', async () => {
   );
 });
 
-test('the `multitool mcp` binary bridges a real stdio initialize', async () => {
+test('the `aka mcp` binary bridges a real stdio initialize', async () => {
   const initialize = {
     jsonrpc: '2.0',
     id: 41,

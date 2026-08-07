@@ -132,7 +132,7 @@ impl Paths {
 
     /// Everything under one root: `root/data` and `root/sock`.
     ///
-    /// Used by tests, throwaway harnesses, and `multitool serve` (default
+    /// Used by tests, throwaway harnesses, and `aka serve` (default
     /// `~/.akaserver`, or `--root` / `AKA_SERVER_ROOT`). The desktop app uses
     /// [`Self::default_locations`] instead and never shares this layout.
     pub fn under(root: &Path) -> Self {
@@ -152,7 +152,7 @@ impl Paths {
     /// different identity.
     ///
     /// Per *install root*, not per host, because the root is what fixes the
-    /// home directory a mint would read: `multitool serve` under
+    /// home directory a mint would read: `aka serve` under
     /// `~/.akaserver` gets a different id from the desktop under `~/.aka`
     /// even on one machine. That is the safe direction — the two are told
     /// apart rather than assumed identical — but it means "different id"
@@ -173,7 +173,10 @@ impl Paths {
         }
         let mut buf = [0u8; 16];
         getrandom::fill(&mut buf).expect("os rng");
-        let id = buf.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let id = buf
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         let _ = std::fs::create_dir_all(&self.data_dir);
         let _ = std::fs::write(&file, &id);
         id
@@ -286,7 +289,7 @@ impl Paths {
 
     /// First-start management credential (`<socket-dir>/manage-token`, 0600).
     ///
-    /// `multitool serve` creates this only when the broker has never had a
+    /// `aka serve` creates this only when the broker has never had a
     /// management token. It gives an operator on the broker host a bounded
     /// credential with which to perform the first authenticated online
     /// rotation; ordinary agents are never told this path.
@@ -308,7 +311,7 @@ impl Paths {
         }
     }
 
-    /// Client-side stored management tokens (`multitool manage login`), one file
+    /// Client-side stored management tokens (`aka manage login`), one file
     /// per broker, 0600. macOS clients store in the login Keychain instead;
     /// see aka-client's `TokenStore`.
     pub fn manage_tokens_dir(&self) -> PathBuf {

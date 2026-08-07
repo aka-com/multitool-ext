@@ -1,0 +1,16 @@
+{
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "agentmfa.dev" }],
+      "destination": "https://multitool.dev/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "www.agentmfa.dev" }],
+      "destination": "https://multitool.dev/:path*",
+      "permanent": true
+    }
+  ]
+}
