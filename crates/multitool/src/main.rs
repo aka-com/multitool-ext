@@ -53,7 +53,8 @@ use aka_core::vault::{
     platform_vault, platform_vault_for_root, recorded_platform_vault_backend,
     selected_platform_vault_backend, PlatformVaultBackend, SecretVault,
 };
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::builder::styling::{AnsiColor, Styles};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -122,6 +123,17 @@ EXIT CODES
   7  remote broker is unreachable
   8  connection test failed";
 
+/// Clap help/error colors, matched to the `multitool serve` banner palette:
+/// green headings, cyan syntax, yellow invalid, red errors.
+const CLI_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().bold())
+    .usage(AnsiColor::Green.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::Red.on_default().bold())
+    .valid(AnsiColor::Green.on_default().bold())
+    .invalid(AnsiColor::Yellow.on_default().bold());
+
 fn parse_positive_seconds(value: &str) -> Result<u64, String> {
     let secs: u64 = value
         .parse()
@@ -152,7 +164,8 @@ fn parse_field_value(value: &str) -> Result<String, String> {
     name = "multitool",
     version,
     about = "Secrets broker CLI for AI agents",
-    after_help = AFTER_HELP
+    after_help = AFTER_HELP,
+    styles = CLI_STYLES
 )]
 struct Cli {
     /// Emit machine-readable JSON for commands with bounded output.
@@ -1234,7 +1247,7 @@ fn run_cli() {
         .with_writer(std::io::stderr)
         .try_init()
         .ok();
-    let cli = Cli::parse();
+    let cli = parse_cli();
     let json = cli.json;
     match cli.command {
         Command::Skill {
@@ -1552,7 +1565,8 @@ fn exit_with_raw(code: i32) -> ! {
 }
 
 fn die_with(code: ExitCode, message: impl std::fmt::Display) -> ! {
-    eprintln!("error: {message}");
+    let color = stderr_use_color();
+    eprintln!("{} {message}", paint::bold_red(color, "error:"));
     exit_with(code);
 }
 
@@ -1786,7 +1800,7 @@ fn read_secret_value(value_env: &Option<String>, raw: bool) -> SecretValue {
         },
         None => {
             if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                eprintln!("  reading the secret value from stdin; end with Ctrl-D");
+                guide("  reading the secret value from stdin; end with Ctrl-D");
             }
             match std::io::read_to_string(std::io::stdin()) {
                 Ok(text) => text,
@@ -1813,7 +1827,7 @@ fn cmd_secret_add(
     let value = read_secret_value(&value_env, raw);
     let byte_len = value.len();
     managed.run(managed.backend.add_secret(name.clone(), value));
-    eprintln!("added secret {name} ({byte_len} bytes)");
+    ack(format!("added secret {name} ({byte_len} bytes)"));
 }
 
 fn cmd_secret_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
@@ -1824,7 +1838,7 @@ fn cmd_secret_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         return;
     }
     if secrets.is_empty() {
-        eprintln!("no secrets configured (add one with `multitool secret add <name>`)");
+        ack_dim("no secrets configured (add one with `multitool secret add <name>`)");
         return;
     }
     for dto in secrets {
@@ -1860,7 +1874,7 @@ impl Managed {
     /// this terminal. Make that wait visible before the request blocks.
     fn run_gated<T>(&self, call: impl std::future::Future<Output = ManageResult<T>>) -> T {
         if self.approval_surface_attached() {
-            eprintln!("  waiting for confirmation in the Multitool app…");
+            guide("  waiting for confirmation in the Multitool app…");
         }
         self.run(call)
     }
@@ -1894,10 +1908,10 @@ fn warn_version_skew(profile: &serde_json::Value) {
     };
     let cli_version = env!("CARGO_PKG_VERSION");
     if broker_version != cli_version {
-        eprintln!(
+        warn_line(format!(
             "warning: broker version {broker_version} differs from multitool CLI version {cli_version}; \
              update them together before making changes"
-        );
+        ));
     }
 }
 
@@ -1971,7 +1985,7 @@ fn management_backend_with_create(
             Ok(config) => config,
             Err(e) => die_with(ExitCode::Usage, e),
         };
-        eprintln!("  managing the broker at {url}");
+        guide(format!("  managing the broker at {url}"));
         let remote = Arc::new(RemoteBackend::new(config));
         let profile = runtime
             .block_on(remote.whoami())
@@ -2001,7 +2015,7 @@ fn management_backend_with_create(
                 ),
             );
         };
-        eprintln!("  managing the running broker over {key}");
+        guide(format!("  managing the running broker over {key}"));
         let remote = Arc::new(RemoteBackend::over_unix_socket(socket, &token));
         let profile = runtime
             .block_on(remote.whoami())
@@ -2090,7 +2104,7 @@ fn cmd_secret_rename(name: String, new_name: String, root: Option<PathBuf>, url:
             new_totp: None,
         },
     ));
-    eprintln!("renamed secret {name} → {new_name}");
+    ack(format!("renamed secret {name} → {new_name}"));
 }
 
 fn cmd_secret_replace(
@@ -2114,14 +2128,14 @@ fn cmd_secret_replace(
             new_totp: None,
         },
     ));
-    eprintln!("replaced the value of secret {name} ({byte_len} bytes)");
+    ack(format!("replaced the value of secret {name} ({byte_len} bytes)"));
 }
 
 fn cmd_secret_rm(name: String, root: Option<PathBuf>, url: Option<String>) {
     let managed = management_backend(root, url);
     let dto = secret_dto(&managed, &name);
     managed.run(managed.backend.delete_secret(dto_id(&dto.id)));
-    eprintln!("deleted secret {name}");
+    ack(format!("deleted secret {name}"));
 }
 
 fn cmd_conn_add(args: ConnAdd) {
@@ -2145,10 +2159,10 @@ fn cmd_conn_add(args: ConnAdd) {
         secrets,
     }));
     let dto = conn_dto(&managed, &name);
-    eprintln!(
+    ack(format!(
         "added connection {} ({} · {})",
         dto.name, dto.kind, dto.target
-    );
+    ));
 }
 
 /// Build the type-specific config, naming exactly which flag is missing or
@@ -2354,7 +2368,7 @@ fn cmd_conn_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         return;
     }
     if connections.is_empty() {
-        eprintln!("no connections configured (add one with `multitool conn add`)");
+        ack_dim("no connections configured (add one with `multitool conn add`)");
         return;
     }
     for dto in connections {
@@ -2393,67 +2407,86 @@ fn cmd_conn_show(name: String, root: Option<PathBuf>, url: Option<String>, json:
         print_json(&dto);
         return;
     }
-    println!("name: {}", dto.name);
-    println!("type: {}", dto.kind);
-    println!("target: {}", dto.target);
+    let color = stdout_use_color();
+    println!("{}", colon_field(color, "", "name", &dto.name));
+    println!("{}", colon_field(color, "", "type", &dto.kind));
+    println!("{}", colon_field(color, "", "target", &dto.target));
     println!(
-        "credentials: {}",
-        if dto.secret_names.is_empty() {
-            "none".into()
-        } else {
-            dto.secret_names.join(", ")
-        }
+        "{}",
+        colon_field(
+            color,
+            "",
+            "credentials",
+            if dto.secret_names.is_empty() {
+                "none".into()
+            } else {
+                dto.secret_names.join(", ")
+            }
+        )
     );
-    println!(
-        "agent access: {}",
-        if dto.agent_access.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    println!(
-        "confirmation: {}",
-        if dto.agent_access.confirm {
-            "on"
-        } else {
-            "off"
-        }
-    );
+    let access = if dto.agent_access.enabled {
+        paint::bold_green(color, "enabled")
+    } else {
+        paint::bold_yellow(color, "disabled")
+    };
+    println!("{}", colon_field(color, "", "agent access", access));
+    let confirmation = if dto.agent_access.confirm {
+        paint::bold_yellow(color, "on")
+    } else {
+        "off".to_string()
+    };
+    println!("{}", colon_field(color, "", "confirmation", confirmation));
     if let Some(until) = &dto.agent_access.confirm_window_until {
         let agents = if dto.agent_access.confirm_window_agents.is_empty() {
             "unknown agent".into()
         } else {
             dto.agent_access.confirm_window_agents.join(", ")
         };
-        println!("confirmation window: until {until} for {agents}");
+        println!(
+            "{}",
+            colon_field(
+                color,
+                "",
+                "confirmation window",
+                format!("until {until} for {agents}")
+            )
+        );
     }
     if let Some(until) = &dto.agent_access.confirm_cooldown_until {
-        println!("denial cooldown: until {until}");
+        println!(
+            "{}",
+            colon_field(color, "", "denial cooldown", format!("until {until}"))
+        );
     }
     if dto.kind == "api" {
+        let creds = if dto.agent_access.expose_response_credentials {
+            "exposed to agents"
+        } else {
+            "contained"
+        };
         println!(
-            "upstream response credentials: {}",
-            if dto.agent_access.expose_response_credentials {
-                "exposed to agents"
-            } else {
-                "contained"
-            }
+            "{}",
+            colon_field(color, "", "upstream response credentials", creds)
         );
     }
     println!(
-        "allowed MCP tools: {}",
-        dto.agent_access
-            .allowed_tools
-            .as_ref()
-            .map(|tools| {
-                if tools.is_empty() {
-                    "none".into()
-                } else {
-                    tools.join(", ")
-                }
-            })
-            .unwrap_or_else(|| "all".into())
+        "{}",
+        colon_field(
+            color,
+            "",
+            "allowed MCP tools",
+            dto.agent_access
+                .allowed_tools
+                .as_ref()
+                .map(|tools| {
+                    if tools.is_empty() {
+                        "none".into()
+                    } else {
+                        tools.join(", ")
+                    }
+                })
+                .unwrap_or_else(|| "all".into())
+        )
     );
     match &dto.agent_access.endpoint {
         Some(endpoint) => {
@@ -2463,36 +2496,49 @@ fn cmd_conn_show(name: String, root: Option<PathBuf>, url: Option<String>, json:
                 format!(", expires {}", endpoint.expires_at)
             };
             println!(
-                "direct endpoint: {} ({}){}{}",
-                endpoint
-                    .dsn
-                    .as_deref()
-                    .unwrap_or("issued; use `multitool conn endpoint` to copy"),
-                endpoint.kind,
-                // Whether the socket is a standing signing oracle for anything
-                // that can open it is the most consequential fact about an SSH
-                // endpoint, so it belongs on the line that reports one.
-                if endpoint.require_auth {
-                    ", authenticated"
-                } else {
-                    ""
-                },
-                expiry,
-            )
+                "{}",
+                colon_field(
+                    color,
+                    "",
+                    "direct endpoint",
+                    format!(
+                        "{} ({}){}{}",
+                        endpoint
+                            .dsn
+                            .as_deref()
+                            .unwrap_or("issued; use `multitool conn endpoint` to copy"),
+                        endpoint.kind,
+                        // Whether the socket is a standing signing oracle for anything
+                        // that can open it is the most consequential fact about an SSH
+                        // endpoint, so it belongs on the line that reports one.
+                        if endpoint.require_auth {
+                            ", authenticated"
+                        } else {
+                            ""
+                        },
+                        expiry,
+                    )
+                )
+            );
         }
-        None => println!("direct endpoint: none"),
+        None => println!("{}", colon_field(color, "", "direct endpoint", "none")),
     }
     match (&dto.last_status, &dto.last_detail, &dto.last_checked_at) {
         (Some(status), detail, checked) => {
-            println!("health: {status}");
+            let health = if status == "ok" {
+                paint::bold_green(color, status)
+            } else {
+                paint::bold_yellow(color, status)
+            };
+            println!("{}", colon_field(color, "", "health", health));
             if let Some(detail) = detail {
-                println!("health detail: {detail}");
+                println!("{}", colon_field(color, "", "health detail", detail));
             }
             if let Some(checked) = checked {
-                println!("last checked: {checked}");
+                println!("{}", colon_field(color, "", "last checked", checked));
             }
         }
-        _ => println!("health: untested"),
+        _ => println!("{}", colon_field(color, "", "health", "untested")),
     }
 }
 
@@ -2506,7 +2552,7 @@ fn cmd_sessions(close: Option<u64>, root: Option<PathBuf>, url: Option<String>, 
         if json {
             print_json(&serde_json::json!({ "closed": true, "id": id }));
         } else {
-            eprintln!("closed session {id}");
+            ack(format!("closed session {id}"));
         }
         return;
     }
@@ -2514,7 +2560,7 @@ fn cmd_sessions(close: Option<u64>, root: Option<PathBuf>, url: Option<String>, 
     if json {
         print_json(&sessions);
     } else if sessions.is_empty() {
-        eprintln!("no live sessions");
+        ack_dim("no live sessions");
     } else {
         for session in sessions {
             println!(
@@ -2553,7 +2599,7 @@ fn cmd_requests(
     if json {
         print_json(&requests);
     } else if requests.is_empty() {
-        eprintln!("no pending or recent requests");
+        ack_dim("no pending or recent requests");
     } else {
         for request in requests {
             let at = request
@@ -2641,7 +2687,7 @@ fn answer_request(managed: &Managed, id: Uuid, approve: bool, values: Vec<String
             "decision": decision,
         }));
     } else {
-        eprintln!("{decision} request {id}");
+        ack(format!("{decision} request {id}"));
     }
 }
 
@@ -2654,9 +2700,9 @@ fn watch_requests(managed: &Managed) {
     };
     let surface = managed.run(remote.open_approval_surface());
     let surface_id = dto_id(&surface.id);
-    eprintln!(
+    guide(
         "request inbox attached; press Ctrl-C to detach\n\
-         answer from another terminal with `multitool requests --approve ID` or `--deny ID`"
+         answer from another terminal with `multitool requests --approve ID` or `--deny ID`",
     );
 
     let backend = managed.backend.clone();
@@ -2712,7 +2758,7 @@ fn watch_requests(managed: &Managed) {
     if let Err(error) = result {
         die_manage(error);
     }
-    eprintln!("request inbox detached");
+    ack_dim("request inbox detached");
 }
 
 fn cmd_settings_get(root: Option<PathBuf>, url: Option<String>, json: bool) {
@@ -2756,7 +2802,7 @@ fn cmd_settings_set(
     if json {
         print_json(&settings);
     } else {
-        eprintln!("settings updated");
+        ack("settings updated");
         println!("menu bar hides Dock: {}", settings.menu_bar_hides_dock);
         println!(
             "confirm new SSH host keys: {}",
@@ -2890,12 +2936,12 @@ fn cmd_conn_update(args: ConnUpdate) {
         patch,
     ));
     let updated = conn_dto(&managed, &dto.name);
-    eprintln!(
+    ack(format!(
         "updated connection {} ({} · {})",
         updated.name, updated.kind, updated.target
-    );
+    ));
     if updated.target != dto.target {
-        eprintln!("  target changed: its direct endpoints are revoked");
+        warn_line("  target changed: its direct endpoints are revoked");
     }
 }
 
@@ -2907,14 +2953,16 @@ fn cmd_conn_rename(name: String, new_name: String, root: Option<PathBuf>, url: O
         dto.updated_at,
         new_name.clone(),
     ));
-    eprintln!("renamed connection {name} → {new_name}");
+    ack(format!("renamed connection {name} → {new_name}"));
 }
 
 fn cmd_conn_rm(name: String, root: Option<PathBuf>, url: Option<String>) {
     let managed = management_backend(root, url);
     let dto = conn_dto(&managed, &name);
     managed.run(managed.backend.delete_connection(dto_id(&dto.id)));
-    eprintln!("deleted connection {name} (its secrets stay in the vault)");
+    ack(format!(
+        "deleted connection {name} (its secrets stay in the vault)"
+    ));
 }
 
 fn cmd_conn_access(name: String, root: Option<PathBuf>, url: Option<String>, enabled: bool) {
@@ -2923,9 +2971,9 @@ fn cmd_conn_access(name: String, root: Option<PathBuf>, url: Option<String>, ena
     let state = if enabled { "enabled" } else { "disabled" };
     let changed = managed.run(managed.backend.set_tool_access(dto_id(&dto.id), enabled));
     if changed {
-        eprintln!("agent access {state} for {name}");
+        ack(format!("agent access {state} for {name}"));
     } else {
-        eprintln!("agent access was already {state} for {name}");
+        ack_dim(format!("agent access was already {state} for {name}"));
     }
 }
 
@@ -2942,12 +2990,14 @@ fn cmd_conn_confirm(name: String, root: Option<PathBuf>, url: Option<String>, on
         managed.run_gated(managed.backend.set_confirm_mode(dto_id(&dto.id), on))
     };
     if changed {
-        eprintln!("traffic confirmation {state} for {name}");
+        ack(format!("traffic confirmation {state} for {name}"));
         if on {
-            eprintln!("  prompts are answered in the Multitool app; without it, this tool's traffic is refused");
+            warn_line(
+                "  prompts are answered in the Multitool app; without it, this tool's traffic is refused",
+            );
         }
     } else {
-        eprintln!("traffic confirmation was already {state} for {name}");
+        ack_dim(format!("traffic confirmation was already {state} for {name}"));
     }
 }
 
@@ -3001,14 +3051,18 @@ fn cmd_conn_response_credentials(
         "contained"
     };
     if changed {
-        eprintln!("upstream response credentials are now {state} for {name}");
+        ack(format!(
+            "upstream response credentials are now {state} for {name}"
+        ));
         if expose {
-            eprintln!(
-                "  warning: Set-Cookie and authentication response headers can now reach agents"
+            warn_line(
+                "  warning: Set-Cookie and authentication response headers can now reach agents",
             );
         }
     } else {
-        eprintln!("upstream response credentials were already {state} for {name}");
+        ack_dim(format!(
+            "upstream response credentials were already {state} for {name}"
+        ));
     }
 }
 
@@ -3066,14 +3120,14 @@ fn cmd_conn_audit_statements(
         "off"
     };
     if changed {
-        eprintln!("statement recording {state} for {name}");
+        ack(format!("statement recording {state} for {name}"));
         if updated.agent_access.audit_statements_effective {
-            eprintln!(
-                "  statement text can carry credentials and personal data into the activity log"
+            warn_line(
+                "  statement text can carry credentials and personal data into the activity log",
             );
         }
     } else {
-        eprintln!("statement recording was already {state} for {name}");
+        ack_dim(format!("statement recording was already {state} for {name}"));
     }
 }
 
@@ -3086,14 +3140,25 @@ fn cmd_conn_test(name: String, root: Option<PathBuf>, url: Option<String>, json:
     }
     if report.ok {
         if !json {
-            eprintln!("ok: {}", report.detail);
+            let color = stderr_use_color();
+            eprintln!(
+                "{} {}",
+                paint::bold_green(color, "ok:"),
+                report.detail
+            );
         }
     } else {
         if !json {
-            match report.kind {
-                Some(kind) => eprintln!("failed ({kind:?}): {}", report.detail),
-                None => eprintln!("failed: {}", report.detail),
-            }
+            let color = stderr_use_color();
+            let prefix = match report.kind {
+                Some(kind) => format!("failed ({kind:?}):"),
+                None => "failed:".into(),
+            };
+            eprintln!(
+                "{} {}",
+                paint::bold_red(color, &prefix),
+                report.detail
+            );
         }
         exit_with(ExitCode::TestFailed);
     }
@@ -3156,7 +3221,7 @@ fn cmd_conn_endpoint(
                 "revoked": true,
             }));
         } else {
-            eprintln!("revoked direct endpoint for {name}");
+            ack(format!("revoked direct endpoint for {name}"));
         }
         return;
     }
@@ -3191,14 +3256,14 @@ fn cmd_conn_endpoint(
             managed.run_gated(call)
         };
         if changed {
-            eprintln!(
+            guide(format!(
                 "the agent socket for {name} {}",
                 if require_auth {
                     "now requires the endpoint secret — reach it through `multitool ssh-agent`"
                 } else {
                     "no longer requires the endpoint secret"
                 }
-            );
+            ));
             if let Some(reread) = managed.run(managed.backend.get_endpoint(connection_id)) {
                 info = reread;
             }
@@ -3219,15 +3284,15 @@ fn cmd_conn_endpoint(
         );
     }
     if expired {
-        eprintln!(
+        warn_line(format!(
             "expired — renew without changing this address with \
              `multitool conn endpoint {name} --renew`"
-        );
+        ));
     }
     if action == EndpointAction::Issue {
-        eprintln!("issued direct endpoint for {name}");
+        ack(format!("issued direct endpoint for {name}"));
     } else if action == EndpointAction::Renew {
-        eprintln!("renewed direct endpoint for {name}");
+        ack(format!("renewed direct endpoint for {name}"));
     }
     // Selectors print exactly one field with no decoration, so a `$(...)`
     // capture carries only the value. `--url` prefers the TCP form when the
@@ -3244,17 +3309,21 @@ fn cmd_conn_endpoint(
     }
     // Default: the copy-ready example on stderr (guidance), the address on
     // stdout (the pasteable value), and the secret when the kind has one.
-    eprintln!("{}", info.example);
+    let color = stderr_use_color();
+    eprintln!("{}", paint::dim(color, &info.example));
     println!("{}", info.dsn);
     if let Some(tcp) = &info.tcp_dsn {
-        eprintln!("tcp (drivers without unix-socket support, and remote clients):");
+        guide("tcp (drivers without unix-socket support, and remote clients):");
         eprintln!("{tcp}");
     }
     if !info.secret.is_empty() {
-        eprintln!("endpoint secret: {}", info.secret);
+        eprintln!(
+            "{}",
+            colon_field(color, "", "endpoint secret", &info.secret)
+        );
     }
     if !info.expires_at.is_empty() {
-        eprintln!("expires: {}", info.expires_at);
+        eprintln!("{}", colon_field(color, "", "expires", &info.expires_at));
     }
 }
 
@@ -3343,7 +3412,7 @@ fn cmd_skill(
     if let Err(e) = std::fs::write(&path, content) {
         die(format!("could not write {}: {e}", path.display()));
     }
-    eprintln!("wrote {}", path.display());
+    ack(format!("wrote {}", path.display()));
 }
 
 struct CliEvents;
@@ -3356,7 +3425,7 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
     let url = effective_broker_url(url);
     require_existing_root_for_read(root.as_deref(), url.is_some());
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) && token_env.is_none() {
-        eprintln!("  paste the management token (akamgr_…); end with Ctrl-D");
+        guide("  paste the management token (akamgr_…); end with Ctrl-D");
     }
     let token = read_secret_value(&token_env, false);
     let paths = store_paths(root.as_deref());
@@ -3385,7 +3454,7 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
     match runtime.block_on(backend.whoami()) {
         Ok(profile) => {
             warn_version_skew(&profile);
-            eprintln!("token verified against the running broker");
+            ack("token verified against the running broker");
         }
         Err(ManageError::InvalidManageToken { detail }) => die_with(
             ExitCode::Authentication,
@@ -3395,7 +3464,7 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
             }),
         ),
         Err(ManageError::Unreachable { .. }) => {
-            eprintln!("the broker is not reachable right now; storing the token unverified");
+            warn_line("the broker is not reachable right now; storing the token unverified");
         }
         Err(e) => die_manage(e),
     }
@@ -3403,10 +3472,10 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
     if let Err(e) = token_store.save(&key, &token) {
         die(format!("could not store the token: {e}"));
     }
-    eprintln!(
+    ack(format!(
         "management token stored for {key} ({})",
         token_store.storage_description(&key)
-    );
+    ));
 }
 
 fn cmd_manage_logout(url: Option<String>, root: Option<PathBuf>) {
@@ -3423,7 +3492,7 @@ fn cmd_manage_logout(url: Option<String>, root: Option<PathBuf>) {
     if let Err(e) = manage_token_store(&paths).delete(&key) {
         die(format!("could not forget the management token: {e}"));
     }
-    eprintln!("management token forgotten for {key}");
+    ack(format!("management token forgotten for {key}"));
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -3529,14 +3598,16 @@ fn online_manage_token(
         match runtime.block_on(backend.revoke_management_token()) {
             Ok(true) => {
                 if let Err(error) = manage_token_store(paths).delete(&key) {
-                    eprintln!("warning: could not forget the saved token for {key}: {error}");
+                    warn_line(format!(
+                        "warning: could not forget the saved token for {key}: {error}"
+                    ));
                 }
                 if source == ManageTokenSource::Environment {
-                    eprintln!("warning: unset AKA_MANAGE_TOKEN; its value is now revoked");
+                    warn_line("warning: unset AKA_MANAGE_TOKEN; its value is now revoked");
                 }
-                eprintln!("management token revoked; the manage API is closed");
+                ack("management token revoked; the manage API is closed");
             }
-            Ok(false) => eprintln!("no management token was issued"),
+            Ok(false) => ack_dim("no management token was issued"),
             Err(error) => die_manage(error),
         }
         return;
@@ -3546,27 +3617,30 @@ fn online_manage_token(
     let issued = runtime
         .block_on(backend.rotate_management_token(days))
         .unwrap_or_else(|error| die_manage(error));
-    eprintln!("management token (shown once — the broker stores only its hash):\n");
+    guide("management token (shown once — the broker stores only its hash):\n");
     println!("{}", issued.token.as_str());
     if source == ManageTokenSource::Environment {
-        eprintln!(
-            "\nwarning: AKA_MANAGE_TOKEN still contains the superseded token; update or unset it"
+        warn_line(
+            "\nwarning: AKA_MANAGE_TOKEN still contains the superseded token; update or unset it",
         );
     } else {
         let store = manage_token_store(paths);
         if let Err(error) = store.save(&key, &issued.token) {
-            eprintln!(
+            warn_line(format!(
                 "\nwarning: the token was rotated but could not be saved ({error}); \
                  capture the value printed above before it is lost"
-            );
+            ));
         } else {
-            eprintln!(
+            ack(format!(
                 "\nmanagement token stored for {key} ({})",
                 store.storage_description(&key)
-            );
+            ));
         }
     }
-    eprintln!("expires: {}", issued.expires_at);
+    eprintln!(
+        "{}",
+        colon_field(stderr_use_color(), "", "expires", &issued.expires_at)
+    );
 }
 
 /// Rotate or revoke through a running broker when possible. A stopped local
@@ -3655,18 +3729,18 @@ fn cmd_manage_token(
         match identity.revoke_manage_token() {
             Ok(true) => {
                 if let Err(error) = paths.remove_manage_bootstrap_token() {
-                    eprintln!(
+                    warn_line(format!(
                         "warning: could not remove {}: {error}",
                         paths.manage_bootstrap_token_file().display()
-                    );
+                    ));
                 }
                 audit.append(aka_core::audit::AuditEntry::new(
                     aka_core::audit::AuditKind::ManagementTokenRevoked,
                     "Management token revoked",
                 ));
-                eprintln!("management token revoked; the manage API is closed");
+                ack("management token revoked; the manage API is closed");
             }
-            Ok(false) => eprintln!("no management token was issued"),
+            Ok(false) => ack_dim("no management token was issued"),
             Err(e) => die(e),
         }
         return;
@@ -3676,10 +3750,10 @@ fn cmd_manage_token(
         Ok(token) => {
             let token = Zeroizing::new(token);
             if let Err(error) = paths.remove_manage_bootstrap_token() {
-                eprintln!(
+                warn_line(format!(
                     "warning: could not remove {}: {error}",
                     paths.manage_bootstrap_token_file().display()
-                );
+                ));
             }
             let mut entry = aka_core::audit::AuditEntry::new(
                 aka_core::audit::AuditKind::ManagementTokenIssued,
@@ -3690,14 +3764,14 @@ fn cmd_manage_token(
                 entry = entry.field("expires_at", expires_at.to_rfc3339());
             }
             audit.append(entry);
-            eprintln!("management token (shown once — only its hash is stored):\n");
+            guide("management token (shown once — only its hash is stored):\n");
             println!("{}", token.as_str());
-            eprintln!("\nEnter it in the Multitool app to manage this broker remotely.");
+            guide("\nEnter it in the Multitool app to manage this broker remotely.");
             match ttl_days {
-                Some(days) => eprintln!(
+                Some(days) => guide(format!(
                     "Expires in {days} day{}; re-run to rotate, or --revoke to close the manage API.",
                     if days == 1 { "" } else { "s" }
-                ),
+                )),
                 None => unreachable!("the CLI always supplies a bounded management-token TTL"),
             }
         }
@@ -3748,7 +3822,7 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>) {
         die(format!("could not change enrollment: {detail}"));
     }
     if cancel {
-        eprintln!("passkey enrollment closed; any outstanding secret is void");
+        ack("passkey enrollment closed; any outstanding secret is void");
         return;
     }
     let secret = parsed
@@ -3760,25 +3834,25 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>) {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if already {
-        eprintln!("This broker already has a passkey; this enrolls an additional one.\n");
+        guide("This broker already has a passkey; this enrolls an additional one.\n");
     }
     match parsed.get("sign_in_url").and_then(|value| value.as_str()) {
         Some(url) => {
-            eprintln!("Open this on the device you want to enroll:\n");
+            guide("Open this on the device you want to enroll:\n");
             println!("{url}");
-            eprintln!("\nand paste this one-use secret when it asks:\n");
+            guide("\nand paste this one-use secret when it asks:\n");
         }
         // Without --public-url there is no origin a passkey could be bound
         // to. The secret is still issued — the operator may be about to add
         // one — but saying nothing about the missing URL would be a mystery.
-        None => eprintln!(
+        None => warn_line(
             "Note: this broker has no --public-url, so there is no address a browser \
              can enroll against yet. Restart it with --listen and --public-url.\n\n\
-             One-use enrollment secret:\n"
+             One-use enrollment secret:\n",
         ),
     }
     println!("{secret}");
-    eprintln!("\nIt expires in 15 minutes. Re-run to issue a fresh one, or --cancel to close it.");
+    guide("\nIt expires in 15 minutes. Re-run to issue a fresh one, or --cancel to close it.");
 }
 
 /// Retire (or restore) the global management token on this machine's broker.
@@ -3831,12 +3905,12 @@ fn cmd_manage_legacy(restore: bool, retire: bool, root: Option<PathBuf>) {
         die(format!("could not change the setting: {detail}"));
     }
     if retire {
-        eprintln!(
+        ack(
             "the management token is retired; this broker now accepts only passkey \n\
-             sign-ins, device grants, and automation tokens"
+             sign-ins, device grants, and automation tokens",
         );
     } else {
-        eprintln!("the management token is accepted again");
+        ack("the management token is accepted again");
     }
 }
 
@@ -4507,7 +4581,7 @@ fn cmd_key(rotate: bool, root: Option<PathBuf>, url: Option<String>, json: bool)
     let managed = management_backend(root, url);
     if rotate {
         managed.run_gated(managed.backend.rotate_key());
-        eprintln!("key rotated; agents that read the token file reconnect on their own");
+        ack("key rotated; agents that read the token file reconnect on their own");
     }
     let key = Zeroizing::new(managed.run(managed.backend.agent_key()));
     print_key(&key, json);
@@ -4612,31 +4686,54 @@ fn status_tools(connections: &[ConnectionDto]) -> Vec<StatusTool> {
 }
 
 fn print_status_report(report: &StatusReport) {
+    let color = stdout_use_color();
     let location_note = if report.transport == "manage_api" {
         " (manage API)"
     } else {
         ""
     };
-    println!("broker running on {}{}", report.location, location_note);
+    println!(
+        "{}",
+        paint::bold_green(
+            color,
+            &format!("broker running on {}{}", report.location, location_note)
+        )
+    );
     if let Some(version) = &report.broker_version {
         match report.protocol_version {
             Some(protocol) => println!(
-                "  version: broker {version}, multitool CLI {} (protocol {protocol})",
-                report.cli_version
+                "{}",
+                colon_field(
+                    color,
+                    "  ",
+                    "version",
+                    format!(
+                        "broker {version}, multitool CLI {} (protocol {protocol})",
+                        report.cli_version
+                    )
+                )
             ),
             None => println!(
-                "  version: broker {version}, multitool CLI {}",
-                report.cli_version
+                "{}",
+                colon_field(
+                    color,
+                    "  ",
+                    "version",
+                    format!("broker {version}, multitool CLI {}", report.cli_version)
+                )
             ),
         }
     }
     if let Some(url) = &report.mcp_url {
-        println!("  MCP host: {url}");
+        println!("{}", colon_field(color, "  ", "MCP host", url));
     } else if report.transport == "unix" {
-        println!("  MCP host: not running");
+        println!(
+            "{}",
+            colon_field(color, "  ", "MCP host", paint::bold_yellow(color, "not running"))
+        );
     }
     if let Some(client_id) = &report.client_id {
-        println!("  client id: {client_id}");
+        println!("{}", colon_field(color, "  ", "client id", client_id));
     }
     if let Some(path) = &report.shared_key_path {
         let qualifier = match report.shared_key_present {
@@ -4644,19 +4741,22 @@ fn print_status_report(report: &StatusReport) {
             Some(false) => " (not minted yet)",
             None => " (on the broker host)",
         };
-        println!("  shared key: {path}{qualifier}");
+        println!(
+            "{}",
+            colon_field(color, "  ", "shared key", format!("{path}{qualifier}"))
+        );
     }
     if let Some(vault) = &report.vault {
-        println!("  vault: {vault}");
+        println!("{}", colon_field(color, "  ", "vault", vault));
     }
     if !report.recent_ssh_refusals.is_empty() {
-        println!("  recent SSH refusals:");
+        println!("{}", colon_field(color, "  ", "recent SSH refusals", ""));
         for refusal in &report.recent_ssh_refusals {
             println!(
                 "    {}  {}  {}{}",
-                refusal.connection,
+                paint::bold_cyan(color, &refusal.connection),
                 refusal.at,
-                refusal.reason,
+                paint::bold_yellow(color, &refusal.reason),
                 refusal
                     .detail
                     .as_deref()
@@ -4666,24 +4766,38 @@ fn print_status_report(report: &StatusReport) {
         }
     }
     if let Some(error) = &report.tools_error {
-        println!("  tools: unavailable ({error})");
+        println!(
+            "{}",
+            colon_field(
+                color,
+                "  ",
+                "tools",
+                paint::bold_yellow(color, &format!("unavailable ({error})"))
+            )
+        );
         return;
     }
     if report.tools.is_empty() {
-        println!("  tools: none configured");
+        println!("{}", colon_field(color, "  ", "tools", "none configured"));
         return;
     }
-    println!("  tools:");
+    println!("{}", colon_field(color, "  ", "tools", ""));
     let approval_surface_attached = report.approval_surface_attached.unwrap_or(false);
     for tool in &report.tools {
         let confirm = if tool.confirm {
             if approval_surface_attached {
-                " · confirm: on"
+                format!(" · {}", paint::bold_yellow(color, "confirm: on"))
             } else {
-                " · confirm: on (no approval surface attached — traffic will be refused)"
+                format!(
+                    " · {}",
+                    paint::bold_yellow(
+                        color,
+                        "confirm: on (no approval surface attached — traffic will be refused)"
+                    )
+                )
             }
         } else {
-            ""
+            String::new()
         };
         // A direct endpoint outlives any session and is revoked separately, so
         // it is named on the row rather than left to the app to reveal.
@@ -4692,12 +4806,17 @@ fn print_status_report(report: &StatusReport) {
         } else {
             ""
         };
+        let access = if tool.enabled {
+            paint::bold_green(color, "enabled")
+        } else {
+            paint::bold_yellow(color, "disabled")
+        };
         println!(
             "    {}  {}  {}  {}{}{}",
-            tool.name,
+            paint::bold_cyan(color, &tool.name),
             tool.kind,
             tool.target,
-            if tool.enabled { "enabled" } else { "disabled" },
+            access,
             confirm,
             endpoint,
         );
@@ -4706,7 +4825,7 @@ fn print_status_report(report: &StatusReport) {
         if let Some(warning) =
             headless_confirmation_warning(report.tools.iter().filter(|tool| tool.confirm).count())
         {
-            eprintln!("{warning}");
+            eprintln!("{}", paint::bold_yellow(stderr_use_color(), &warning));
         }
     }
 }
@@ -4951,9 +5070,15 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
                     .is_some_and(|version| version != report.cli_version)
             {
                 eprintln!(
-                    "warning: broker version {} differs from multitool CLI version {}; update them together before making changes",
-                    report.broker_version.as_deref().unwrap_or("unknown"),
-                    report.cli_version
+                    "{}",
+                    paint::bold_yellow(
+                        stderr_use_color(),
+                        &format!(
+                            "warning: broker version {} differs from multitool CLI version {}; update them together before making changes",
+                            report.broker_version.as_deref().unwrap_or("unknown"),
+                            report.cli_version
+                        )
+                    )
                 );
             }
             if json {
@@ -4966,8 +5091,9 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
             if json {
                 print_json(&report);
             } else {
+                let color = stderr_use_color();
                 if let Some(vault) = &report.vault {
-                    eprintln!("  vault: {vault}");
+                    eprintln!("{}", colon_field(color, "  ", "vault", vault));
                 }
                 if let Some(path) = &report.shared_key_path {
                     let state = if report.shared_key_present == Some(true) {
@@ -4975,7 +5101,10 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
                     } else {
                         "not minted yet"
                     };
-                    eprintln!("  shared key: {state} at {path}");
+                    eprintln!(
+                        "{}",
+                        colon_field(color, "  ", "shared key", format!("{state} at {path}"))
+                    );
                 }
             }
             die_with(code, diagnostic);
@@ -4985,14 +5114,15 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
 
 /// One formatted line per projected activity entry: timestamp (seconds
 /// precision), summary, detail, and the acting agent when recorded.
-fn format_activity_line(entry: &ActivityDto) -> String {
+/// When `color` is on, the timestamp and agent tag are dimmed.
+fn format_activity_line(entry: &ActivityDto, color: bool) -> String {
     let ts = entry.at.get(..19).unwrap_or(&entry.at);
-    let mut line = format!("{ts}  {}", entry.text);
+    let mut line = format!("{}  {}", paint::dim(color, ts), entry.text);
     if let Some(detail) = &entry.detail {
         line.push_str(&format!(" — {detail}"));
     }
     if let Some(agent) = &entry.agent {
-        line.push_str(&format!("  [{agent}]"));
+        line.push_str(&format!("  {}", paint::dim(color, &format!("[{agent}]"))));
     }
     line
 }
@@ -5001,8 +5131,9 @@ fn print_activity(entries: &[ActivityDto], json: bool) {
     if json {
         print_json(&entries);
     } else {
+        let color = stdout_use_color();
         for entry in entries {
-            println!("{}", format_activity_line(entry));
+            println!("{}", format_activity_line(entry, color));
         }
     }
 }
@@ -5032,10 +5163,10 @@ fn cmd_activity(limit: usize, json: bool, root: Option<PathBuf>, url: Option<Str
             if json {
                 print_activity(&[], true);
             } else {
-                eprintln!(
+                ack_dim(format!(
                     "no activity recorded yet ({} does not exist)",
                     file.display()
-                );
+                ));
             }
             return;
         }
@@ -5072,10 +5203,10 @@ fn cmd_activity(limit: usize, json: bool, root: Option<PathBuf>, url: Option<Str
     match &verification {
         aka_core::audit::AuditIntegrity::Tampered { .. } => die(verification.summary()),
         aka_core::audit::AuditIntegrity::Unsealed { .. } => {
-            eprintln!("warning: {}", verification.summary())
+            warn_line(format!("warning: {}", verification.summary()))
         }
         aka_core::audit::AuditIntegrity::Verified { legacy, .. } if *legacy > 0 => {
-            eprintln!("warning: {}", verification.summary())
+            warn_line(format!("warning: {}", verification.summary()))
         }
         aka_core::audit::AuditIntegrity::Verified { .. } => {}
     }
@@ -5109,6 +5240,431 @@ struct ServeArgs {
     session_max_ttl: Option<u64>,
     audit_pg_statements: bool,
     no_mcp: bool,
+}
+
+/// Whether a stream should carry ANSI color. Honors `NO_COLOR` and
+/// `CLICOLOR_FORCE`, otherwise follows whether the stream is a TTY.
+fn stream_use_color(stream: &impl std::io::IsTerminal) -> bool {
+    if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
+        return false;
+    }
+    if std::env::var_os("CLICOLOR_FORCE").is_some_and(|v| v != "0") {
+        return true;
+    }
+    stream.is_terminal()
+}
+
+fn stderr_use_color() -> bool {
+    stream_use_color(&std::io::stderr())
+}
+
+fn stdout_use_color() -> bool {
+    stream_use_color(&std::io::stdout())
+}
+
+/// `label: value` line used by status / conn show (and the offline status
+/// diagnostic). Indent is applied before the painted label.
+fn colon_field(
+    color: bool,
+    indent: &str,
+    label: &str,
+    value: impl std::fmt::Display,
+) -> String {
+    let label = paint::bold_cyan(color, label);
+    let value = value.to_string();
+    if value.is_empty() {
+        format!("{indent}{label}:")
+    } else {
+        format!("{indent}{label}: {value}")
+    }
+}
+
+/// Successful mutation / action ack on stderr.
+fn ack(message: impl std::fmt::Display) {
+    eprintln!(
+        "{}",
+        paint::bold_green(stderr_use_color(), &message.to_string())
+    );
+}
+
+/// Soft secondary ack ("already …", empty lists) on stderr.
+fn ack_dim(message: impl std::fmt::Display) {
+    eprintln!("{}", paint::dim(stderr_use_color(), &message.to_string()));
+}
+
+/// Operator guidance label on stderr (cyan). Values meant for capture stay
+/// on plain stdout separately.
+fn guide(message: impl std::fmt::Display) {
+    eprintln!(
+        "{}",
+        paint::bold_cyan(stderr_use_color(), &message.to_string())
+    );
+}
+
+/// Warning / note on stderr (yellow).
+fn warn_line(message: impl std::fmt::Display) {
+    eprintln!(
+        "{}",
+        paint::bold_yellow(stderr_use_color(), &message.to_string())
+    );
+}
+
+/// Parse argv, coloring the root help footer the same way as `serve` when
+/// stdout is a color-capable terminal.
+fn parse_cli() -> Cli {
+    let mut cmd = Cli::command();
+    // Propagate CLI_STYLES from the root command onto every subcommand so
+    // `multitool serve --help`, `multitool conn show --help`, etc. match the
+    // top-level palette (clap only sets styles on the derive root by default
+    // until build walks the tree).
+    cmd.build();
+    // Align clap's colorizer with our NO_COLOR / CLICOLOR_FORCE / TTY policy so
+    // the styled Usage/Commands block and the hand-painted footer stay in sync
+    // (Auto alone strips ANSI when stdout is piped even under CLICOLOR_FORCE).
+    if stdout_use_color() {
+        cmd = cmd
+            .color(clap::ColorChoice::Always)
+            .after_help(after_help_colored());
+    } else {
+        cmd = cmd.color(clap::ColorChoice::Never);
+    }
+    let matches = match cmd.try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => error.exit(),
+    };
+    match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    }
+}
+
+/// `AFTER_HELP` with the serve-banner palette: green section titles, cyan
+/// labels, dim secondary notes. Only used when [`stdout_use_color`] is true.
+fn after_help_colored() -> String {
+    let header = |text: &str| paint::wrap(true, &format!("{}{}", paint::BOLD, paint::GREEN), text);
+    let label = |text: &str| paint::wrap(true, &format!("{}{}", paint::BOLD, paint::CYAN), text);
+    let dim = |text: &str| paint::wrap(true, paint::DIM, text);
+
+    // Pad the visible label first; ANSI codes must not count toward width.
+    let group = |name: &str, rest: &str| {
+        let padded = format!("{name:<7}");
+        format!("  {} {rest}", label(&padded))
+    };
+    let workflow = |name: &str, rest: &str| {
+        let padded = format!("{name:<16}");
+        format!("  {} {rest}", label(&padded))
+    };
+    let exit = |code: u8, rest: &str| format!("  {}  {rest}", label(&code.to_string()));
+
+    [
+        header("COMMAND GROUPS"),
+        group("Agent", "skill  instructions  mcp  run"),
+        group("Open", "dsn  ssh  cloud  ssh-agent"),
+        group("Vault", "secret  conn"),
+        group(
+            "Broker",
+            "serve  status  sessions  requests  settings  key  activity  manage",
+        ),
+        group("Shell", "completions"),
+        String::new(),
+        format!(
+            "  {}",
+            dim("Commands stay top-level (multitool <command> …); groups are for orientation only.")
+        ),
+        String::new(),
+        header("COMMON WORKFLOWS"),
+        workflow("Agent setup", "multitool skill --write"),
+        workflow("MCP client", "multitool mcp"),
+        workflow("Headless broker", "multitool serve [--listen …]"),
+        workflow("Postgres", "eval \"$(multitool dsn <conn>)\" && psql"),
+        workflow("SSH", "export SSH_AUTH_SOCK=\"$(multitool ssh <conn>)\""),
+        workflow(
+            "Cloud",
+            "eval \"$(multitool cloud env <conn>)\"   # aws / az / gcloud",
+        ),
+        workflow("Ops", "multitool status | key | activity | requests"),
+        String::new(),
+        dim("See also: multitool <command> --help"),
+        String::new(),
+        header("EXIT CODES"),
+        exit(1, "generic/internal failure"),
+        exit(2, "invalid command usage or input"),
+        exit(3, "broker is not running"),
+        exit(4, "authentication or confirmation failed"),
+        exit(5, "requested object was not found"),
+        exit(6, "state conflict"),
+        exit(7, "remote broker is unreachable"),
+        exit(8, "connection test failed"),
+    ]
+    .join("\n")
+}
+
+/// ANSI paint helpers for serve, status, conn show, help, and errors.
+mod paint {
+    pub const RESET: &str = "\x1b[0m";
+    pub const BOLD: &str = "\x1b[1m";
+    pub const DIM: &str = "\x1b[2m";
+    pub const RED: &str = "\x1b[31m";
+    pub const GREEN: &str = "\x1b[32m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const CYAN: &str = "\x1b[36m";
+
+    pub fn wrap(enabled: bool, style: &str, text: &str) -> String {
+        if enabled {
+            format!("{style}{text}{RESET}")
+        } else {
+            text.to_string()
+        }
+    }
+
+    pub fn bold_red(enabled: bool, text: &str) -> String {
+        wrap(enabled, &format!("{BOLD}{RED}"), text)
+    }
+
+    pub fn bold_green(enabled: bool, text: &str) -> String {
+        wrap(enabled, &format!("{BOLD}{GREEN}"), text)
+    }
+
+    pub fn bold_yellow(enabled: bool, text: &str) -> String {
+        wrap(enabled, &format!("{BOLD}{YELLOW}"), text)
+    }
+
+    pub fn bold_cyan(enabled: bool, text: &str) -> String {
+        wrap(enabled, &format!("{BOLD}{CYAN}"), text)
+    }
+
+    pub fn dim(enabled: bool, text: &str) -> String {
+        wrap(enabled, DIM, text)
+    }
+}
+
+/// How the agent-facing MCP host came up for the serve banner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpBannerStatus {
+    Disabled,
+    Started { addr: std::net::SocketAddr },
+    Failed(String),
+}
+
+/// Inputs for the `multitool serve` ready banner. Formatted once as plain
+/// lines (for tests and non-TTY) and printed with optional color on a TTY.
+struct ServeBanner {
+    socket: PathBuf,
+    root: PathBuf,
+    /// Leading-space flag fragment, e.g. ` --root '/path'`.
+    root_flag: String,
+    first_start_manage_token: Option<PathBuf>,
+    tcp_addr: Option<std::net::SocketAddr>,
+    public_url: Option<String>,
+    web_root: Option<PathBuf>,
+    advertise_host: Option<String>,
+    mcp: McpBannerStatus,
+    vault: String,
+    headless_warning: Option<String>,
+    token_path: PathBuf,
+}
+
+impl ServeBanner {
+    /// Plain-text lines (no ANSI). The last line is empty so the process
+    /// leaves a blank line before any later log noise.
+    fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        out.push("Multitool broker ready".into());
+        out.push(String::new());
+
+        out.push(format_label("Socket", self.socket.display()));
+        out.push(format_label("Root", self.root.display()));
+        if let Some(host) = &self.advertise_host {
+            out.push(format_label(
+                "Data host",
+                format!("{host}  (PG leg is plaintext)"),
+            ));
+        }
+        match &self.mcp {
+            McpBannerStatus::Disabled => {}
+            McpBannerStatus::Started { addr } => {
+                out.push(format_label("MCP", addr));
+            }
+            McpBannerStatus::Failed(error) => {
+                out.push(format_label("MCP", format!("not started ({error})")));
+            }
+        }
+        out.push(format_label("Keychain", &self.vault));
+
+        out.push(String::new());
+
+        if let Some(path) = &self.first_start_manage_token {
+            out.push(format_label(
+                "First token",
+                format!(
+                    "{}  (0600, expires in {} days)",
+                    path.display(),
+                    DEFAULT_MANAGE_TOKEN_TTL_DAYS
+                ),
+            ));
+            out.push(format_label(
+                "Rotate",
+                format!(
+                    "`multitool manage token{}` while the broker is live",
+                    self.root_flag
+                ),
+            ));
+        } else {
+            out.push(format_label(
+                "Manage",
+                format!(
+                    "`multitool <cmd>{}` or `--broker <url>` when listening",
+                    self.root_flag
+                ),
+            ));
+            if self.tcp_addr.is_some() {
+                out.push(format_label(
+                    "Token",
+                    format!(
+                        "`multitool manage token{}` (or --broker), then enter it in the app",
+                        self.root_flag
+                    ),
+                ));
+            }
+        }
+        out.push(format_label(
+            "Agents",
+            format!("shared key → {}", self.token_path.display()),
+        ));
+        out.push(format_label(
+            "Discovery",
+            format!(
+                "curl --unix-socket {} http://localhost/instructions",
+                self.socket.display()
+            ),
+        ));
+        out.push(format_label(
+            "Skill",
+            format!(
+                "`multitool skill --write{}` (or --broker when listening)",
+                self.root_flag
+            ),
+        ));
+
+        if self.tcp_addr.is_some() || self.headless_warning.is_some() {
+            out.push(String::new());
+        }
+        if self.tcp_addr.is_some() {
+            out.push(format_label("Note", "/v1/pair is not served on TCP"));
+        }
+        if let Some(warning) = &self.headless_warning {
+            out.push(format_label("Warning", warning));
+        }
+
+        // Optional TCP control plane / web UI — own group so a bare serve still
+        // surfaces the flags that turn remote + browser access on.
+        out.push(String::new());
+        match self.tcp_addr {
+            Some(addr) => out.push(format_label(
+                "TCP",
+                format!("{addr}  (plaintext; put TLS in front)"),
+            )),
+            None => out.push(format_label(
+                "TCP",
+                "off — add --listen 127.0.0.1:4780",
+            )),
+        }
+        match (&self.tcp_addr, &self.public_url) {
+            (_, Some(url)) => out.push(format_label("Public URL", url)),
+            (Some(addr), None) => out.push(format_label(
+                "Public URL",
+                format!("off — add --public-url http://{addr}"),
+            )),
+            (None, None) => out.push(format_label(
+                "Public URL",
+                "off — also needs --listen; then --public-url http://127.0.0.1:4780",
+            )),
+        }
+        match (&self.public_url, &self.web_root) {
+            (_, Some(path)) => out.push(format_label("UI", path.display())),
+            (Some(_), None) => out.push(format_label(
+                "UI",
+                "off — add --web-root dist/ui",
+            )),
+            (None, None) => out.push(format_label(
+                "UI",
+                "off — also needs --public-url; then --web-root dist/ui",
+            )),
+        }
+
+        out.push(String::new());
+        out.push(format_label("Quit", "Ctrl-C or SIGTERM"));
+        out.push(String::new());
+        out
+    }
+
+    fn print(&self) {
+        let color = stderr_use_color();
+        let warn = format!("{}{}", paint::BOLD, paint::YELLOW);
+        let label_ok = format!("{}{}", paint::BOLD, paint::CYAN);
+        let title = format!("{}{}", paint::BOLD, paint::GREEN);
+        for line in self.lines() {
+            if line.is_empty() {
+                eprintln!();
+                continue;
+            }
+            if line == "Multitool broker ready" {
+                eprintln!("{}", paint::wrap(color, &title, &line));
+                continue;
+            }
+            let Some((label, value)) = split_label_line(&line) else {
+                eprintln!("{line}");
+                continue;
+            };
+            let is_warn = matches!(label, "Warning" | "Note" | "First token")
+                || (label == "MCP" && value.starts_with("not started"))
+                || (matches!(label, "TCP" | "Public URL" | "UI") && value.starts_with("off"));
+            let is_quit = label == "Quit";
+            let label_style = if is_warn {
+                warn.as_str()
+            } else if is_quit {
+                paint::DIM
+            } else {
+                label_ok.as_str()
+            };
+            let label_col = paint::wrap(color, label_style, &format!("{label:<11}"));
+            let value = if is_warn {
+                paint::wrap(color, &warn, value)
+            } else if is_quit {
+                paint::wrap(color, paint::DIM, value)
+            } else {
+                value.to_string()
+            };
+            eprintln!("  {label_col} {value}");
+        }
+    }
+}
+
+fn format_label(label: &str, value: impl std::fmt::Display) -> String {
+    format!("  {label:<11} {value}")
+}
+
+/// Split a `format_label` line into (label, value). Returns None for the
+/// title, blank lines, or free-form text.
+fn split_label_line(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("  ")?;
+    // Labels are left-aligned in an 11-char field followed by a space.
+    if rest.len() < 12 {
+        return None;
+    }
+    let (label_field, value) = rest.split_at(11);
+    let value = value.strip_prefix(' ')?;
+    let label = label_field.trim_end();
+    if label.is_empty() || label.chars().any(|c| !(c.is_ascii_alphanumeric() || c == ' ')) {
+        return None;
+    }
+    // Multi-word labels we actually use.
+    match label {
+        "Socket" | "Root" | "TCP" | "Public URL" | "Data host" | "UI" | "MCP" | "Keychain"
+        | "First token" | "Rotate" | "Manage" | "Token" | "Agents" | "Discovery" | "Skill"
+        | "Note" | "Warning" | "Quit" => Some((label, value)),
+        _ => None,
+    }
 }
 
 /// Give a never-managed headless broker one bounded, owner-only credential.
@@ -5235,40 +5791,19 @@ fn cmd_serve(args: ServeArgs) {
     // The agent-facing MCP listener is another task on the broker runtime.
     // Keep its loopback port in discovery so local bridges and the public
     // daemon proxy can reach it without a second process or runtime.
-    let mcp_host = if no_mcp {
-        None
+    let (mcp_host, mcp_banner) = if no_mcp {
+        (None, McpBannerStatus::Disabled)
     } else {
         match runtime.block_on(aka_core::mcp_host::serve(broker.clone())) {
             Ok(host) => {
                 broker.set_mcp_host_port(Some(host.addr().port()));
-                Some(host)
+                let addr = host.addr();
+                (Some(host), McpBannerStatus::Started { addr })
             }
-            Err(error) => {
-                eprintln!("  MCP host not started: {error}");
-                None
-            }
+            Err(error) => (None, McpBannerStatus::Failed(error.to_string())),
         }
     };
 
-    eprintln!(
-        "Multitool broker listening on {}",
-        daemon.socket_path.display()
-    );
-    eprintln!("  root: {}", root.display());
-    if let Some(path) = first_start_manage_token {
-        eprintln!(
-            "  first-start management token: {} (0600, expires in {} days)",
-            path.display(),
-            DEFAULT_MANAGE_TOKEN_TTL_DAYS,
-        );
-        eprintln!(
-            "  run `multitool manage token{root_flag}` while the broker is live to rotate and store it"
-        );
-    } else {
-        eprintln!(
-            "  manage this broker with `multitool …{root_flag}` or `--broker <url>` when listening"
-        );
-    }
     let confirm_count = broker
         .store
         .list_connections(&broker.workspace)
@@ -5280,47 +5815,66 @@ fn cmd_serve(args: ServeArgs) {
                 .is_on()
         })
         .count();
-    if let Some(warning) = headless_confirmation_warning(confirm_count) {
-        eprintln!("  {warning}");
+
+    ServeBanner {
+        socket: daemon.socket_path.clone(),
+        root: root.clone(),
+        root_flag,
+        first_start_manage_token,
+        tcp_addr: daemon.tcp_addr,
+        public_url,
+        web_root,
+        advertise_host,
+        mcp: mcp_banner,
+        vault: vault_description(&broker.paths),
+        headless_warning: headless_confirmation_warning(confirm_count),
+        token_path: broker.paths.token_file(),
     }
-    if let Some(addr) = daemon.tcp_addr {
-        eprintln!("  TCP control plane on {addr} (put TLS in front; /v1/pair is not served there)");
-        if let Some(host) = &advertise_host {
-            eprintln!("  data planes advertised to agents as {host} (the PG leg is plaintext)");
-        }
-        match &public_url {
-            Some(url) => eprintln!("  advertised to remote clients as {url}"),
-            None => eprintln!("  no --public-url set: TCP discovery omits absolute URLs"),
-        }
-        eprintln!(
-            "  remote management: rotate with `multitool manage token{root_flag}` (or --broker), \
-             then enter the token in the app"
-        );
-    }
-    eprintln!(
-        "  discovery: curl --unix-socket {} http://localhost/instructions",
-        daemon.socket_path.display()
-    );
-    eprintln!(
-        "  skill file: `multitool skill --write{root_flag}` (or --broker when listening) \
-         teaches agents this broker"
-    );
-    eprintln!(
-        "  agents authenticate with the shared key at {}",
-        broker.paths.token_file().display()
-    );
-    eprintln!("  Ctrl-C or SIGTERM to quit.\n");
+    .print();
 
     let signal = runtime.block_on(wait_for_shutdown_signal());
-    eprintln!("  {signal} received; draining active sessions");
+    let color = stderr_use_color();
+    eprintln!(
+        "  {} {}",
+        paint::wrap(
+            color,
+            &format!("{}{}", paint::BOLD, paint::CYAN),
+            &format!("{:11}", "Shutdown")
+        ),
+        paint::wrap(
+            color,
+            paint::DIM,
+            &format!("{signal} received; draining active sessions")
+        )
+    );
     daemon.stop_accepting();
     let sessions = broker.begin_shutdown();
     let drained =
         runtime.block_on(broker.wait_for_session_drain(std::time::Duration::from_secs(10)));
     if !drained {
-        eprintln!("  shutdown deadline reached with active sessions still closing");
+        eprintln!(
+            "  {} {}",
+            paint::wrap(
+                color,
+                &format!("{}{}", paint::BOLD, paint::YELLOW),
+                &format!("{:11}", "Shutdown")
+            ),
+            paint::wrap(
+                color,
+                &format!("{}{}", paint::BOLD, paint::YELLOW),
+                "deadline reached with active sessions still closing"
+            )
+        );
     } else if sessions > 0 {
-        eprintln!("  drained {sessions} active data-plane session(s)");
+        eprintln!(
+            "  {} {}",
+            paint::wrap(
+                color,
+                &format!("{}{}", paint::BOLD, paint::CYAN),
+                &format!("{:11}", "Shutdown")
+            ),
+            format!("drained {sessions} active data-plane session(s)")
+        );
     }
     drop(mcp_host);
     drop(daemon);
@@ -5380,6 +5934,95 @@ mod tests {
             AFTER_HELP.contains("EXIT CODES"),
             "AFTER_HELP must document exit codes"
         );
+    }
+
+    #[test]
+    fn root_help_styles_match_serve_palette() {
+        let cmd = Cli::command();
+        let styles = cmd.get_styles();
+        // Green headings / cyan literals — same roles as the serve banner.
+        assert_eq!(
+            styles.get_header().to_string(),
+            AnsiColor::Green.on_default().bold().to_string()
+        );
+        assert_eq!(
+            styles.get_literal().to_string(),
+            AnsiColor::Cyan.on_default().bold().to_string()
+        );
+    }
+
+    #[test]
+    fn every_subcommand_inherits_cli_styles_after_build() {
+        let mut cmd = Cli::command();
+        cmd.build();
+        let expected_header = CLI_STYLES.get_header().to_string();
+        let expected_literal = CLI_STYLES.get_literal().to_string();
+        fn check(cmd: &clap::Command, expected_header: &str, expected_literal: &str) {
+            assert_eq!(
+                cmd.get_styles().get_header().to_string(),
+                expected_header,
+                "styles missing on {}",
+                cmd.get_name()
+            );
+            assert_eq!(
+                cmd.get_styles().get_literal().to_string(),
+                expected_literal,
+                "styles missing on {}",
+                cmd.get_name()
+            );
+            for sub in cmd.get_subcommands() {
+                // Skip clap's auto-added `help` subcommand if present.
+                if sub.get_name() == "help" {
+                    continue;
+                }
+                check(sub, expected_header, expected_literal);
+            }
+        }
+        check(&cmd, &expected_header, &expected_literal);
+    }
+
+    #[test]
+    fn colon_field_paints_label_and_keeps_plain_value() {
+        assert_eq!(colon_field(false, "  ", "vault", "keychain"), "  vault: keychain");
+        assert_eq!(colon_field(false, "", "name", "github"), "name: github");
+        assert_eq!(colon_field(false, "  ", "tools", ""), "  tools:");
+        let colored = colon_field(true, "  ", "MCP host", "http://x");
+        assert!(colored.contains('\u{1b}'));
+        assert!(colored.contains("MCP host"));
+        assert!(colored.contains("http://x"));
+    }
+
+    #[test]
+    fn colored_after_help_keeps_plain_structure() {
+        let colored = after_help_colored();
+        assert!(colored.contains("COMMAND GROUPS"));
+        assert!(colored.contains("COMMON WORKFLOWS"));
+        assert!(colored.contains("EXIT CODES"));
+        assert!(colored.contains("multitool skill --write"));
+        assert!(colored.contains("generic/internal failure"));
+        // Color is always on for this helper; escape sequences should be present.
+        assert!(colored.contains('\u{1b}'));
+        // Strip ANSI and compare the plain footer line-for-line.
+        let stripped: String = {
+            let mut out = String::new();
+            let mut chars = colored.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\u{1b}' {
+                    if chars.peek() == Some(&'[') {
+                        chars.next();
+                        for c in chars.by_ref() {
+                            if c.is_ascii_alphabetic() {
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                out.push(c);
+            }
+            out
+        };
+        assert_eq!(stripped, AFTER_HELP);
     }
 
     #[test]
@@ -6345,10 +6988,13 @@ mod tests {
             at: "2026-07-24T12:00:00.123456Z".into(),
         };
         assert_eq!(
-            format_activity_line(&entry),
+            format_activity_line(&entry, false),
             "2026-07-24T12:00:00  claude-code requested github — GET \
              api.github.com/user/repos  [claude-code]"
         );
+        let colored = format_activity_line(&entry, true);
+        assert!(colored.contains('\u{1b}'));
+        assert!(colored.contains("claude-code requested github"));
         let bare = ActivityDto {
             kind: Some("settings_changed".into()),
             text: "Agent access enabled".into(),
@@ -6360,7 +7006,7 @@ mod tests {
             at: "-".into(),
             ..entry
         };
-        assert_eq!(format_activity_line(&bare), "-  Agent access enabled");
+        assert_eq!(format_activity_line(&bare, false), "-  Agent access enabled");
     }
 
     #[test]
@@ -6539,5 +7185,119 @@ mod tests {
         assert!(headless_confirmation_warning(3)
             .unwrap()
             .contains("3 tools are set"));
+    }
+
+    #[test]
+    fn serve_banner_labels_listeners_auth_and_quit() {
+        let banner = ServeBanner {
+            socket: PathBuf::from("/tmp/broker.sock"),
+            root: PathBuf::from("/tmp/root"),
+            root_flag: " --root '/tmp/root'".into(),
+            first_start_manage_token: None,
+            tcp_addr: Some("127.0.0.1:4780".parse().unwrap()),
+            public_url: Some("http://127.0.0.1:4780".into()),
+            web_root: Some(PathBuf::from("dist/ui")),
+            advertise_host: None,
+            mcp: McpBannerStatus::Started {
+                addr: "127.0.0.1:9".parse().unwrap(),
+            },
+            vault: "macOS login keychain (prompts per secret; build is unsigned)".into(),
+            headless_warning: None,
+            token_path: PathBuf::from("/tmp/root/sock/token"),
+        };
+        let text = banner.lines().join("\n");
+        assert!(text.starts_with("Multitool broker ready\n"));
+        assert!(text.contains("  Socket      /tmp/broker.sock"));
+        assert!(text.contains("  Root        /tmp/root"));
+        assert!(text.contains("  MCP         127.0.0.1:9"));
+        assert!(text.contains("  Keychain    macOS login keychain"));
+        assert!(text.contains("`multitool <cmd> --root '/tmp/root'`"));
+        assert!(text.contains("`multitool manage token --root '/tmp/root'`"));
+        assert!(text.contains("shared key → /tmp/root/sock/token"));
+        assert!(text.contains("/v1/pair is not served on TCP"));
+        // Optional control-plane group comes after operator + notes.
+        let note_at = text.find("  Note        /v1/pair").expect("note");
+        let tcp_at = text
+            .find("  TCP         127.0.0.1:4780  (plaintext; put TLS in front)")
+            .expect("tcp");
+        let quit_at = text.find("  Quit        Ctrl-C or SIGTERM").expect("quit");
+        assert!(note_at < tcp_at && tcp_at < quit_at);
+        assert!(text.contains("  Public URL  http://127.0.0.1:4780"));
+        assert!(text.contains("  UI          dist/ui"));
+        assert!(!text.contains("…"));
+    }
+
+    #[test]
+    fn serve_banner_optional_control_plane_off_hints() {
+        let banner = ServeBanner {
+            socket: PathBuf::from("/tmp/broker.sock"),
+            root: PathBuf::from("/tmp/root"),
+            root_flag: " --root '/tmp/root'".into(),
+            first_start_manage_token: None,
+            tcp_addr: None,
+            public_url: None,
+            web_root: None,
+            advertise_host: None,
+            mcp: McpBannerStatus::Disabled,
+            vault: "encrypted file".into(),
+            headless_warning: None,
+            token_path: PathBuf::from("/tmp/root/sock/token"),
+        };
+        let text = banner.lines().join("\n");
+        assert!(text.contains("  TCP         off — add --listen 127.0.0.1:4780"));
+        assert!(text.contains(
+            "  Public URL  off — also needs --listen; then --public-url http://127.0.0.1:4780"
+        ));
+        assert!(text.contains(
+            "  UI          off — also needs --public-url; then --web-root dist/ui"
+        ));
+        let skill_at = text.find("  Skill       ").expect("skill");
+        let tcp_at = text.find("  TCP         off").expect("tcp off");
+        let quit_at = text.find("  Quit        ").expect("quit");
+        assert!(skill_at < tcp_at && tcp_at < quit_at);
+    }
+
+    #[test]
+    fn serve_banner_first_start_token_replaces_manage_block() {
+        let banner = ServeBanner {
+            socket: PathBuf::from("/s"),
+            root: PathBuf::from("/r"),
+            root_flag: " --root '/r'".into(),
+            first_start_manage_token: Some(PathBuf::from("/r/sock/manage-token")),
+            tcp_addr: Some("127.0.0.1:1".parse().unwrap()),
+            public_url: None,
+            web_root: None,
+            advertise_host: Some("agents.example".into()),
+            mcp: McpBannerStatus::Failed("bind failed".into()),
+            vault: "encrypted file".into(),
+            headless_warning: Some("warning: 1 tool is set to confirm traffic".into()),
+            token_path: PathBuf::from("/r/sock/token"),
+        };
+        let text = banner.lines().join("\n");
+        assert!(text.contains("  First token /r/sock/manage-token"));
+        assert!(text.contains("`multitool manage token --root '/r'` while the broker is live"));
+        assert!(!text.contains("  Manage "));
+        assert!(text.contains("  Data host   agents.example  (PG leg is plaintext)"));
+        assert!(text.contains("  MCP         not started (bind failed)"));
+        assert!(text.contains("  Warning     warning: 1 tool is set to confirm traffic"));
+        assert!(text.contains("  TCP         127.0.0.1:1  (plaintext; put TLS in front)"));
+        assert!(text.contains("  Public URL  off — add --public-url http://127.0.0.1:1"));
+        assert!(text.contains(
+            "  UI          off — also needs --public-url; then --web-root dist/ui"
+        ));
+    }
+
+    #[test]
+    fn split_label_line_recognizes_multiword_labels() {
+        assert_eq!(
+            split_label_line("  Public URL  http://example"),
+            Some(("Public URL", "http://example"))
+        );
+        assert_eq!(
+            split_label_line("  First token /path  (0600)"),
+            Some(("First token", "/path  (0600)"))
+        );
+        assert_eq!(split_label_line("Multitool broker ready"), None);
+        assert_eq!(split_label_line(""), None);
     }
 }

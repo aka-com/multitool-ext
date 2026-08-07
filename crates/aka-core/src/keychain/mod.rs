@@ -323,7 +323,9 @@ fn resolve_for_store(
                  {KEYCHAIN_ENV}=login explicitly if the fallback is intentional."
             ))),
             Err(error) => {
-                tracing::warn!(
+                // Operators see a one-line keychain summary on the serve
+                // banner; keep the entitlement detail out of default logs.
+                tracing::debug!(
                     "falling back to the macOS login keychain, which prompts per item: {error}"
                 );
                 Ok(Keychain::Login)
@@ -527,7 +529,7 @@ impl<A: KeychainApi> KeychainVault<A> {
             store_exists,
             api.data_protection_available(),
         )?;
-        tracing::info!("macOS keychain in use: {keychain} (service {service})");
+        tracing::debug!("macOS keychain in use: {keychain} (service {service})");
         write_record(record_path, keychain);
         Ok(Self::with_keychain(api, service, keychain))
     }
