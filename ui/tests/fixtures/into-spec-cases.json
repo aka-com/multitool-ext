@@ -1,0 +1,288 @@
+[
+  {
+    "name": "api_minimal",
+    "input": {
+      "name": "GitHub",
+      "type": "api",
+      "host": "api.github.com",
+      "template": "Authorization: Bearer {{GITHUB}}"
+    }
+  },
+  {
+    "name": "api_full",
+    "input": {
+      "name": "Internal",
+      "type": "api",
+      "host": "api.internal",
+      "scheme": "http",
+      "port": 8080,
+      "template": "X-Key: {{K}}",
+      "mcp_path": "/mcp",
+      "test_path": "/health",
+      "trusted_ca_bundle_path": "/etc/ca.pem"
+    }
+  },
+  {
+    "name": "api_blank_optionals_dropped",
+    "input": {
+      "name": "Blanks",
+      "type": "api",
+      "host": "h",
+      "template": "t",
+      "mcp_path": "   ",
+      "test_path": "",
+      "trusted_ca_bundle_path": "  "
+    }
+  },
+  {
+    "name": "api_oauth",
+    "input": {
+      "name": "Slack",
+      "type": "api",
+      "host": "slack.com",
+      "oauth_auth_url": "https://slack.com/oauth/v2/authorize",
+      "oauth_token_url": "https://slack.com/api/oauth.v2.access",
+      "oauth_client_id": "cid",
+      "oauth_scopes": ["chat:write", "channels:read"],
+      "oauth_extra_params": [["access_type", "offline"]]
+    }
+  },
+  {
+    "name": "api_oauth_minimal",
+    "input": {
+      "name": "OA",
+      "type": "api",
+      "host": "h",
+      "oauth_auth_url": "https://a",
+      "oauth_token_url": "https://t",
+      "oauth_client_id": "c"
+    }
+  },
+  {
+    "name": "api_signer_sigv4",
+    "input": {
+      "name": "S3",
+      "type": "api",
+      "host": "s3.amazonaws.com",
+      "signer_region": "us-east-1",
+      "signer_service": "s3",
+      "signer_access_key_ref": "AK",
+      "signer_secret_key_ref": "SK"
+    }
+  },
+  {
+    "name": "api_signer_sigv4_session",
+    "input": {
+      "name": "S3s",
+      "type": "api",
+      "host": "s3.amazonaws.com",
+      "signer_region": "us-east-1",
+      "signer_service": "s3",
+      "signer_access_key_ref": "AK",
+      "signer_secret_key_ref": "SK",
+      "signer_session_token_ref": "ST"
+    }
+  },
+  {
+    "name": "api_signer_gcp",
+    "input": {
+      "name": "GCS",
+      "type": "api",
+      "host": "storage.googleapis.com",
+      "signer_gcp_key_ref": "gcpkey",
+      "signer_gcp_scope": "https://www.googleapis.com/auth/devstorage.read_only"
+    }
+  },
+  {
+    "name": "api_mtls",
+    "input": {
+      "name": "M",
+      "type": "api",
+      "host": "h",
+      "client_cert_path": "/c.pem",
+      "client_key_path": "/k.pem"
+    }
+  },
+  {
+    "name": "pg_minimal",
+    "input": {
+      "name": "DB",
+      "type": "pg",
+      "host": "db.internal",
+      "dbname": "app",
+      "user": "reader"
+    }
+  },
+  {
+    "name": "pg_full",
+    "input": {
+      "name": "DB2",
+      "type": "pg",
+      "host": "db2",
+      "port": 6432,
+      "dbname": "d",
+      "user": "u",
+      "sslmode": "require",
+      "trusted_ca_bundle_path": "/ca.pem"
+    }
+  },
+  {
+    "name": "pg_secret_binding",
+    "input": {
+      "name": "DB3",
+      "type": "pg",
+      "host": "h",
+      "dbname": "d",
+      "user": "u",
+      "secret_id": "11111111-1111-4111-8111-111111111111"
+    }
+  },
+  {
+    "name": "pg_bad_secret",
+    "input": {
+      "name": "DB4",
+      "type": "pg",
+      "host": "h",
+      "dbname": "d",
+      "user": "u",
+      "secret_id": "not-a-uuid"
+    }
+  },
+  {
+    "name": "ssh_minimal",
+    "input": {
+      "name": "Box",
+      "type": "ssh",
+      "host": "prod.example.com",
+      "user": "deploy"
+    }
+  },
+  {
+    "name": "ssh_full",
+    "input": {
+      "name": "Box2",
+      "type": "ssh",
+      "destination": "prod",
+      "host": "prod.example.com",
+      "port": 2222,
+      "user": "deploy",
+      "host_key_fingerprint": "SHA256:abc"
+    }
+  },
+  {
+    "name": "cloud_aws_keys",
+    "input": {
+      "name": "AWS",
+      "type": "cloud",
+      "cloud_provider": "aws",
+      "cloud_region": "us-west-2",
+      "cloud_access_key_ref": "AK",
+      "cloud_secret_key_ref": "SK"
+    }
+  },
+  {
+    "name": "cloud_aws_role",
+    "input": {
+      "name": "AWSr",
+      "type": "cloud",
+      "cloud_provider": "aws",
+      "cloud_region": "us-west-2",
+      "cloud_access_key_ref": "AK",
+      "cloud_secret_key_ref": "SK",
+      "cloud_session_token_ref": "ST",
+      "cloud_role_arn": "arn:aws:iam::1:role/r",
+      "cloud_external_id": "x",
+      "cloud_session_ttl": 1800
+    }
+  },
+  {
+    "name": "cloud_aws_profile",
+    "input": {
+      "name": "AWSp",
+      "type": "cloud",
+      "cloud_provider": "aws",
+      "cloud_source_profile": "prod",
+      "cloud_source_origin": "install-1",
+      "cloud_region": "us-east-1"
+    }
+  },
+  {
+    "name": "cloud_aws_profile_full",
+    "input": {
+      "name": "AWSp2",
+      "type": "cloud",
+      "cloud_provider": "aws",
+      "cloud_source_profile": "prod",
+      "cloud_source_origin": "install-2",
+      "cloud_source_origin_label": "Ray's Mac",
+      "cloud_role_arn": "arn:aws:iam::1:role/r",
+      "cloud_external_id": "e",
+      "cloud_session_policy_arn": "arn:aws:iam::aws:policy/ReadOnlyAccess",
+      "cloud_session_policy": "{}"
+    }
+  },
+  {
+    "name": "cloud_gcp",
+    "input": {
+      "name": "GCP",
+      "type": "cloud",
+      "cloud_provider": "gcp",
+      "cloud_gcp_key_ref": "gk"
+    }
+  },
+  {
+    "name": "cloud_azure",
+    "input": {
+      "name": "AZ",
+      "type": "cloud",
+      "cloud_provider": "azure",
+      "cloud_tenant_id": "t",
+      "cloud_client_id": "c",
+      "cloud_client_secret_ref": "cs"
+    }
+  },
+  {
+    "name": "cloud_missing_provider",
+    "input": {
+      "name": "X",
+      "type": "cloud"
+    }
+  },
+  {
+    "name": "cloud_missing_region",
+    "input": {
+      "name": "X",
+      "type": "cloud",
+      "cloud_provider": "aws",
+      "cloud_access_key_ref": "AK",
+      "cloud_secret_key_ref": "SK"
+    }
+  },
+  {
+    "name": "cloud_bad_ttl",
+    "input": {
+      "name": "X",
+      "type": "cloud",
+      "cloud_provider": "aws",
+      "cloud_region": "r",
+      "cloud_access_key_ref": "AK",
+      "cloud_secret_key_ref": "SK",
+      "cloud_session_ttl": 99999
+    }
+  },
+  {
+    "name": "cloud_bad_provider",
+    "input": {
+      "name": "X",
+      "type": "cloud",
+      "cloud_provider": "digitalocean"
+    }
+  },
+  {
+    "name": "unknown_type",
+    "input": {
+      "name": "X",
+      "type": "ws"
+    }
+  }
+]

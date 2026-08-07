@@ -20,6 +20,7 @@
 // than to render an app full of error toasts.
 
 import { requestFor } from './commands';
+import { ConnectionSpecError } from './connection-spec';
 import type {
   CommandArgs,
   CommandName,
@@ -176,6 +177,10 @@ export async function invoke<K extends CommandName>(
   try {
     request = requestFor(command, args as CommandArgs<K>);
   } catch (error) {
+    // A rejected connection draft is a form error, not a missing capability:
+    // surface it in the same shape the broker's 400 would, so the form marks
+    // the offending field instead of showing "unavailable here".
+    if (error instanceof ConnectionSpecError) throw error.formError;
     throw new NotAvailableHereError(String((error as Error).message ?? error));
   }
   const mutating = !isSafe(request.method);

@@ -2647,6 +2647,75 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Syn
 mod tests {
     use super::*;
 
+    /// Differential check that the TypeScript `intoSpec` port
+    /// (`ui/src/connection-spec.ts`) matches this Rust `into_spec`.
+    ///
+    /// The shared inputs and the expected output live under
+    /// `ui/tests/fixtures/`. This test is the *arbiter* of the golden:
+    /// `INTO_SPEC_REGEN=1` rewrites it from the real `into_spec`, and a plain
+    /// run asserts the committed golden still matches. `connection-spec.test.ts`
+    /// then checks the TS port against that same golden — see its header for
+    /// the full two-step flow. Both green ⟹ the two implementations agree.
+    #[test]
+    fn into_spec_differential() {
+        use serde_json::{json, Map, Value};
+
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            input: ConnectionInput,
+        }
+
+        let cases: Vec<Case> =
+            serde_json::from_str(include_str!("../../ui/tests/fixtures/into-spec-cases.json"))
+                .expect("into-spec-cases.json is valid JSON");
+
+        let mut produced = Map::new();
+        for case in cases {
+            let entry = match case.input.into_spec() {
+                // `to_value` reflects serde exactly — the same skip/default
+                // rules the wire body will carry.
+                Ok(spec) => json!({ "spec": serde_json::to_value(&spec).unwrap() }),
+                Err(error) => {
+                    // Compare only the stable discriminants (code, and field
+                    // when present); the message prose is presentation.
+                    let serialized = serde_json::to_value(&error).unwrap();
+                    let mut err = Map::new();
+                    err.insert("code".into(), serialized["code"].clone());
+                    if let Some(field) = serialized.get("field") {
+                        err.insert("field".into(), field.clone());
+                    }
+                    json!({ "error": Value::Object(err) })
+                }
+            };
+            assert!(
+                produced.insert(case.name.clone(), entry).is_none(),
+                "duplicate case name {}",
+                case.name
+            );
+        }
+        let produced = Value::Object(produced);
+
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ui/tests/fixtures/into-spec-golden.json"
+        );
+        if std::env::var_os("INTO_SPEC_REGEN").is_some() {
+            let text = format!("{}\n", serde_json::to_string_pretty(&produced).unwrap());
+            std::fs::write(golden_path, text).expect("write into-spec-golden.json");
+            return;
+        }
+        let committed: Value =
+            serde_json::from_str(include_str!("../../ui/tests/fixtures/into-spec-golden.json"))
+                .expect("into-spec-golden.json is valid JSON");
+        assert_eq!(
+            produced, committed,
+            "into_spec output drifted from the committed golden; re-run with \
+             INTO_SPEC_REGEN=1 to regenerate it, then `pnpm run test:ui` to see \
+             where the TypeScript port needs to follow"
+        );
+    }
+
     #[test]
     fn pg_sslmode_rejects_unknown_values() {
         assert_eq!(parse_pg_sslmode(None).unwrap(), PgSslMode::VerifyFull);

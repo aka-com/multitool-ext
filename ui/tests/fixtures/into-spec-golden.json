@@ -1,0 +1,336 @@
+{
+  "api_minimal": {
+    "spec": {
+      "name": "GitHub",
+      "config": {
+        "kind": "api",
+        "host": "api.github.com",
+        "scheme": "https",
+        "port": null,
+        "template": "Authorization: Bearer {{GITHUB}}"
+      },
+      "secrets": []
+    }
+  },
+  "api_full": {
+    "spec": {
+      "name": "Internal",
+      "config": {
+        "kind": "api",
+        "host": "api.internal",
+        "scheme": "http",
+        "port": 8080,
+        "trusted_ca_bundle_path": "/etc/ca.pem",
+        "template": "X-Key: {{K}}",
+        "mcp_path": "/mcp",
+        "test_path": "/health"
+      },
+      "secrets": []
+    }
+  },
+  "api_blank_optionals_dropped": {
+    "spec": {
+      "name": "Blanks",
+      "config": {
+        "kind": "api",
+        "host": "h",
+        "scheme": "https",
+        "port": null,
+        "template": "t"
+      },
+      "secrets": []
+    }
+  },
+  "api_oauth": {
+    "spec": {
+      "name": "Slack",
+      "config": {
+        "kind": "api",
+        "host": "slack.com",
+        "scheme": "https",
+        "port": null,
+        "template": "",
+        "oauth": {
+          "auth_url": "https://slack.com/oauth/v2/authorize",
+          "token_url": "https://slack.com/api/oauth.v2.access",
+          "client_id": "cid",
+          "scopes": ["chat:write", "channels:read"],
+          "extra_auth_params": [["access_type", "offline"]]
+        }
+      },
+      "secrets": []
+    }
+  },
+  "api_oauth_minimal": {
+    "spec": {
+      "name": "OA",
+      "config": {
+        "kind": "api",
+        "host": "h",
+        "scheme": "https",
+        "port": null,
+        "template": "",
+        "oauth": {
+          "auth_url": "https://a",
+          "token_url": "https://t",
+          "client_id": "c",
+          "scopes": []
+        }
+      },
+      "secrets": []
+    }
+  },
+  "api_signer_sigv4": {
+    "spec": {
+      "name": "S3",
+      "config": {
+        "kind": "api",
+        "host": "s3.amazonaws.com",
+        "scheme": "https",
+        "port": null,
+        "template": "",
+        "signer": {
+          "algorithm": "aws_sigv4",
+          "region": "us-east-1",
+          "service": "s3",
+          "access_key_ref": "AK",
+          "secret_key_ref": "SK"
+        }
+      },
+      "secrets": []
+    }
+  },
+  "api_signer_sigv4_session": {
+    "spec": {
+      "name": "S3s",
+      "config": {
+        "kind": "api",
+        "host": "s3.amazonaws.com",
+        "scheme": "https",
+        "port": null,
+        "template": "",
+        "signer": {
+          "algorithm": "aws_sigv4",
+          "region": "us-east-1",
+          "service": "s3",
+          "access_key_ref": "AK",
+          "secret_key_ref": "SK",
+          "session_token_ref": "ST"
+        }
+      },
+      "secrets": []
+    }
+  },
+  "api_signer_gcp": {
+    "spec": {
+      "name": "GCS",
+      "config": {
+        "kind": "api",
+        "host": "storage.googleapis.com",
+        "scheme": "https",
+        "port": null,
+        "template": "",
+        "signer": {
+          "algorithm": "gcp_service_account",
+          "key_ref": "gcpkey",
+          "scope": "https://www.googleapis.com/auth/devstorage.read_only"
+        }
+      },
+      "secrets": []
+    }
+  },
+  "api_mtls": {
+    "spec": {
+      "name": "M",
+      "config": {
+        "kind": "api",
+        "host": "h",
+        "scheme": "https",
+        "port": null,
+        "template": "",
+        "client_cert_path": "/c.pem",
+        "client_key_path": "/k.pem"
+      },
+      "secrets": []
+    }
+  },
+  "pg_minimal": {
+    "spec": {
+      "name": "DB",
+      "config": {
+        "kind": "pg",
+        "host": "db.internal",
+        "port": 5432,
+        "dbname": "app",
+        "user": "reader",
+        "sslmode": "verify-full"
+      },
+      "secrets": []
+    }
+  },
+  "pg_full": {
+    "spec": {
+      "name": "DB2",
+      "config": {
+        "kind": "pg",
+        "host": "db2",
+        "port": 6432,
+        "dbname": "d",
+        "user": "u",
+        "sslmode": "require",
+        "trusted_ca_bundle_path": "/ca.pem"
+      },
+      "secrets": []
+    }
+  },
+  "pg_secret_binding": {
+    "spec": {
+      "name": "DB3",
+      "config": {
+        "kind": "pg",
+        "host": "h",
+        "port": 5432,
+        "dbname": "d",
+        "user": "u",
+        "sslmode": "verify-full"
+      },
+      "secrets": ["11111111-1111-4111-8111-111111111111"]
+    }
+  },
+  "pg_bad_secret": {
+    "error": { "code": "secret_not_found", "field": "secret" }
+  },
+  "ssh_minimal": {
+    "spec": {
+      "name": "Box",
+      "config": {
+        "kind": "ssh",
+        "host": "prod.example.com",
+        "port": 22,
+        "user": "deploy",
+        "host_key_fingerprint": ""
+      },
+      "secrets": []
+    }
+  },
+  "ssh_full": {
+    "spec": {
+      "name": "Box2",
+      "config": {
+        "kind": "ssh",
+        "destination": "prod",
+        "host": "prod.example.com",
+        "port": 2222,
+        "user": "deploy",
+        "host_key_fingerprint": "SHA256:abc"
+      },
+      "secrets": []
+    }
+  },
+  "cloud_aws_keys": {
+    "spec": {
+      "name": "AWS",
+      "config": {
+        "kind": "cloud",
+        "provider": "aws",
+        "region": "us-west-2",
+        "access_key_ref": "AK",
+        "secret_key_ref": "SK",
+        "session_ttl_secs": 900
+      },
+      "secrets": []
+    }
+  },
+  "cloud_aws_role": {
+    "spec": {
+      "name": "AWSr",
+      "config": {
+        "kind": "cloud",
+        "provider": "aws",
+        "region": "us-west-2",
+        "access_key_ref": "AK",
+        "secret_key_ref": "SK",
+        "session_token_ref": "ST",
+        "role_arn": "arn:aws:iam::1:role/r",
+        "external_id": "x",
+        "session_ttl_secs": 1800
+      },
+      "secrets": []
+    }
+  },
+  "cloud_aws_profile": {
+    "spec": {
+      "name": "AWSp",
+      "config": {
+        "kind": "cloud",
+        "provider": "aws_profile",
+        "region": "us-east-1",
+        "profile": "prod",
+        "origin": "install-1",
+        "session_ttl_secs": 900
+      },
+      "secrets": []
+    }
+  },
+  "cloud_aws_profile_full": {
+    "spec": {
+      "name": "AWSp2",
+      "config": {
+        "kind": "cloud",
+        "provider": "aws_profile",
+        "profile": "prod",
+        "origin": "install-2",
+        "origin_label": "Ray's Mac",
+        "role_arn": "arn:aws:iam::1:role/r",
+        "external_id": "e",
+        "session_policy_arn": "arn:aws:iam::aws:policy/ReadOnlyAccess",
+        "session_policy": "{}",
+        "session_ttl_secs": 900
+      },
+      "secrets": []
+    }
+  },
+  "cloud_gcp": {
+    "spec": {
+      "name": "GCP",
+      "config": {
+        "kind": "cloud",
+        "provider": "gcp",
+        "key_ref": "gk",
+        "scope": "https://www.googleapis.com/auth/cloud-platform",
+        "session_ttl_secs": 900
+      },
+      "secrets": []
+    }
+  },
+  "cloud_azure": {
+    "spec": {
+      "name": "AZ",
+      "config": {
+        "kind": "cloud",
+        "provider": "azure",
+        "tenant_id": "t",
+        "client_id": "c",
+        "client_secret_ref": "cs",
+        "scope": "https://management.azure.com/.default",
+        "session_ttl_secs": 900
+      },
+      "secrets": []
+    }
+  },
+  "cloud_missing_provider": {
+    "error": { "code": "cloud_field_required", "field": "cloudProvider" }
+  },
+  "cloud_missing_region": {
+    "error": { "code": "cloud_field_required", "field": "cloudRegion" }
+  },
+  "cloud_bad_ttl": {
+    "error": { "code": "invalid_cloud_session_ttl", "field": "cloudSessionTtl" }
+  },
+  "cloud_bad_provider": {
+    "error": { "code": "invalid_cloud_provider", "field": "cloudProvider" }
+  },
+  "unknown_type": {
+    "error": { "code": "unknown_connection_type" }
+  }
+}

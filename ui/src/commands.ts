@@ -15,6 +15,8 @@
 // `native` is not a smaller list of features. It is the list of things a
 // browser genuinely cannot do, and each entry says which.
 
+import { ConnectionSpecError, specForRequest } from './connection-spec';
+import type { ConnectionInput } from './types';
 import type { CommandArgs, CommandMap, CommandName } from './types';
 
 /** Where a command can be served from. */
@@ -85,6 +87,40 @@ const broker = (method: Method, path: string, rest: Partial<BrokerRoute> = {}): 
 const native = (reason: string): CommandSpec => ({ host: 'native', reason });
 
 const NO_BODY = () => ({});
+
+/** A `SecretAddBody` for a value typed into the form (kind defaults server-side). */
+function newSecret(name: string, value: string): Record<string, unknown> {
+  return { name, value };
+}
+
+/**
+ * `ConnectionAddBody` for the web app.
+ *
+ * The desktop's `add_connection` command does two things this rebuilds: shape
+ * the `ConnectionInput` into a `ConnectionSpec` (via the ported `intoSpec`),
+ * and lift typed-in secret values into `new_secret` / `new_secrets` so the
+ * broker vaults them. The one thing it does that a browser cannot is decrypt
+ * an SSH private key before the vault seals it, so adding an SSH connection
+ * that carries a raw key — or resolving an `ssh host` import off ~/.ssh —
+ * stays desktop-only and is refused here with a clear reason.
+ */
+function connectionAddBody(input: ConnectionInput): Record<string, unknown> {
+  if (input.type === 'ssh' && (input.new_secret_value != null || input.ssh_import_id != null)) {
+    throw new ConnectionSpecError(
+      'ssh_key_native_only',
+      'Adding an SSH key has to happen in the desktop app, which unlocks and seals the key locally.',
+      'newSecretValue',
+    );
+  }
+  const body: Record<string, unknown> = { spec: specForRequest(input) };
+  if (input.new_secret_name != null && input.new_secret_value != null) {
+    body.new_secret = newSecret(input.new_secret_name, input.new_secret_value);
+  }
+  if (input.new_secrets && input.new_secrets.length) {
+    body.new_secrets = input.new_secrets.map((secret) => newSecret(secret.name, secret.value));
+  }
+  return body;
+}
 
 /**
  * Every command, classified. Typed as a total map over `CommandMap`, so
@@ -202,9 +238,14 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
   }),
 
   list_connections: broker('GET', '/v1/manage/connections'),
-  add_connection: broker('POST', '/v1/manage/connections', { body: pick('input') }),
+  add_connection: broker('POST', '/v1/manage/connections', {
+    body: (args) => connectionAddBody(args.input as ConnectionInput),
+  }),
   edit_connection: broker('PUT', '/v1/manage/connections/:id', {
-    body: pick('expectedUpdatedAt', 'input'),
+    body: (args) => ({
+      expected_updated_at: args.expectedUpdatedAt,
+      spec: specForRequest(args.input as ConnectionInput),
+    }),
   }),
   delete_connection: broker('DELETE', '/v1/manage/connections/:id'),
   reorder_connections: broker('POST', '/v1/manage/connections/reorder', {
@@ -212,7 +253,14 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
   }),
   test_connection: broker('POST', '/v1/manage/connections/:id/test', { body: NO_BODY }),
   test_connection_draft: broker('POST', '/v1/manage/connections/test-draft', {
-    body: pick('input'),
+    // The draft dial performs no key exchange, so — unlike add_connection —
+    // an SSH key needs no unlocking here; a typed value rides as typed_secret.
+    body: (args) => {
+      const input = args.input as ConnectionInput;
+      const body: Record<string, unknown> = { spec: specForRequest(input) };
+      if (input.new_secret_value != null) body.typed_secret = input.new_secret_value;
+      return body;
+    },
   }),
   set_tool_access: broker('POST', '/v1/manage/connections/:connectionId/access', {
     body: pick('enabled'),
