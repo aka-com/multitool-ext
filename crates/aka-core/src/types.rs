@@ -24,6 +24,12 @@ pub struct SecretMeta {
     /// What the credential is; records from before typing load as secrets.
     #[serde(default)]
     pub kind: SecretKind,
+    /// Which list the credential lives in: the user's own secrets, or the
+    /// credentials minted alongside a connection. Purely presentation-side
+    /// grouping the user can reassign; records from before grouping load as
+    /// the user's own.
+    #[serde(default)]
+    pub origin: SecretOrigin,
     /// Password metadata: the canonical host this password signs in to
     /// (see `password::normalize_site`). Not secret; the match key for
     /// future origin-scoped dispensing, so it is normalized on write.
@@ -42,6 +48,19 @@ impl SecretMeta {
     pub fn has_totp(&self) -> bool {
         self.totp_vault_id.is_some()
     }
+}
+
+/// Where a secret came from, which is also where it is shown: secrets the
+/// user added themselves versus credentials created as part of adding a
+/// connection. The connection flows set `Connection` at creation; after
+/// that the value is the user's to change from the secret's own editor
+/// (deliberately never from a connection editor).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretOrigin {
+    #[default]
+    User,
+    Connection,
 }
 
 /// The credential taxonomy: a named value (API key, token, private key) or

@@ -21,18 +21,18 @@ set -euo pipefail
 #
 #   default                       keychain-access-groups alone, no
 #                                 provisioning profile.
-#   APPLE_PROVISIONING_PROFILE=…  also adds com.apple.application-identifier
-#                                 and embeds the named .provisionprofile,
-#                                 which authorizes both.
+#   APPLE_PROVISIONING_PROFILE=…  also adds com.apple.application-identifier,
+#                                 enables optional capabilities that the
+#                                 profile explicitly authorizes, and embeds
+#                                 the named .provisionprofile.
 #
 # The default is the lighter setup and, as far as we can tell, sufficient. If
 # a build from it will not launch ("The application cannot be opened"), that
 # is macOS rejecting an unauthorized restricted entitlement: get a Developer
-# ID provisioning profile for this app id that includes the Keychain Sharing
-# capability and point APPLE_PROVISIONING_PROFILE at it. Runtime behaviour is
-# identical either way — the app probes what it can actually reach and falls
-# back to the login keychain — so the only thing at stake here is whether the
-# entitlement is honoured at all. DEVELOPING.md has the whole story.
+# ID provisioning profile for this app id that includes the needed capability
+# and point APPLE_PROVISIONING_PROFILE at it. Optional entitlements must never
+# be signed in unless that profile grants them; taskgated kills such a process
+# before application startup. DEVELOPING.md has the whole story.
 #
 # Release (--release) notarization credentials, either form:
 #   NOTARYTOOL_KEYCHAIN_PROFILE   profile stored once via
@@ -175,6 +175,33 @@ if [[ "$(uname)" == "Darwin" ]]; then
     /usr/libexec/PlistBuddy \
       -c "Add :com.apple.application-identifier string ${team_id}.${bundle_id}" \
       "$entitlements" >/dev/null
+
+    # Time Sensitive is a restricted notification capability. Signing it into
+    # an app whose profile does not grant it makes taskgated kill the process
+    # at launch with "No matching profile found". Keep ordinary notifications
+    # working everywhere, and opt into the interruption level only for a
+    # profile that explicitly authorizes it.
+    profile_plist="$(mktemp "${TMPDIR:-/tmp}/multitool-profile.XXXXXX")"
+    if ! security cms -D -i "$profile" >"$profile_plist"; then
+      rm -f "$profile_plist"
+      echo "Could not decode APPLE_PROVISIONING_PROFILE: $profile" >&2
+      exit 1
+    fi
+    profile_time_sensitive="$(
+      /usr/libexec/PlistBuddy \
+        -c 'Print :Entitlements:com.apple.developer.usernotifications.time-sensitive' \
+        "$profile_plist" 2>/dev/null || true
+    )"
+    if [[ "$profile_time_sensitive" == "true" ]]; then
+      /usr/libexec/PlistBuddy \
+        -c "Add :com.apple.developer.usernotifications.time-sensitive bool true" \
+        "$entitlements" >/dev/null
+      echo "Time Sensitive notifications: authorized by provisioning profile"
+    else
+      echo "Time Sensitive notifications: not authorized by provisioning profile"
+    fi
+    rm -f "$profile_plist"
+    unset profile_plist profile_time_sensitive
     echo "Embedding provisioning profile: $profile"
   fi
 
@@ -247,14 +274,23 @@ else
   CI=true "${tauri_env[@]}" "$repo_root/node_modules/.bin/tauri" build --config "$bundle_config" --bundles app,dmg "${target_args[@]}" "${tauri_args[@]}"
 fi
 
+if [[ "$(uname)" == "Darwin" ]]; then
+  bundle_dir="$repo_root/target/universal-apple-darwin/release/bundle"
+  app="$bundle_dir/macos/Multitool.app"
+  codesign --verify --deep --all-architectures --strict "$app"
+fi
+
 if [[ "$release" -eq 0 ]]; then
+  if [[ "$(uname)" == "Darwin" ]]; then
+    echo "Signed artifacts ready (not notarized):"
+    echo "  $bundle_dir/dmg"
+    echo "  $app"
+  fi
   exit 0
 fi
 
 # Notarizing the DMG covers the nested .app; staple both so each artifact
 # passes Gatekeeper offline whether distributed as a DMG or a bare .app.
-bundle_dir="$repo_root/target/universal-apple-darwin/release/bundle"
-app="$bundle_dir/macos/Multitool.app"
 dmg="$(ls "$bundle_dir"/dmg/Multitool_*.dmg)"
 
 xcrun notarytool submit "$dmg" --wait "${notary_args[@]}"

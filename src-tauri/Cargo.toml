@@ -61,11 +61,15 @@ objc2 = "0.6"
 objc2-core-foundation = { version = "0.3", features = ["CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGSession"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDistributedNotificationCenter", "NSNotification"] }
-objc2-app-kit = { version = "0.3", features = ["NSAlert", "NSApplication", "NSButton", "NSCell", "NSControl", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSAlert", "NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSView", "NSWindow", "NSWorkspace"] }
 block2 = "0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "a3122e894383aa068ec5365a42994e3ac94ba1b6" }
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["LAContext", "LAError", "LAPublicDefines", "block2", "std"] }
 objc2-local-authentication-embedded-ui = { version = "0.3.2", default-features = false, features = ["std", "LAAuthenticationView", "objc2-app-kit"] }
+# mac-usernotifications' safe wrapper exposes on/off notification settings but
+# not the Alert Style (Temporary vs Persistent) — reach past it for that one
+# field via the same UNUserNotificationCenter it wraps.
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["UNUserNotificationCenter", "UNNotificationSettings", "block2", "std"] }
 
 [features]
 dev-verbose = []

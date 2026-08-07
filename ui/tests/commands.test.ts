@@ -39,6 +39,7 @@ test('nothing that touches this machine is offered over HTTP', () => {
     'get_notification_settings', 'set_notification_settings',
     'list_aws_profiles', 'inspect_ssh_import', 'check_known_hosts',
     'get_local_username', 'open_url',
+    'capture_screen_region', 'open_screen_recording_settings',
   ] as CommandName[]) {
     assert.equal(commandHost(name), 'native', `${name} must stay native`);
   }

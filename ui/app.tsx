@@ -1,5 +1,5 @@
-// Multitool React frontend. One file drives all Tauri windows (main, tray
-// and dropdown), chosen from location.hash.
+// Multitool React frontend. One file drives the main window, menu-bar
+// dropdown, and non-activating attention popup, chosen from location.hash.
 //
 // Every mutation and read goes through the Rust core via Tauri
 // commands; the webview holds a secret value only while the user has
@@ -20,7 +20,7 @@ import { createPortal, flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
   CATALOG_SECTIONS, canQuickConnectMcp, catalogEntryById, catalogNameForType,
-  collapsedCatalogGroup, connectedCatalogFirst, connectionEditPresentation,
+  connectionEditPresentation,
   connectionsForEntry, entryForConnection, mcpTemplateForConnection, visibleCatalog,
 } from '/src/catalog';
 import {
@@ -34,6 +34,7 @@ import type {
   ConnectionDraft,
   ConnMenuPoint,
   LoadKey,
+  OnePasswordFlowState,
   SecretCategory,
   SheetState,
   Tab,
@@ -41,7 +42,7 @@ import type {
 import { START_OPTIONS } from '/src/connect-agents';
 import type { CatalogEntry } from '/src/catalog';
 import {
-  ICONS, TYPES, toast, relTime, absTime, timeLeft, clockTime,
+  ICONS, TYPES, toast, relTime, relTimeAgo, absTime, timeLeft, clockTime,
 } from '/src/util';
 import {
   apiOriginFromParts, authTemplate, defaultConnectionName, parseApiOrigin, parseConnectionImport,
@@ -80,17 +81,30 @@ import {
   suggestedOnePasswordAlias,
 } from '/src/onepassword';
 import { ACTIVITY_PAGE_LIMIT, refreshActivityPages } from '/src/activity-refresh';
-import { activeRequestCount, activeRequests, anchorExpiry } from '/src/requests';
+import {
+  activeRequestCount,
+  activeRequests,
+  anchorExpiry,
+  deadlineOutcomeVerb,
+} from '/src/requests';
 import { anchorEndpointExpiries } from '/src/endpoint-expiry';
 import { APP_VERSION } from '/src/version';
 import { virtualListWindow } from '/src/virtual-list';
 import { placeAnchoredMenu } from '/src/menu-position';
 import { decodeQrImage } from '/src/qr-image';
+import {
+  approvalActionLabel,
+  approvalAgentName,
+  approvalPermissionSummary,
+  approvalToolName,
+  approvalWantsLine,
+} from '/src/approval-presentation';
 import type {
   ActivityEntry,
   ActivityPage,
   Approval,
   ApprovalDecision,
+  AttentionHudPayload,
   AwsProfileList,
   BrokerProfile,
   CommandArgs,
@@ -130,7 +144,6 @@ import {
 import { ConnectedToolsList } from '/src/features/connected-tools-list';
 import { CredentialRowsList } from '/src/features/credential-rows';
 import { StartViewPage, startBlankId } from '/src/features/connect-agents-view';
-import { localSecretUse, noteSecretUsed } from '/src/recent-secrets';
 import { Sheet } from '/src/sheet';
 import {
   CLOUD_NEW_CREDENTIAL,
@@ -221,6 +234,20 @@ const ACTIVITY_OVERSCAN = 8;
  * under-mounting would show a short list until the scroller is measured. */
 const ACTIVITY_PREPAINT_VIEWPORT = 1200;
 
+/** Vite HMR re-executes this module. Preserve the live shell so tools/secrets
+ * (query cache) and the boot flag do not flash empty until a full reboot. */
+type AppHotData = {
+  reactRoot?: ReturnType<typeof createRoot>;
+  bootStarted?: boolean;
+  booted?: boolean;
+  brokerEpoch?: number;
+  notificationSettingsEpoch?: number;
+  knownApprovalIds?: Set<string>;
+  approvalsBootstrapped?: boolean;
+  attentionHudPayload?: AttentionHudPayload | null;
+};
+const appHot = import.meta.hot?.data as AppHotData | undefined;
+
 let reactMounted = false;
 let renderPublication = 0;
 /** Invalidates an in-flight reveal when navigation or window blur has asked
@@ -234,11 +261,11 @@ let pendingScroll: Array<[string, Element, number]> | null = null;
 /** Changes only when broker identity changes. Async work captures this value
  * so a result from an earlier backend cannot update the current broker's UI.
  * Link-state changes within that scope do not invalidate useful reads. */
-let brokerEpoch = 0;
+let brokerEpoch = appHot?.brokerEpoch ?? 0;
 /** Changes whenever another webview saves this desktop's notification
  * preferences. It prevents an older in-flight read from overwriting the
  * event's newer value. */
-let notificationSettingsEpoch = 0;
+let notificationSettingsEpoch = appHot?.notificationSettingsEpoch ?? 0;
 /** A dropdown form holds a renewable native lease. The native side also
  * expires it, so a webview crash or reload cannot strand the panel. */
 let dropdownFormHeartbeat: number | null = null;
@@ -252,14 +279,17 @@ let keyboardReorderConnId: string | null = null;
 let keyboardReorderFocusGeneration = 0;
 /** False until boot() has loaded the first broker data; AppRoot keeps
  * showing the loading splash instead of painting an empty window. */
-let booted = false;
+let booted = Boolean(appHot?.booted);
+let attentionHudPayload = appHot?.attentionHudPayload ?? null;
 
 function brokerEpochIsCurrent(epoch: number): boolean {
   return epoch === brokerEpoch;
 }
 
 function clearBrokerOwnedState(): void {
-  if (state.sheet) releaseDropdownForm();
+  if (activeSheet()) releaseDropdownForm();
+  knownApprovalIds = new Set();
+  approvalsBootstrapped = false;
   state.activity = [];
   state.activityNextBefore = null;
   state.activityLoadingOlder = false;
@@ -291,7 +321,10 @@ function clearBrokerOwnedState(): void {
   state.secretDetailOpen = false;
   state.totpVisible = null;
   state.dropdownSecretOpen = null;
+  state.dropdownTotpMenu = null;
   state.detailEdit = null;
+  state.copying = null;
+  state.copied = null;
   state.connectionReady = null;
   state.connTests = {};
   state.draftTest = null;
@@ -320,9 +353,40 @@ function clearBrokerOwnedState(): void {
   keyboardReorderFocusGeneration += 1;
 }
 
+const settingsSurface = mode === 'dropdown' ? 'menubar' : 'desktop';
+const SETTINGS_SHEET: SheetState = { kind: 'settings' };
+
+/** The state object survives Vite HMR, including updates from builds that
+ * predate per-surface Settings visibility. Fill the new field in lazily. */
+function settingsSheetVisibility(): typeof state.settingsSheetOpen {
+  state.settingsSheetOpen ??= { desktop: false, menubar: false };
+  if (state.sheet?.kind === 'settings') {
+    state.settingsSheetOpen[settingsSurface] = true;
+    state.sheet = null;
+  }
+  return state.settingsSheetOpen;
+}
+
+/** The sheet presented by this webview. Settings has its own visibility bit
+ * for each chrome; all data-bearing/form sheets remain in the generic slot. */
+function activeSheet(): SheetState | null {
+  return settingsSheetVisibility()[settingsSurface] ? SETTINGS_SHEET : state.sheet;
+}
+
+function sheetIsOpen(): boolean {
+  return activeSheet() !== null;
+}
+
 /** The one place sheet transitions happen, so a future cross-cutting
  * concern (analytics, focus policy) has a single seam. */
 function setSheet(sheet: SheetState | null): void {
+  const visibility = settingsSheetVisibility();
+  if (sheet?.kind === 'settings') {
+    state.sheet = null;
+    visibility[settingsSurface] = true;
+    return;
+  }
+  visibility[settingsSurface] = false;
   state.sheet = sheet;
 }
 
@@ -412,10 +476,131 @@ function showRequestInbox(): void {
   resetScroll();
 }
 
+/**
+ * Approval ids already observed by this webview. Auto-present only runs for
+ * newly arrived ids so dismissing a sheet does not re-open it on every
+ * approvals refresh; a brand-new request still surfaces as a modal.
+ * The first snapshot after (re)connect is adopted without auto-present —
+ * matching native attention, which does not re-alert for work already parked
+ * when the shell attaches.
+ */
+let knownApprovalIds = appHot?.knownApprovalIds ?? new Set<string>();
+let approvalsBootstrapped = Boolean(appHot?.approvalsBootstrapped);
+
+/** Whether it is safe to raise a traffic-confirmation sheet without
+ * discarding in-progress form work or interrupting another decision. */
+function canAutoPresentApproval(): boolean {
+  if (state.confirm || state.confirmDiscard) return false;
+  const sheet = activeSheet();
+  if (!sheet) return true;
+  // A stale approval sheet (answered elsewhere / timed out) can be replaced.
+  if (sheet.kind === 'approval') {
+    return !state.approvals.some((approval) => approval.id === state.sheet?.id);
+  }
+  // Credential forms, elicitations, and other sheets block auto-present so
+  // mid-typing work is not destroyed for an MFA prompt.
+  return false;
+}
+
+/** Open the approval decision sheet for `id`, loading host-key provenance
+ * when needed. Shared by queue clicks, notification deep-links, and
+ * auto-present of newly parked traffic. */
+async function presentApprovalSheet(id: string): Promise<boolean> {
+  if (!id) return false;
+  if (!await holdDropdownFormOpen()) return false;
+  const approval = state.approvals.find((candidate) => candidate.id === id);
+  setSheet({ kind: 'approval', id });
+  render();
+  if (approval?.unit === 'host_key' && approval.host_key_fingerprint) {
+    const connection = state.connections.find(
+      (candidate) => candidate.id === approval.connection_id,
+    );
+    if (connection?.host && isNativeHost()) {
+      state.approvalHostKeyProvenance = {
+        approvalId: approval.id,
+        loading: true,
+        candidates: [],
+        revokedFingerprints: [],
+        hasCertificateAuthority: false,
+      };
+      render();
+      try {
+        const lookup = await invoke('check_known_hosts', {
+          host: connection.host,
+          port: connection.port ?? 22,
+        });
+        if (state.sheet?.kind === 'approval' && state.sheet.id === approval.id) {
+          state.approvalHostKeyProvenance = {
+            approvalId: approval.id,
+            loading: false,
+            ...lookup,
+          };
+          render();
+        }
+      } catch (error) {
+        if (state.sheet?.kind === 'approval' && state.sheet.id === approval.id) {
+          state.approvalHostKeyProvenance = {
+            approvalId: approval.id,
+            loading: false,
+            candidates: [],
+            revokedFingerprints: [],
+            hasCertificateAuthority: false,
+            error: errorMessage(error),
+          };
+          render();
+        }
+      }
+    }
+  }
+  // The triggering queue row disappears behind a modal. Put keyboard focus on
+  // the safest answer instead of leaving it on a hidden node.
+  setTimeout(() => {
+    document.querySelector<HTMLElement>('[data-act="approval-deny"]')?.focus();
+  }, 0);
+  return true;
+}
+
+/**
+ * When newly parked approvals appear, open the soonest-expiring one as a
+ * modal sheet if no protected form is in the way. Users who already closed a
+ * sheet for an id keep that dismissal until a different id arrives.
+ */
+async function maybeAutoPresentApprovals(previousIds: ReadonlySet<string>): Promise<void> {
+  // Settings opt-out: banner and notifications still run; only the automatic
+  // modal is skipped. Explicit queue clicks and notification deep-links still
+  // open the sheet.
+  if (!state.notificationSettings.presentApprovalsAsModal) return;
+  if (!canAutoPresentApproval()) return;
+  const newest = activeRequests(state.approvals, [])
+    .filter((item) => item.kind === 'approval' && !previousIds.has(item.id));
+  if (!newest.length) return;
+  // activeRequests is soonest-deadline first.
+  await presentApprovalSheet(newest[0].id);
+}
+
+/**
+ * Open the Request Inbox and, when `id` is still pending, the approval
+ * decision sheet for that prompt. Used by tray clicks, notification actions,
+ * and the in-app request banner.
+ */
+async function openRequestsSurface(id?: string | null): Promise<void> {
+  showRequestInbox();
+  if (!id) return;
+  if (!state.approvals.some((approval) => approval.id === id)) {
+    await load('approvals', 'list_approvals');
+  }
+  if (state.approvals.some((approval) => approval.id === id) && canAutoPresentApproval()) {
+    await presentApprovalSheet(id);
+  }
+}
+
 async function consumePendingOpenRequests(): Promise<void> {
-  if (state.sheet) return;
+  if (state.sheet && isProtectedFormSheet(state.sheet) && state.sheet.kind !== 'approval') {
+    return;
+  }
   try {
-    if (await invoke('ui_take_open_requests')) showRequestInbox();
+    const pending = await invoke('ui_take_open_requests');
+    if (pending.open) await openRequestsSurface(pending.id);
   } catch (error) {
     console.error('ui_take_open_requests', error);
   }
@@ -556,7 +741,20 @@ async function load<K extends CommandName>(
       case 'elicitations':
         state.elicitations = anchorExpiry(result as ElicitationRequest[]);
         break;
-      case 'approvals': state.approvals = anchorExpiry(result as Approval[]); break;
+      case 'approvals': {
+        const previousIds = knownApprovalIds;
+        const next = anchorExpiry(result as Approval[]);
+        state.approvals = next;
+        knownApprovalIds = new Set(next.map((approval) => approval.id));
+        // Auto-present only after the first snapshot, and only for newly
+        // arrived prompts — never while a protected form owns the sheet.
+        if (approvalsBootstrapped) {
+          void maybeAutoPresentApprovals(previousIds);
+        } else {
+          approvalsBootstrapped = true;
+        }
+        break;
+      }
       case 'requests': state.requests = anchorExpiry(result as RequestRecord[]); break;
     }
     state.loadStatus[key] = { status: 'ready' };
@@ -802,6 +1000,7 @@ function positionOpenMenus(): void {
   if (state.connMenuPoint) positionConnContextMenu();
   else if (state.connMenuOpen) positionConnActionMenu();
   if (state.secretMenuPoint) positionSecretContextMenu();
+  if (state.dropdownTotpMenu) positionDropdownTotpMenu();
   if (state.epMenuOpen) positionEpCopyMenu();
   if (state.epOptsMenuOpen) positionEpOptsMenu();
   if (state.catalogActionMenuOpen) positionCatalogConnectMenu();
@@ -816,22 +1015,6 @@ function positionOpenMenus(): void {
  * bytes once connected — so it asks per session, and saying so is what
  * makes "Approve" mean something specific.
  */
-function approvalUnit(approval: Approval): string {
-  if (approval.unit === 'host_key') return 'is asking you to trust an SSH host key';
-  if (approval.unit === 'session' || approval.type === 'pg') {
-    return 'wants to open a database session';
-  }
-  if (approval.unit === 'login' || approval.type === 'ssh') {
-    return 'wants to log in over SSH';
-  }
-  if (approval.unit === 'tool') return 'wants to call a tool';
-  if (approval.unit === 'request') return 'wants to send a request';
-  // Compatibility with brokers from before the explicit unit was added:
-  // "request" remains true even for a tool call, while guessing from the
-  // connection would mislabel generic HTTP traffic on an MCP connection.
-  return 'wants to send a request';
-}
-
 /**
  * Attribution for a prompt or history row. The broker's direct-endpoint
  * planes report the literal agent label `endpoint` — an audit-stable wire
@@ -886,10 +1069,15 @@ function LiveSessions({ extraClass = '' }: { extraClass?: string }): ReactNode {
 /** The waiting-requests banner: a compact route to the requests waiting
  * atop the Activity log, from every other screen. The desktop master–detail
  * pages seat it atop their list column; other surfaces wrap it in the page
- * band (GlobalSections). */
+ * band (GlobalSections). Sticky while anything is pending, with a live
+ * countdown once the soonest deadline is inside two minutes. */
 function RequestsBanner(): ReactNode {
   const requestCount = activeRequestCount(state.approvals, state.elicitations);
   if (!requestCount || state.tab === 'activity') return null;
+  const active = activeRequests(state.approvals, state.elicitations);
+  const soonest = active[0];
+  const remaining = soonest ? bannerCountdown(soonest.expiresAt) : null;
+  const urgent = remaining !== null && remaining.secs <= 60;
   const label = requestCount === 1 ? '1 request needs attention'
     : `${requestCount} requests need attention`;
   const kinds = [
@@ -900,14 +1088,32 @@ function RequestsBanner(): ReactNode {
       ? `${state.elicitations.length} question${state.elicitations.length === 1 ? '' : 's'}`
       : '',
   ].filter(Boolean).join(', ');
+  const deadlineOutcome = deadlineOutcomeVerb(soonest);
+  // With a queue the band tallies and routes to Activity; a lone request is
+  // named outright, and Review opens the decision itself — the extra hop
+  // through the inbox only earns its place when there is something to triage.
+  const single = requestCount === 1 ? soonest : null;
+  const ask = !single ? null
+    : single.kind === 'approval'
+      ? approvalWantsLine(single.approval)
+      : `${shortAgent(single.elicitation.agent)} asks: ${single.elicitation.prompt}`;
+  const detail = ask
+    ? remaining ? `${ask} · ${deadlineOutcome} in ${remaining.label}` : ask
+    : remaining
+      ? `${kinds} · ${deadlineOutcome} in ${remaining.label}`
+      : `${kinds} waiting for you`;
   return (
-    <button className="request-banner" data-act="open-inbox"
-      aria-label={`${label}. Review them in Activity.`}>
+    <button className={`request-banner${urgent ? ' is-urgent' : ''}`}
+      data-act={single ? (single.kind === 'approval' ? 'approval-open' : 'elicit-open') : 'open-inbox'}
+      data-id={single?.id}
+      aria-label={`${label}. ${detail}. ${single ? 'Review it now.' : 'Review them in Activity.'}`}>
       <span className="request-banner-ico">
         <Icon markup={state.approvals.length ? ICONS.shieldAlert : ICONS.bell} />
       </span>
       <span className="request-banner-copy"><b>{label}</b>
-        <span>{kinds} waiting for you</span></span>
+        <span className={ask ? 'untrusted-identity' : undefined}
+          dir={ask ? 'auto' : undefined}
+          title={ask ? 'Agent names are self-reported' : undefined}>{detail}</span></span>
       <span className="request-banner-cta">Review</span>
     </button>
   );
@@ -919,7 +1125,7 @@ function GlobalSections({ embeddedInStart = false }: { embeddedInStart?: boolean
   if (!showRequests) return null;
   return (
     <div className={`dd-global ${embeddedInStart ? 'start-global' : ''}${
-      !embeddedInStart && state.tab === 'secrets' ? ' is-wide' : ''} request-route-only`}>
+      !embeddedInStart && unifiedTab(state.tab) ? ' is-wide' : ''} request-route-only`}>
       <RequestsBanner />
     </div>
   );
@@ -944,12 +1150,20 @@ function RequestSurfaceWarning(): ReactNode {
 }
 
 /** Deadlines stay quiet until they are about to matter: the card countdown
- * appears only inside the last 30 seconds (the one-second ticker keeps it
+ * appears inside the last two minutes (the one-second ticker keeps it
  * honest once it shows). */
 function expiryCountdown(expiresAt: string): string | null {
   const secs = Math.round((Date.parse(expiresAt) - Date.now()) / 1000);
-  if (!Number.isFinite(secs) || secs >= 30) return null;
+  if (!Number.isFinite(secs) || secs >= 120) return null;
   return timeLeft(expiresAt);
+}
+
+/** Banner countdown: show remaining time for the next two minutes so a
+ * parked MFA prompt cannot sit unnoticed until the final half-minute. */
+function bannerCountdown(expiresAt: string): { secs: number; label: string } | null {
+  const secs = Math.round((Date.parse(expiresAt) - Date.now()) / 1000);
+  if (!Number.isFinite(secs) || secs >= 120) return null;
+  return { secs: Math.max(0, secs), label: timeLeft(expiresAt) };
 }
 
 /** The activity stream's attention layer: every request waiting on the user,
@@ -1063,6 +1277,22 @@ function requestLiveTotp(scope: string, id: string): Promise<TotpCode> {
   return request;
 }
 
+/** Make one credential the inventory's subject. Shared by the list's own
+ * row clicks and by the tray's deep link, so a row arrived at from the menu
+ * bar lands in exactly the state clicking it in the window would. */
+function selectCredentialRow(id: string): void {
+  // A shown code belongs to the moment it was asked for; moving to another
+  // credential puts the button back.
+  if (state.selectedSecret !== id) state.totpVisible = null;
+  state.selectedSecret = id;
+  // The unified inventory has one inspector: taking it for a credential
+  // releases whichever tool was holding it.
+  state.selectedConn = null;
+  // Inert in the wide layout; in the narrow one this rides the inspector
+  // over the list (same shape as the tools slide-over).
+  state.secretDetailOpen = true;
+}
+
 /** A usable current code belongs only in the full desktop window. It is
  * dropped on blur and refreshed at the broker-provided rollover boundary. */
 function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
@@ -1126,6 +1356,7 @@ function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
     title="Copy the current 2FA code" aria-label={`Copy the current 2FA code for ${site}`}>
     <span className="totp-code">{code}</span>
     <span className="totp-countdown" aria-label={`${seconds} seconds remaining`}>{seconds}s</span>
+    <Icon markup={ICONS.copy} />
   </button>;
 }
 
@@ -1133,6 +1364,9 @@ function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
 function secretInCategory(secret: SecretSummary, category: SecretCategory): boolean {
   switch (category) {
     case 'all': return true;
+    // Tools are not credentials: scoping to Connections empties the
+    // credential list and leaves only the Connections section standing.
+    case 'connections': return false;
     case 'passwords': return secret.kind === 'password';
     case 'secrets': return secret.kind !== 'password';
     case 'codes': return Boolean(secret.totp);
@@ -1157,49 +1391,12 @@ function credentialSubtitle(secret: SecretSummary): string | null {
     : null;
 }
 
-/** The tray's Recent scope: the newest use per credential, merging direct UI
- * use (client-side stamps) with brokered activity attributed through the
- * connections that hold each credential. */
-function recentSecretUses(limit: number): Array<{ secret: SecretSummary; at: string }> {
-  const local = localSecretUse();
-  const byConnection = new Map<string, number>();
-  for (const entry of state.activity) {
-    if (!entry.connection || !entry.at) continue;
-    const at = Date.parse(entry.at);
-    if (Number.isNaN(at)) continue;
-    const seen = byConnection.get(entry.connection);
-    if (seen === undefined || at > seen) byConnection.set(entry.connection, at);
-  }
-  const stamped: Array<{ secret: SecretSummary; at: number }> = [];
-  for (const secret of state.secrets) {
-    let at = Date.parse(local[secret.id] ?? '');
-    if (Number.isNaN(at)) at = -1;
-    for (const name of secret.used_by_names) {
-      const used = byConnection.get(name);
-      if (used !== undefined && used > at) at = used;
-    }
-    if (at >= 0) stamped.push({ secret, at });
-  }
-  return stamped
-    .sort((a, b) => b.at - a.at)
-    .slice(0, limit)
-    .map(({ secret, at }) => ({ secret, at: new Date(at).toISOString() }));
-}
-
-/** Recent rows say when, not what: "Used 2h ago" whichever way the
- * credential was used (copied here, or brokered through a tool). */
-function usedHint(at: string): string {
-  const rel = relTime(at);
-  if (!rel) return 'Used recently';
-  if (rel === 'just now') return 'Used just now';
-  return /^\d+[mh]$/.test(rel) ? `Used ${rel} ago` : `Used ${rel}`;
-}
-
 /** The masked-value copy affordance shared by the inspector and the tray
- * expansion: the copy button and the post-copy "Copied" status both overlay
- * the mask, centered — never beside it (the placeholder dims behind). */
+ * expansion: the copy button, in-flight "Copying…", and post-copy "Copied"
+ * all overlay the mask, centered on the dots — never beside them. */
 function MaskedValueCopy({ secret }: { secret: SecretSummary }): ReactNode {
   const copied = state.copied === secret.id;
+  const copying = state.copying === secret.id;
   // This copy is native for a reason: the value goes shell-side to the OS
   // clipboard and never enters the webview, marked transient so clipboard
   // managers skip it and cleared on a timer. A browser can offer none of
@@ -1211,16 +1408,19 @@ function MaskedValueCopy({ secret }: { secret: SecretSummary }): ReactNode {
       <span className="val-wrap"><span className="val-slot">
         <code>••••••••</code>
         <span className="val-overlay">
-          <button className="ghost-copy" title="Reveal value" data-act="reveal-secret-ask"
+          <button className="ghost-copy" title="Reveal value" data-act="reveal-secret"
             data-id={secret.id}><Icon markup={ICONS.eye} /><span>Reveal</span></button>
         </span>
       </span></span>
     );
   }
+  const slotClass = `val-slot${copied || copying ? ' is-copied' : ''}${copying ? ' is-copying' : ''}`;
   return (
-    <span className="val-wrap"><span className={`val-slot ${copied ? 'is-copied' : ''}`}>
+    <span className="val-wrap"><span className={slotClass}>
       <code>••••••••</code>
-      <span className="val-overlay">{copied
+      <span className="val-overlay">{copying
+        ? <span className="copying-badge" role="status">Copying…</span>
+        : copied
         ? <span className="copied-badge"><Icon markup={ICONS.check} /><span>Copied</span></span>
         : <button className="ghost-copy" title="Copy value" data-act="copy-secret"
             data-id={secret.id}><Icon markup={ICONS.copy} /><span>Copy</span></button>}</span>
@@ -1228,22 +1428,55 @@ function MaskedValueCopy({ secret }: { secret: SecretSummary }): ReactNode {
   );
 }
 
-/** A user name is public metadata; it copies from the webview directly and
- * shows its hover affordance beside the visible text. */
-function UsernameCopy({ secret }: { secret: SecretSummary }): ReactNode {
+/** User names are public metadata, so their inline copy can use the ordinary
+ * text clipboard path; secret values keep the native hygienic copy command. */
+function UsernameCopyButton({ secret }: { secret: SecretSummary }): ReactNode {
+  const username = secret.username ?? '';
+  return <button className="icon-btn cdet-inline-btn" data-act="copy-text"
+    data-text={username} disabled={!username} title="Copy user name"
+    aria-label={`Copy user name for ${credentialDisplayName(secret)}`}>
+    <Icon markup={ICONS.copy} />
+  </button>;
+}
+
+function UsernameValue({ secret }: { secret: SecretSummary }): ReactNode {
   if (!secret.username) return <span className="used-by-empty">No username</span>;
-  const copied = state.copied === `user:${secret.id}`;
-  return (
-    <span className="val-wrap">
-      <span dir="auto">{secret.username}</span>
-      {copied
-        ? <span className="copied-badge"><Icon markup={ICONS.check} /><span>Copied</span></span>
-        : <button className="ghost-copy" title="Copy user name" data-act="copy-user"
-            data-id={secret.id} data-text={secret.username}>
-            <Icon markup={ICONS.copy} /><span>Copy</span>
-          </button>}
+  return <span className="cdet-inline-value">
+    <span dir="auto">{secret.username}</span>
+    <UsernameCopyButton secret={secret} />
+  </span>;
+}
+
+/** The inspector keeps reveal and native clipboard actions visible beside the
+ * value. A native copy still keeps the value out of the webview. */
+function InspectorSecretValue({ secret }: { secret: SecretSummary }): ReactNode {
+  const revealed = state.reveal[secret.id];
+  const copied = state.copied === secret.id;
+  const copying = state.copying === secret.id;
+  const displayName = credentialDisplayName(secret);
+  const noun = credentialNoun(secret);
+  return <span className="cdet-inline-value cdet-secret-value">
+    <code className={revealed === undefined ? '' : 'sec-reveal-value'}>
+      {revealed === undefined ? '••••••••' : revealed}
+    </code>
+    <span className="cdet-inline-actions">
+      <button className="icon-btn cdet-inline-btn"
+        data-act={revealed === undefined ? 'reveal-secret' : 'unreveal-secret'}
+        data-id={secret.id}
+        title={revealed === undefined ? `Reveal ${noun}` : `Hide ${noun}`}
+        aria-label={`${revealed === undefined ? 'Reveal' : 'Hide'} ${noun} for ${displayName}`}>
+        <Icon markup={revealed === undefined ? ICONS.eye : ICONS.eyeOff} />
+      </button>
+      {isNativeHost()
+        ? <button className="icon-btn cdet-inline-btn" data-act="copy-secret"
+            data-id={secret.id} disabled={copying}
+            title={copying ? 'Copying…' : copied ? 'Copied' : `Copy ${noun}`}
+            aria-label={`${copying ? 'Copying' : copied ? 'Copied' : 'Copy'} ${noun} for ${displayName}`}>
+            <Icon markup={copied ? ICONS.check : ICONS.copy} />
+          </button>
+        : null}
     </span>
-  );
+  </span>;
 }
 
 function UsedByLinks({ secret }: { secret: SecretSummary }): ReactNode {
@@ -1305,7 +1538,8 @@ function DetailIdentityInput({ secret, field }: {
   const editing = edit?.id === secret.id && edit.field === field;
   const stored = (field === 'site' ? secret.site : secret.username) ?? '';
   return (
-    <input className="cdet-edit" value={editing ? edit.value : stored}
+    <input id={`cdet-${field}`} className="cdet-edit"
+      value={editing ? edit.value : stored}
       placeholder={field === 'site' ? 'example.com' : 'No username'}
       autoComplete="off" spellCheck={false} dir={field === 'username' ? 'auto' : undefined}
       aria-label={`${field === 'site' ? 'Website' : 'User name'} for ${credentialDisplayName(secret)}`}
@@ -1356,8 +1590,11 @@ function CredentialDetail({ secret }: { secret: SecretSummary }): ReactNode {
   const password = secret.kind === 'password';
   const displayName = credentialDisplayName(secret);
   const noun = credentialNoun(secret);
-  const revealed = state.reveal[secret.id];
   const linked = secret.source?.kind === 'one_password' ? secret.source : null;
+  const accessConnections = password
+    ? state.connections.filter((connection) => connection.secret_names.includes(secret.name))
+    : [];
+  const agentAccessEnabled = accessConnections.some((connection) => connection.agent_access.enabled);
   // Passwords edit in place, Passwords-style: identity fields commit on
   // blur, the value and 2FA factor change through focused sheets. Secrets
   // (and linked fields) keep the full edit sheet. Either way the pane's
@@ -1371,31 +1608,42 @@ function CredentialDetail({ secret }: { secret: SecretSummary }): ReactNode {
           <Icon markup={ICONS.chevronLeft} /> Back
         </button>
       </div>
+      {/* Identity reads as a row, not a centred crest: the monogram, the
+          name, and what kind of thing it is, on one line — the same shape
+          the list rows use, so the pane looks like the row it came from. */}
       <div className="cdet-hero">
         <span className="cdet-mono" aria-hidden="true">{credentialInitial(secret)}</span>
-        <h3 className={`cdet-title ${password ? '' : 'is-mono'}`}>{displayName}</h3>
+        <span className="cdet-hero-tx">
+          {/* Title is the rename affordance: passwords jump to the Website
+              field, secrets open the name editor, both with the value selected. */}
+          <button type="button"
+            className={`cdet-title ${password ? '' : 'is-secret'}`}
+            data-act="edit-credential-title" data-id={secret.id}
+            title={password ? 'Edit website' : 'Edit name'}
+            aria-label={password
+              ? `Edit website for ${displayName}`
+              : `Edit name for ${displayName}`}>
+            {displayName}
+          </button>
+          <span className="cdet-kind">
+            {password ? 'Password' : 'Secret'}
+            {linked ? ` · ${linked.integration_label}` : ''}
+          </span>
+        </span>
       </div>
+      <h4 className="cdet-sec-h">{password ? 'Sign-in' : 'Value'}</h4>
       <div className="cdet-card">
         {password
           ? <div className="cdet-row"><span className="cdet-lbl">User name</span>
               <span className="cdet-val">{editInPlace
                 ? <span className="val-wrap cdet-edit-wrap">
                     <DetailIdentityInput secret={secret} field="username" />
-                    {!secret.username ? null
-                      : state.copied === `user:${secret.id}`
-                      ? <span className="copied-badge"><Icon markup={ICONS.check} /><span>Copied</span></span>
-                      : <button className="ghost-copy" title="Copy user name" data-act="copy-user"
-                          data-id={secret.id} data-text={secret.username}>
-                          <Icon markup={ICONS.copy} /><span>Copy</span>
-                        </button>}
+                    <UsernameCopyButton secret={secret} />
                   </span>
-                : <UsernameCopy secret={secret} />}</span></div>
+                : <UsernameValue secret={secret} />}</span></div>
           : null}
         <div className="cdet-row"><span className="cdet-lbl">{password ? 'Password' : 'Value'}</span>
-          <span className="cdet-val"><MaskedValueCopy secret={secret} /></span></div>
-        {revealed === undefined
-          ? null
-          : <div className="cdet-reveal"><code className="sec-reveal-value">{revealed}</code></div>}
+          <span className="cdet-val"><InspectorSecretValue secret={secret} /></span></div>
         {editInPlace
           ? <div className="cdet-card-actions">
               <button className="btn sm" data-act="change-password" data-id={secret.id}
@@ -1403,15 +1651,16 @@ function CredentialDetail({ secret }: { secret: SecretSummary }): ReactNode {
             </div>
           : null}
       </div>
-      {editInPlace
-        ? <div className="cdet-card">
+      {/* 2FA only gets its own card once a factor exists — empty passwords
+          offer "Add 2FA/TOTP…" next to Delete instead of a None row. */}
+      {editInPlace && secret.totp
+        ? <><h4 className="cdet-sec-h">Two-factor code</h4>
+          <div className="cdet-card">
             <div className="cdet-row">
-              <span className="cdet-lbl">Verification code</span>
+              <span className="cdet-lbl">2FA/TOTP code</span>
               {/* Codes are issued (and audited) on request, not by browsing:
                   the live code mounts only after Show code asks for it. */}
-              <span className="cdet-val">{!secret.totp
-                ? <span className="cdet-muted">None</span>
-                : state.totpVisible === secret.id
+              <span className="cdet-val">{state.totpVisible === secret.id
                 ? <LiveTotpCode id={secret.id} site={displayName} />
                 : <button className="btn sm" data-act="show-totp" data-id={secret.id}
                     aria-label={`Show the current 2FA code for ${displayName}`}>
@@ -1420,22 +1669,39 @@ function CredentialDetail({ secret }: { secret: SecretSummary }): ReactNode {
             </div>
             <div className="cdet-card-actions">
               <button className="btn sm" data-act="setup-code" data-id={secret.id}
-                aria-label={`${secret.totp ? 'Change' : 'Set up'} the 2FA code for ${displayName}`}>
-                {secret.totp ? 'Change Code…' : 'Set Up Code…'}
+                aria-label={`Change the 2FA code for ${displayName}`}>
+                Change Code…
               </button>
             </div>
-          </div>
-        : secret.totp
-        ? <div className="cdet-card"><div className="cdet-row">
-            <span className="cdet-lbl">Verification code</span>
+          </div></>
+        : !editInPlace && secret.totp
+        ? <><h4 className="cdet-sec-h">Two-factor code</h4>
+          <div className="cdet-card"><div className="cdet-row">
+            <span className="cdet-lbl">2FA/TOTP code</span>
             <span className="cdet-val">{state.totpVisible === secret.id
               ? <LiveTotpCode id={secret.id} site={displayName} />
               : <button className="btn sm" data-act="show-totp" data-id={secret.id}
                   aria-label={`Show the current 2FA code for ${displayName}`}>
                   Show code
                 </button>}</span>
-          </div></div>
+          </div></div></>
         : null}
+      {password
+        ? <><h4 className="cdet-sec-h">Agent access</h4>
+          <div className="cdet-card"><div className="cdet-agent-access">
+            <b>Allow agents to sign in with this</b>
+            <button className={`switch ${agentAccessEnabled ? 'on' : ''}`}
+              role="switch" aria-checked={agentAccessEnabled}
+              data-act={agentAccessEnabled ? 'credential-access-off' : 'credential-access-on'}
+              data-id={secret.id} disabled={!accessConnections.length}
+              title={accessConnections.length
+                ? `${agentAccessEnabled ? 'Disable' : 'Enable'} the linked tools for agents`
+                : 'Connect this password to a tool first'}
+              aria-label={`${agentAccessEnabled ? 'Disallow' : 'Allow'} agents to sign in with ${displayName}`}>
+            </button>
+          </div></div></>
+        : null}
+      <h4 className="cdet-sec-h">Details</h4>
       <div className="cdet-card">
         {password && (secret.site || editInPlace)
           ? <div className="cdet-row"><span className="cdet-lbl">Website</span>
@@ -1447,18 +1713,25 @@ function CredentialDetail({ secret }: { secret: SecretSummary }): ReactNode {
           <span className="cdet-val"><UsedByLinks secret={secret} /></span></div>
         <div className="cdet-row"><span className="cdet-lbl">Modified</span>
           <span className="cdet-val cdet-muted" title={absTime(secret.updated_at)}>
-            {relTime(secret.updated_at)}</span></div>
+            {relTimeAgo(secret.updated_at)}</span></div>
       </div>
       {linked
-        ? <div className="cdet-card"><div className="cdet-source">
+        ? <><h4 className="cdet-sec-h">Source</h4>
+          <div className="cdet-card"><div className="cdet-source">
             <span className="cdet-source-icon" aria-hidden="true">
               <Icon markup={ICONS.onepassword} /></span>
             <span className="cdet-source-tx"><b>Stored in 1Password</b>
               <small>{linked.integration_label} › {linked.vault_label} › {linked.item_label} › {linked.field_label}</small></span>
-          </div></div>
+          </div></div></>
         : null}
       {editInPlace
         ? <div className="cdet-card"><div className="cdet-card-actions is-lone">
+            {!secret.totp
+              ? <button className="btn sm" data-act="setup-code" data-id={secret.id}
+                  aria-label={`Add a 2FA/TOTP code for ${displayName}`}>
+                  Add 2FA/TOTP…
+                </button>
+              : null}
             <button className="btn sm destructive" data-act="del-secret-ask" data-id={secret.id}
               aria-label={`Delete ${noun} ${displayName}`}>Delete Password…</button>
           </div></div>
@@ -1472,47 +1745,156 @@ function CredentialDetail({ secret }: { secret: SecretSummary }): ReactNode {
   );
 }
 
-/** A tray row expands in place to its copy actions — the dropdown keeps
- * find-and-copy fast and hands everything else to the main window: every
- * expanded line copies, and management actions sit behind the ⋯ menu on the
- * open row's header. The 2FA code copies without ever rendering (codes
- * display only on the desktop). */
-function DropdownCredentialRow({ secret, subtitle, scope }: {
+/** Compact live countdown for the tray's 2FA well menu — same broker issue
+ * path as the desktop inspector, scoped so opening the menu is the ask. */
+function DropdownTotpMenuPreview({ id }: { id: string }): ReactNode {
+  const [live, setLive] = useState<{ code: string; expiresAt: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const scope = `${state.broker.mode}:${state.broker.url ?? ''}:dd-menu`;
+  useEffect(() => {
+    let mounted = true;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const load = async () => {
+      try {
+        const next = await requestLiveTotp(scope, id);
+        if (!mounted) return;
+        const receivedAt = Date.now();
+        setNow(receivedAt);
+        setLive({ code: next.code, expiresAt: receivedAt + next.seconds_remaining * 1000 });
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => { void load(); }, next.seconds_remaining * 1000 + 150);
+        refreshTimer.unref?.();
+      } catch (error) {
+        if (mounted) {
+          console.error('get_secret_totp', error);
+          setLive(null);
+        }
+      }
+    };
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    tick.unref?.();
+    void load();
+    return () => {
+      mounted = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      clearInterval(tick);
+    };
+  }, [id, scope]);
+  if (!live) return <small className="mono dd-totp-preview">…</small>;
+  const seconds = Math.max(0, Math.ceil((live.expiresAt - now) / 1000));
+  const code = live.code.replace(/(\d{3})(?=\d)/g, '$1 ');
+  return <small className="mono dd-totp-preview">{code} · {seconds}s</small>;
+}
+
+/** Portaled menu for the C1 2FA pill: copy the current code (with live
+ * countdown) or open the change-code sheet. */
+function DropdownTotpMenu(): ReactNode {
+  const id = state.dropdownTotpMenu;
+  if (!id) return null;
+  const secret = state.secrets.find((candidate) => candidate.id === id);
+  if (!secret?.totp) return null;
+  const displayName = credentialDisplayName(secret);
+  return createPortal(
+    <div className="tile-menu-wrap dd-totp-menu-wrap">
+      <div className="tile-menu" aria-label={`2FA code for ${displayName}`}>
+        <button className="menu-item dd-totp-copy" data-act="copy-totp" data-id={id}>
+          <Icon markup={ICONS.copy} /> Copy code
+          <DropdownTotpMenuPreview id={id} />
+        </button>
+        <button className="menu-item" data-act="setup-code" data-id={id}>
+          <Icon markup={ICONS.qrCode} /> Change Code…
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** A tray row's trailing C1 icon-well cluster: fingerprint (Touch ID state),
+ * key (one-click copy), and a 2FA pill that opens the code menu. Wells sit
+ * outside the row body so they are real buttons, not nested controls.
+ *
+ * The body itself is a deep link: the tray browses and copies, and anything
+ * past that — the username, the value, editing, deleting — is the desktop
+ * inventory's job, so the row hands off to the window with itself selected
+ * rather than growing a second management surface at menu scale. The
+ * expansion below survives for one case only: a browser host with no
+ * clipboard route reveals in place (see the well's reveal fallback). */
+function DropdownCredentialRow({ secret, subtitle }: {
   secret: SecretSummary;
   subtitle?: string;
-  /** Which tray listing the row sits in. A credential shown under both
-   * Recent and the full list expands only where it was clicked. */
-  scope?: 'recent';
 }): ReactNode {
-  const openKey = scope === 'recent' ? `recent:${secret.id}` : secret.id;
-  const open = state.dropdownSecretOpen === openKey;
+  const open = state.dropdownSecretOpen === secret.id;
+  const totpMenuOpen = state.dropdownTotpMenu === secret.id;
   const password = secret.kind === 'password';
   const displayName = credentialDisplayName(secret);
   const noun = credentialNoun(secret);
   const rowSubtitle = subtitle ?? credentialSubtitle(secret);
   const revealed = state.reveal[secret.id];
+  const copied = state.copied === secret.id;
+  const copying = state.copying === secret.id;
+  // App lock with biometry: every credential is Touch-ID-gated; the well is
+  // a state marker (not a button), matching C1's wireframe costume.
+  const touchId = state.lock.enabled && state.lock.mechanism === 'biometry';
   return (
     <div className={`dd-cred ${open ? 'open' : ''}`} data-secret-row={secret.id}>
       <div className="dd-cred-head">
-        <button className="cred-row dd-cred-toggle" data-act="toggle-dd-secret" data-id={secret.id}
-          data-scope={scope}
-          aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${noun} ${displayName}`}>
-          <span className="cred-mono" aria-hidden="true">{credentialInitial(secret)}</span>
+        <button className="cred-row dd-cred-open" data-act="open-credential" data-id={secret.id}
+          aria-label={`Open ${noun} ${displayName} in the main window`}>
+          {/* A padlock for a password, the kind's own mark for a secret: the
+              chip says what sort of thing the row is, which an initial only
+              ever repeated from the name beside it. */}
+          <span className={`cred-chip${password ? '' : ' is-secret'}`} aria-hidden="true">
+            <Icon markup={password ? ICONS.lock : ICONS.fileKey} />
+          </span>
           <span className="cred-row-tx">
             <b className={password ? 'site-host' : 's-name'} title={displayName}>{displayName}</b>
             {rowSubtitle ? <small dir="auto">{rowSubtitle}</small> : null}
           </span>
-          <span className="cred-row-badges">
-            {secret.totp ? <span className="cred-chip" title="Has a 2FA code">2FA</span> : null}
-            {secret.source?.kind === 'one_password'
-              ? <span className="s-source-icon" title={`Stored in ${secret.source.integration_label}`}>
-                  <Icon markup={ICONS.onepassword} />
-                </span>
-              : null}
-            {open ? null
-              : <span className="dd-cred-chev" aria-hidden="true"><Icon markup={ICONS.chevronDown} /></span>}
-          </span>
         </button>
+        <span className="dd-cred-wells">
+          {touchId
+            ? <span className="dd-cred-well is-state" role="img"
+                title="Touch ID is required to reveal this value"
+                aria-label="Protected by Touch ID">
+                <Icon markup={ICONS.fingerprint} />
+              </span>
+            : null}
+          {/* Provenance reads before the action it qualifies: the vault mark
+              sits left of the copy well, so "where this comes from" is known
+              before "copy it". */}
+          {secret.source?.kind === 'one_password'
+            ? <span className="s-source-icon" role="img"
+                title={`Stored in ${secret.source.integration_label}`}
+                aria-label={`Stored in ${secret.source.integration_label}`}>
+                <Icon markup={ICONS.onepassword} />
+              </span>
+            : null}
+          {isNativeHost()
+            ? <button type="button" className={`dd-cred-well${copied ? ' is-done' : ''}${copying ? ' is-busy' : ''}`}
+                data-act="copy-secret" data-id={secret.id}
+                title={copying ? 'Copying…' : copied ? 'Copied' : `Copy ${noun}`}
+                aria-label={`Copy ${noun} for ${displayName}`}
+                disabled={copying}>
+                <Icon markup={copied ? ICONS.check : ICONS.key} />
+              </button>
+            : <button type="button" className="dd-cred-well"
+                data-act="reveal-secret" data-id={secret.id}
+                title={`Reveal ${noun}`}
+                aria-label={`Reveal ${noun} for ${displayName}`}>
+                <Icon markup={ICONS.key} />
+              </button>}
+          {secret.totp
+            ? <button type="button"
+                className={`dd-cred-well pill${totpMenuOpen ? ' on' : ''}`}
+                data-act="toggle-totp-menu" data-id={secret.id}
+                aria-expanded={totpMenuOpen}
+                title="2FA code menu"
+                aria-label={`2FA code options for ${displayName}`}>
+                2FA <Icon markup={ICONS.chevronDown} />
+              </button>
+            : null}
+        </span>
         {open
           ? <button className="dd-cred-menu-btn" data-act="secret-row-menu" data-id={secret.id}
               title="More actions"
@@ -1525,20 +1907,13 @@ function DropdownCredentialRow({ secret, subtitle, scope }: {
         ? <div className="dd-cred-exp">
             {password
               ? <div className="cdet-row"><span className="cdet-lbl">User name</span>
-                  <span className="cdet-val"><UsernameCopy secret={secret} /></span></div>
+                  <span className="cdet-val"><UsernameValue secret={secret} /></span></div>
               : null}
             <div className="cdet-row"><span className="cdet-lbl">{password ? 'Password' : 'Value'}</span>
               <span className="cdet-val"><MaskedValueCopy secret={secret} /></span></div>
             {revealed === undefined
               ? null
               : <div className="cdet-reveal"><code className="sec-reveal-value">{revealed}</code></div>}
-            {secret.totp
-              ? <div className="cdet-row"><span className="cdet-lbl">2FA code</span>
-                  <span className="cdet-val"><button className="totp-chip" data-act="copy-totp"
-                    data-id={secret.id} title="Copy the current 2FA code"
-                    aria-label={`Copy the current 2FA code for ${displayName}`}>Copy code</button>
-                  </span></div>
-              : null}
           </div>
         : null}
     </div>
@@ -1583,6 +1958,22 @@ function connectionKind(c: ConnectionSummary): ConnKind {
   if (c.type === 'ssh') return 'ssh';
   if (c.type === 'cloud') return 'cloud';
   return c.mcp_path ? 'mcp' : 'api';
+}
+
+/** Whether a tool needs a human: enabled but reporting non-info issues. */
+function connectionNeedsAttention(c: ConnectionSummary): boolean {
+  return c.agent_access.enabled
+    && connectionIssues(c).some((issue) => issue.tone !== 'info');
+}
+
+/** The worst problem by name, for a row whose issues survived the info
+ * filter — the shared vocabulary of the tool list and the tray's band. */
+function connectionProblemWord(c: ConnectionSummary): string {
+  return c.last_status === 'failed'
+    ? 'Unreachable'
+    : c.last_status === 'needs_reconnect'
+    ? 'Reconnect'
+    : 'Warning';
 }
 
 /** The kind spoken to the user, beside the enabled state in the panel head. */
@@ -2352,6 +2743,12 @@ function OnePasswordReviewStep(): ReactNode {
   </>;
 }
 
+function onePasswordSheetTitle(intent: OnePasswordFlowState['intent']): string {
+  if (intent === 'update') return 'Update 1Password credential';
+  if (intent === 'browse') return 'Edit linked credentials';
+  return 'Connect 1Password';
+}
+
 function OnePasswordSheet(): ReactNode {
   const flow = state.onepasswordFlow;
   if (!flow) return null;
@@ -2359,7 +2756,7 @@ function OnePasswordSheet(): ReactNode {
   return <>
     <header className="onepassword-sheet-head">
       <span className="onepassword-sheet-logo"><Icon markup={ICONS.onepassword} /></span>
-      <h3 id="onepassword-sheet-title">{updating ? 'Update 1Password credential' : 'Connect 1Password'}</h3>
+      <h3 id="onepassword-sheet-title">{onePasswordSheetTitle(flow.intent)}</h3>
     </header>
     {!updating ? <OnePasswordStepper step={flow.step} /> : null}
     {flow.step === 1 ? <OnePasswordConnectStep />
@@ -2368,77 +2765,6 @@ function OnePasswordSheet(): ReactNode {
   </>;
 }
 
-function CatalogRow({ entry }: { entry: CatalogEntry }): ReactNode {
-  if (entry.disabled) {
-    return (
-      <div className="cat-row-wrap is-soon">
-        <div className="cat-row">
-          <span className="cat-ico" aria-hidden="true"><Icon markup={ICONS[entry.icon] || ''} /></span>
-          <div className="cat-tx"><b>{entry.name}</b>
-            <span>{entry.description}</span></div>
-          <span className="cat-soon" title="Not available yet">Coming soon</span>
-        </div>
-      </div>
-    );
-  }
-  const quickConnect = canQuickConnectMcp(entry);
-  const actionMenuOpen = state.catalogActionMenuOpen === entry.id;
-  const addLabel = catalogAddLabel(entry);
-  let action: ReactNode = null;
-  if (quickConnect) {
-    action = (
-      <div className={`cat-connect-wrap ${actionMenuOpen ? 'open' : ''}`}>
-        <div className="cat-connect-buttons">
-          <button className="btn cat-add cat-connect-primary" data-act="catalog-connect-oauth"
-            data-id={entry.id}>Connect</button>
-          <button className="btn cat-add cat-connect-menu-btn"
-            data-act="toggle-catalog-connect-menu" data-id={entry.id}
-            title={`More ways to connect ${entry.name}`} aria-label={`More ways to connect ${entry.name}`}
-            aria-expanded={actionMenuOpen}>
-            <Icon markup={ICONS.chevronDown} />
-          </button>
-        </div>
-        {actionMenuOpen
-          ? createPortal(
-              <div className="anchored-menu-portal cat-connect-menu-wrap"
-                data-catalog-menu-portal={entry.id}>
-                <div className="cat-connect-menu" aria-label={`Connect ${entry.name}`}>
-                  <button className="menu-item" data-act="catalog-connect-oauth"
-                    data-id={entry.id}>Connect</button>
-                  <button className="menu-item" data-act="catalog-connect-manual"
-                    data-id={entry.id}>Connect via custom URL</button>
-                  {entry.preset
-                    ? <button className="menu-item" data-act="catalog-connect-api"
-                        data-id={entry.id}>Connect custom API</button>
-                    : null}
-                </div>
-              </div>,
-              overlays(),
-            )
-          : null}
-      </div>
-    );
-  } else if (entry.via === 'connection') {
-    action = <button className="btn cat-add" data-act="catalog-add"
-      data-id={entry.id}>{addLabel}</button>;
-  } else {
-    action = <span className="cat-soon" title="Arrives with the MCP layer">Soon</span>;
-  }
-  return (
-    <div className={`cat-row-wrap ${actionMenuOpen ? 'menu-open' : ''}`}>
-      <div className="cat-row">
-        <span className="cat-ico" aria-hidden="true"><Icon markup={ICONS[entry.icon] || ''} /></span>
-        <div className="cat-tx"><b>{entry.name}</b>
-          <span>{entry.description}</span></div>
-        {entry.mcp
-          ? <span className="cat-mech"
-              title="Added by connecting to the vendor’s MCP server">MCP</span>
-          : null}
-        {action}
-      </div>
-    </div>
-  );
-}
 
 /* ---- flat tools list (steady state) ----------------------------------- */
 // The Tools tab's steady state answers one question: what can agents
@@ -2476,11 +2802,6 @@ function isMcpDraft(draft: { isMcp?: boolean; mcpPath?: string | null }): boolea
 }
 
 // Sections that collapse to their connected/minimum rows behind a "More
-// tools" disclosure: every app domain. Infrastructure and the custom
-// endpoints stay fully expanded — they are the short, load-bearing rows.
-const COLLAPSIBLE_SECTIONS: string[] =
-  ['Developer Tools', 'AI Models', 'Productivity', 'Communication', 'Business'];
-
 /** Whether a test or MCP check finished this session and passed. The verdict
  * surfaces as a plain-words success alert — the technical transcript ("GET …
  * answered HTTP 200 OK") stays out of the success path, since a pass needs no
@@ -2585,11 +2906,19 @@ function ConfirmationSection({ connection: c }: {
     on && cooldownUntil && new Date(cooldownUntil).getTime() > Date.now(),
   );
   const scope = confirmScopeNote(c);
-  return <div className="cd-sec cd-confirm">
-    <div className="cd-confirm-row">
-      <div className="cd-confirm-txt">
-        <div className="cd-confirm-lbl">{confirmUnitLabel(c)}</div>
-        {scope ? <div className="cd-confirm-sub">{scope}</div> : null}
+  // The first row of the Options group, so it returns rows rather than a
+  // section of its own: the card supplies the frame and the hairlines.
+  return <>
+    <div className="cd-row">
+      <div className="cd-row-tx">
+        <b>{confirmUnitLabel(c)}</b>
+        {scope ? <p>{scope}</p> : null}
+        {/* The consequence of the switch belongs under its own label, not in
+            a band of its own below the row. */}
+        {on
+          ? <p>With no Multitool approval surface attached, this tool’s traffic is
+              refused rather than carried.</p>
+          : null}
       </div>
       <button className={`switch ${on ? 'on' : ''}`} role="switch" aria-checked={on}
         title={on ? 'Traffic is confirmed with you first' : 'Traffic goes without asking'}
@@ -2597,23 +2926,20 @@ function ConfirmationSection({ connection: c }: {
         data-act={on ? 'confirm-off' : 'confirm-on'} data-conn={c.id}></button>
     </div>
     {windowActive && until
-      ? <div className="cd-confirm-window"><Icon markup={ICONS.timer} /><span>
-          Approved {covered} until {clockTime(until)} — not asking{' '}
-          {windowAgents.length === 1 ? 'again' : 'them again'} until then. Other agents are
-          still asked.
-        </span></div>
+      ? <div className="cd-row-note"><div className="cd-confirm-window">
+          <Icon markup={ICONS.timer} /><span>
+            Approved {covered} until {clockTime(until)} — not asking{' '}
+            {windowAgents.length === 1 ? 'again' : 'them again'} until then. Other agents are
+            still asked.
+          </span></div></div>
       : null}
     {cooldownActive && cooldownUntil
-      ? <div className="cd-confirm-window cd-confirm-cooldown">
+      ? <div className="cd-row-note"><div className="cd-confirm-window cd-confirm-cooldown">
           <Icon markup={ICONS.clockAlert} /><span>Denied — retries are refused without asking
             for {timeLeft(cooldownUntil)}. Turning confirmation off and back on clears it.</span>
-        </div>
+        </div></div>
       : null}
-    {on
-      ? <div className="cd-confirm-note">With no Multitool approval surface attached,
-          this tool’s traffic is refused rather than carried.</div>
-      : null}
-  </div>;
+  </>;
 }
 
 /**
@@ -2691,27 +3017,29 @@ function ConnectionToolScope({ connection: c }: {
   </div>;
 }
 
+/** Whether this tool has any per-tool policy to hide behind Advanced. */
+function connectionHasAdvanced(c: ConnectionSummary): boolean {
+  if (!c.agent_access.enabled) return false;
+  const hasEndpointAuth = c.type === 'ssh' && Boolean(c.agent_access.endpoint);
+  return Boolean(c.mcp_path) || c.type === 'api' || c.type === 'pg' || hasEndpointAuth;
+}
+
 function ConnectionAdvancedSection({ connection: c }: {
   connection: ConnectionSummary;
 }): ReactNode {
-  if (!c.agent_access.enabled) return null;
-  const hasEndpointAuth = c.type === 'ssh' && Boolean(c.agent_access.endpoint);
-  const hasOptions = Boolean(c.mcp_path)
-    || c.type === 'api'
-    || c.type === 'pg'
-    || hasEndpointAuth;
-  if (!hasOptions) return null;
+  if (!connectionHasAdvanced(c)) return null;
   const open = state.connDetailAdvancedOpen === c.id;
-  return <div className="cd-sec cd-advanced">
-    <button className="adv-toggle" data-act="toggle-connection-advanced"
+  return <>
+    <button type="button" className="cd-row cd-row-click"
+      data-act="toggle-connection-advanced"
       data-id={c.id} aria-expanded={open} aria-controls={`connection-advanced-${c.id}`}>
-      <span className="adv-toggle-icon" aria-hidden="true">
+      <span className="cd-row-tx"><b>Advanced</b></span>
+      <span className="cd-row-chev" aria-hidden="true">
         <Icon markup={ICONS.chevronDown} />
       </span>
-      Advanced
     </button>
     {open
-      ? <div className="cd-advanced-options" id={`connection-advanced-${c.id}`}>
+      ? <div className="cd-disclosed" id={`connection-advanced-${c.id}`}>
           <ConnectionToolScope connection={c} />
           <ResponseCredentialRelay connection={c} />
           <StatementRecording connection={c} />
@@ -2719,70 +3047,148 @@ function ConnectionAdvancedSection({ connection: c }: {
           <EndpointAuthRow connection={c} />
         </div>
       : null}
-  </div>;
+  </>;
 }
 
 /** Fact rows for the selected tool (host, user, credential, …). Same
  * disclosure pattern as Advanced so the pane stays short by default. */
-function ConnectionDetailsSection({ connection: c }: {
+/** The credentials this tool was set up with. They used to sit in the
+ * credential list as a "Connection Secrets" group, where they were plumbing
+ * filed among the things the user actually curates — and where the tool that
+ * owns them was a name in a "Used by" cell rather than the parent. Here they
+ * are where the question is asked: what does this tool sign with? */
+function ConnectionSecretsSection({ connection: c }: {
   connection: ConnectionSummary;
 }): ReactNode {
-  const factRows = connectionFactRows(c);
-  if (!factRows.length) return null;
-  const open = state.connDetailDetailsOpen === c.id;
-  const live = liveCount(c);
-  return <div className="cd-sec cd-details">
-    <button className="adv-toggle" data-act="toggle-connection-details"
-      data-id={c.id} aria-expanded={open} aria-controls={`connection-details-${c.id}`}>
-      <span className="adv-toggle-icon" aria-hidden="true">
-        <Icon markup={ICONS.chevronDown} />
-      </span>
-      Details
-    </button>
-    {open
-      ? <div className="cd-details-body" id={`connection-details-${c.id}`}>
-          <div className="cd-facts">{factRows.map(([key, value]) =>
-            <div key={key} className="cd-fact">
-              <span className="cd-fact-k">{key}</span><code className="cd-fact-v">{value}</code>
-            </div>)}
+  const owned = state.secrets.filter((secret) =>
+    secret.origin === 'connection' && c.secret_names.includes(secret.name));
+  if (!owned.length) return null;
+  return <>
+    <h4 className="cdet-sec-h">Secrets</h4>
+    <div className="cdet-card">
+      {owned.map((secret) => {
+        const revealed = state.reveal[secret.id];
+        const copied = state.copied === secret.id;
+        const copying = state.copying === secret.id;
+        return <div key={secret.id} className="cd-row cd-secret-row" data-secret-row={secret.id}>
+          <div className="cd-row-tx">
+            {/* The name takes the row's width and wraps: an environment
+                variable name is the whole identity of the row, and these
+                run long enough to truncate at any column width. The value
+                sits under it, masked until it is asked for by name. */}
+            <b className="cd-secret-name" title={secret.name}>{secret.name}</b>
+            <code className="cd-secret-val">{revealed === undefined ? '••••••••' : revealed}</code>
+            {secret.source?.kind === 'one_password'
+              ? <p>Stored in {secret.source.integration_label}</p>
+              : null}
           </div>
-          {live
-            ? <div className="cd-live">{live} live session{live === 1 ? '' : 's'} ·{' '}
-                <button className="cd-live-link" data-act="tab" data-tab="activity">
-                  View in Activity Log
-                </button>
-              </div>
+          {secret.source?.kind === 'one_password'
+            ? <span className="s-source-icon" role="img"
+                title={`Stored in ${secret.source.integration_label}`}
+                aria-label={`Stored in ${secret.source.integration_label}`}>
+                <Icon markup={ICONS.onepassword} />
+              </span>
             : null}
+          {/* Copy and reveal are both standing controls here rather than a
+              hover overlay on the mask: with the value on its own line
+              there is nothing for an overlay to sit on. Copy is the native
+              pasteboard path, so the web build offers reveal alone. */}
+          {isNativeHost()
+            ? <button className={`icon-btn cd-secret-act ${copying ? 'is-copying' : ''}`}
+                data-act="copy-secret" data-id={secret.id}
+                title={copying ? 'Copying…' : copied ? 'Copied' : 'Copy value'}
+                aria-label={`Copy the value of ${secret.name}`}>
+                <Icon markup={copied ? ICONS.check : ICONS.copy} />
+              </button>
+            : null}
+          <button className="icon-btn cd-secret-act"
+            data-act={revealed === undefined ? 'reveal-secret' : 'unreveal-secret'}
+            data-id={secret.id}
+            title={revealed === undefined ? 'Reveal value' : 'Hide value'}
+            aria-label={`${revealed === undefined ? 'Reveal' : 'Hide'} the value of ${secret.name}`}>
+            <Icon markup={revealed === undefined ? ICONS.eye : ICONS.eyeOff} />
+          </button>
+        </div>;
+      })}
+    </div>
+  </>;
+}
+
+/** The target's parts as a key/value grid, plus what is live on it. */
+function ConnectionFacts({ connection: c, id }: {
+  connection: ConnectionSummary;
+  id?: string;
+}): ReactNode {
+  const live = liveCount(c);
+  return <div className="cd-disclosed" id={id}>
+    <div className="cd-facts">{connectionFactRows(c).map(([key, value]) =>
+      <div key={key} className="cd-fact">
+        <span className="cd-fact-k">{key}</span><code className="cd-fact-v">{value}</code>
+      </div>)}
+    </div>
+    {live
+      ? <div className="cd-live">{live} live session{live === 1 ? '' : 's'} ·{' '}
+          <button className="cd-live-link" data-act="tab" data-tab="activity">
+            View in Activity Log
+          </button>
         </div>
       : null}
   </div>;
 }
 
+function ConnectionDetailsSection({ connection: c }: {
+  connection: ConnectionSummary;
+}): ReactNode {
+  if (!connectionFactRows(c).length) return null;
+  const open = state.connDetailDetailsOpen === c.id;
+  return <>
+    <button type="button" className="cd-row cd-row-click"
+      data-act="toggle-connection-details"
+      data-id={c.id} aria-expanded={open} aria-controls={`connection-details-${c.id}`}>
+      <span className="cd-row-tx"><b>Details</b></span>
+      <span className="cd-row-chev" aria-hidden="true">
+        <Icon markup={ICONS.chevronDown} />
+      </span>
+    </button>
+    {open ? <ConnectionFacts connection={c} id={`connection-details-${c.id}`} /> : null}
+  </>;
+}
+
+/** What the last status check found on an MCP server, as a group of the
+ * inspector like every other: a sentence-case head over a card of rows. */
 function McpStatus({ connection: c }: { connection: ConnectionSummary }): ReactNode {
   const status = c.mcp_path ? state.mcpStatus[c.id] : undefined;
   const report = status && !status.running && !status.error ? status.report : undefined;
   if (!report?.ok) return null;
+  if (!report.resources_supported && !report.truncated) return null;
   const shown = report.resources.slice(0, 8);
   return <>
-    {report.resources_supported
-      ? <>
-          <div className="mcp-res-head">Resources ({report.resources.length})</div>
-          {shown.length
-            ? shown.map((resource) => <div key={`${resource.uri}:${resource.name}`} className="mcp-res">
-                <b title={resource.name}>{resource.name}</b>
-                <code title={resource.uri}>{resource.uri}</code>
-              </div>)
-            : <div className="mcp-res-more">None listed by the server.</div>}
-          {report.resources.length > shown.length
-            ? <div className="mcp-res-more">+ {report.resources.length - shown.length} more</div>
-            : null}
-        </>
-      : null}
-    {report.truncated
-      ? <div className="mcp-res-more">
-          Catalog results were capped; more items are available upstream.
-        </div>
-      : null}
+    <h4 className="cdet-sec-h">Resources</h4>
+    <div className="cdet-card">
+      {report.resources_supported
+        ? shown.length
+          ? shown.map((resource) => (
+              <div key={`${resource.uri}:${resource.name}`} className="cd-row mcp-res">
+                <div className="cd-row-tx">
+                  <b title={resource.name}>{resource.name}</b>
+                  <code title={resource.uri}>{resource.uri}</code>
+                </div>
+              </div>))
+          : <div className="cd-row"><div className="cd-row-tx">
+              <b>None listed by the server.</b>
+            </div></div>
+        : null}
+      {report.resources_supported && report.resources.length > shown.length
+        ? <div className="cd-row-note"><div className="mcp-res-more">
+            + {report.resources.length - shown.length} more
+          </div></div>
+        : null}
+      {report.truncated
+        ? <div className="cd-row-note"><div className="mcp-res-more">
+            Catalog results were capped; more items are available upstream.
+          </div></div>
+        : null}
+    </div>
   </>;
 }
 
@@ -2840,10 +3246,24 @@ function connectionFactRows(c: ConnectionSummary): Array<[string, string]> {
   return rows;
 }
 
+/** The word the tool's list row shows for its state, reused as the
+ * inspector's subtitle so the pane opens saying what the row said. */
+function connectionStatusWord(c: ConnectionSummary): string {
+  if (!c.agent_access.enabled) return 'Off';
+  const issues = connectionIssues(c).filter((issue) => issue.tone !== 'info');
+  return issues.length ? connectionProblemWord(c) : 'Connected';
+}
+
+/** What the pasteable string in the Connect card actually is. */
+function endpointRowLabel(c: ConnectionSummary): string {
+  if (c.type === 'ssh') return 'SSH command';
+  if (c.type === 'pg') return 'Connection string';
+  return 'Local address';
+}
+
 function ConnectionDetail({ connection: c }: {
   connection: ConnectionSummary;
 }): ReactNode {
-  const menuOpen = state.connMenuOpen === c.id && !state.connMenuPoint;
   const enabled = c.agent_access.enabled;
   const entry = entryForConnection(c);
   const connectTitle = connectionKind(c) === 'db'
@@ -2851,23 +3271,39 @@ function ConnectionDetail({ connection: c }: {
     : connectionKind(c) === 'ssh'
     ? 'Connect to this server'
     : 'Connect to this service';
+  // Each connect surface is one group: a heading in the pane's muted
+  // register over a card holding the address and the controls that manage
+  // it, rather than a labelled band ruled off from the page. The row is
+  // only labelled once there is an address to label — until then the card
+  // holds the one button that issues one.
+  const issued = Boolean(c.agent_access.endpoint);
   const endpointSection = enabled && ENDPOINTABLE[c.type] && !c.mcp_path
-    ? <div className="cd-sec cd-connect">
-        <div className="cd-connect-lbl">
-          <span>{connectTitle}</span>
-          <EndpointOptionsMenu connection={c} />
+    ? <>
+        <h4 className="cdet-sec-h">{connectTitle}</h4>
+        <div className="cdet-card">
+          <div className="cd-row cd-connect-row">
+            <div className="cd-row-tx">
+              {issued ? <b>{endpointRowLabel(c)}</b> : null}
+              <EndpointStrip connection={c} withFormats />
+            </div>
+            <EndpointOptionsMenu connection={c} />
+          </div>
         </div>
-        <EndpointStrip connection={c} withFormats />
-      </div>
+      </>
     : null;
-  const mcpSection = enabled && c.mcp_path
-    ? <div className="cd-sec cd-connect">
-        <div className="cd-connect-lbl">
-          <span>Connect to Multitool MCP</span>
-          {ENDPOINTABLE[c.type] ? <EndpointOptionsMenu connection={c} /> : null}
+  const mcpSection = enabled && c.mcp_path && ENDPOINTABLE[c.type]
+    ? <>
+        <h4 className="cdet-sec-h">Connect to Multitool MCP</h4>
+        <div className="cdet-card">
+          <div className="cd-row cd-connect-row">
+            <div className="cd-row-tx">
+              {issued ? <b>Local address</b> : null}
+              <EndpointStrip connection={c} />
+            </div>
+            <EndpointOptionsMenu connection={c} />
+          </div>
         </div>
-        {ENDPOINTABLE[c.type] ? <EndpointStrip connection={c} /> : null}
-      </div>
+      </>
     : null;
   // `cloudSetupCommand` is the shared renderer: AWS gets a profile install,
   // the others a shell export. The tool panel and the Connect-agents
@@ -2893,12 +3329,17 @@ function ConnectionDetail({ connection: c }: {
       })()
     : null;
   const cloudSection = enabled && c.type === 'cloud' && c.cloud
-    ? <div className="cd-sec cd-connect cd-cloud-connect">
-        <div className="cd-connect-lbl"><span>
+    ? <>
+        <h4 className="cdet-sec-h">
           {c.cloud.provider === 'aws' ? 'Connect the AWS CLI'
             : c.cloud.provider === 'gcp' ? 'Connect Google Cloud CLI'
             : 'Mint Azure tokens'}
-        </span></div>
+        </h4>
+        {/* The cloud kinds hand over a command, not an address, so their
+            card carries the instruction, the command, and the check that
+            proves it worked as one block row. */}
+        <div className="cdet-card cd-cloud-connect">
+        <div className="cd-row cd-row-stack">
         <div className="cd-help">
           {c.cloud.provider === 'aws'
             ? <>Run this once, then append the profile it prints to <code>~/.aws/config</code>.
@@ -2925,35 +3366,74 @@ function ConnectionDetail({ connection: c }: {
                 HTTP client. It does not sign in the Azure CLI itself — plain{' '}
                 <code>az</code> commands still need their own login.</>}
         </div>
-      </div>
+        </div>
+        </div>
+      </>
     : null;
+  // Confirmation, Advanced and Details are one settings group: the switch
+  // the user came for, then the two folds that keep the pane short. A
+  // disabled tool has no options at all, so its facts stand as their own
+  // group rather than hiding behind a fold under an empty heading.
+  const facts = connectionFactRows(c).length > 0;
+  const testing = c.mcp_path
+    ? Boolean(state.mcpStatus[c.id]?.running)
+    : Boolean(state.connTests[c.id]?.running);
   return <>
     <div className="cd-head">
       <span className={`cat-ico kind-${connectionKind(c)}`} aria-hidden="true">
         {entry ? <Icon markup={ICONS[entry.icon] || ''} /> : null}
       </span>
       <div className="cd-title"><b title={c.name}>{connectionRowName(c)}</b>
-        <span>{kindLabel(c)}</span>
+        {/* The subtitle carries the state word the row showed, so the pane
+            answers "is this working?" without a badge of its own. */}
+        <span>{kindLabel(c)} · {connectionStatusWord(c)}</span>
       </div>
       <div className="cd-actions">
-        <div className="tile-menu-wrap">
-          <button className={`icon-btn tile-menu-btn ${menuOpen ? 'on' : ''}`}
-            title="Tool options" aria-label={`Options for ${c.name}`}
-            aria-expanded={menuOpen} data-act="toggle-conn-menu" data-id={c.id}
-            data-conn-menu-trigger={c.id}>
-            <Icon markup={ICONS.ellipsis} />
-          </button>
-        </div>
         <ConnectionToggle connection={c} />
       </div>
     </div>
-    {!enabled ? <div className="cd-help cd-off-note">This tool is disabled.</div> : null}
+    {/* No "this tool is disabled" line: the subtitle says Off and the switch
+        beside it says so again. */}
     {cloudSection}
     {c.mcp_path ? <>{mcpSection}{endpointSection}</> : <>{endpointSection}{mcpSection}</>}
-    <ConfirmationSection connection={c} />
-    <ConnectionAdvancedSection connection={c} />
-    <ConnectionDetailsSection connection={c} />
     <McpStatus connection={c} />
+    {enabled
+      ? <>
+          <h4 className="cdet-sec-h">Options</h4>
+          <div className="cdet-card">
+            <ConfirmationSection connection={c} />
+            <ConnectionAdvancedSection connection={c} />
+            <ConnectionDetailsSection connection={c} />
+          </div>
+        </>
+      : facts
+      ? <>
+          <h4 className="cdet-sec-h">Details</h4>
+          <div className="cdet-card"><ConnectionFacts connection={c} /></div>
+        </>
+      : null}
+    <ConnectionSecretsSection connection={c} />
+    {/* The ⋯ menu the head used to carry: its actions are rows here, where
+        the destructive one can be set apart instead of sharing a list with
+        the everyday two. */}
+    <h4 className="cdet-sec-h">Manage</h4>
+    <div className="cdet-card">
+      <button type="button" className="cd-row cd-row-click"
+        data-act={c.mcp_path ? 'mcp-status' : 'test-conn'} data-id={c.id} disabled={testing}>
+        <span className="cd-row-tx"><b>{testing ? 'Testing…' : 'Test connection'}</b></span>
+      </button>
+      <button type="button" className="cd-row cd-row-click"
+        data-act="edit-conn" data-id={c.id}>
+        <span className="cd-row-tx"><b>Edit tool…</b></span>
+      </button>
+    </div>
+    <h4 className="cdet-sec-h">Danger zone</h4>
+    <div className="cdet-card">
+      <button type="button" className="cd-row cd-row-click cd-row-danger"
+        data-act="del-conn-ask" data-id={c.id}>
+        <span className="cd-row-tx"><b>Remove this tool…</b></span>
+      </button>
+    </div>
   </>;
 }
 
@@ -2964,7 +3444,7 @@ function FlatConnectionRow({ connection: c, reorderable = false }: {
   const kind = connectionKind(c);
   const live = liveCount(c);
   const entry = entryForConnection(c);
-  const selected = selectedConnection()?.id === c.id;
+  const selected = state.selectedConn === c.id;
   const issues = connectionIssues(c).filter((issue) => issue.tone !== 'info');
   // The status is a word, never a bare dot: Off / Connected, or the worst
   // problem by name so the list answers "what's wrong" without a click.
@@ -2975,11 +3455,7 @@ function FlatConnectionRow({ connection: c, reorderable = false }: {
     : <span className={`cc-pill ${c.last_status === 'failed' ? 'err' : 'warn'}`}
         title={issues.map((issue) => issue.text).join(' ')}
         aria-label={`${issues.length} issue${issues.length === 1 ? '' : 's'}`}>
-        {c.last_status === 'failed'
-          ? 'Unreachable'
-          : c.last_status === 'needs_reconnect'
-          ? 'Reconnect'
-          : 'Warning'}
+        {connectionProblemWord(c)}
       </span>;
   return <div
     className={`flat-conn-wrap ${selected ? 'sel' : ''}${reorderable ? ' reorderable' : ''}${dragConnId === c.id ? ' dragging' : ''}`}
@@ -3035,10 +3511,13 @@ function paletteGroups(query: string): PaletteGroup[] {
       || ['http', 'mcp'].includes(entry.id);
   return PALETTE_SECTIONS.flatMap((section) => {
     const rows = entries.filter((entry) => entry.section === section
-      && !entry.disabled
       && entry.via === 'connection'
       && (!isConnected(entry) || alwaysAddable(entry)));
-    return rows.length ? [{ section, entries: rows }] : [];
+    // Announced-but-unavailable entries stay visible as grayed "Soon" rows,
+    // but never above something the user can actually add right now.
+    const ordered = rows.filter((entry) => !entry.disabled)
+      .concat(rows.filter((entry) => entry.disabled));
+    return ordered.length ? [{ section, entries: ordered }] : [];
   });
 }
 
@@ -3046,6 +3525,9 @@ function paletteGroups(query: string): PaletteGroup[] {
  * else opens the same form the catalog's Add button would. */
 async function activatePaletteEntry(entryId: string): Promise<void> {
   const entry = catalogEntryById(entryId);
+  // Announced-but-unavailable rows render without an action; nothing to do
+  // even if an activation reaches here some other way.
+  if (entry?.disabled) return;
   state.addPalette = null;
   render();
   if (!entry) return;
@@ -3060,7 +3542,9 @@ function AddToolPalette(): ReactNode {
   const palette = state.addPalette;
   if (!palette) return null;
   const groups = paletteGroups(palette.query);
-  const flat = groups.flatMap((group) => group.entries);
+  // Keyboard selection walks only the rows that can actually be added;
+  // disabled "Soon" rows render but are never the active option.
+  const flat = groups.flatMap((group) => group.entries.filter((e) => !e.disabled));
   const index = Math.max(0, Math.min(palette.index, flat.length - 1));
   const move = (delta: number): void => {
     if (!flat.length) return;
@@ -3111,6 +3595,20 @@ function AddToolPalette(): ReactNode {
             <div key={group.section} className="palette-group">
               <div className="palette-sec" aria-hidden="true">{group.section.toUpperCase()}</div>
               {group.entries.map((entry) => {
+                if (entry.disabled) {
+                  return (
+                    <div key={entry.id} id={`palette-row-${entry.id}`} role="option"
+                      aria-selected={false} aria-disabled="true"
+                      className="palette-row soon">
+                      <span className="cat-ico" aria-hidden="true">
+                        <Icon markup={ICONS[entry.icon] || ''} />
+                      </span>
+                      <span className="palette-tx"><b>{entry.name}</b>
+                        <span className="palette-desc">{entry.description}</span></span>
+                      <span className="palette-soon">Soon</span>
+                    </div>
+                  );
+                }
                 flatIndex += 1;
                 const selected = flatIndex === index;
                 return (
@@ -3131,7 +3629,7 @@ function AddToolPalette(): ReactNode {
               })}
             </div>
           ))}
-          {!flat.length ? <div className="muted-note">No tools match your search.</div> : null}
+          {!groups.length ? <div className="muted-note">No tools match your search.</div> : null}
         </div>
         <div className="palette-hints" aria-hidden="true">
           <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
@@ -3196,137 +3694,10 @@ function SamplesCard(): ReactNode {
   );
 }
 
-/** The tools search filters linked tools, so it only earns its place once
- * there are some: with none linked the page is the catalog directory, which
- * the Add-a-tool palette searches on its own. */
+/** The tray's tool search only earns its place once tools exist; the
+ * Add-a-tool palette does its own searching. */
 function toolSearchShown(): boolean {
   return state.connections.length > 0;
-}
-
-/** The needle goes with the field. Deleting the last tool mid-search would
- * otherwise strand a live query behind a hidden input. */
-function toolSearchQuery(): string {
-  return toolSearchShown() ? state.toolSearch : '';
-}
-
-function ConnectionsView({ withReadyCard = true }: { withReadyCard?: boolean }): ReactNode {
-  const byId = new Map(state.connections.map((connection) => [connection.id, connection] as const));
-  const orderedConnections = dragConnOrder
-    ? [
-        ...dragConnOrder.map((id) => byId.get(id)).filter(
-          (connection): connection is ConnectionSummary => Boolean(connection),
-        ),
-        ...state.connections.filter((connection) => !dragConnOrder!.includes(connection.id)),
-      ]
-    : state.connections;
-  const entries = visibleCatalog(toolSearchQuery());
-  const isConnected = (entry: CatalogEntry): boolean =>
-    connectionsForEntry(entry, state.connections).length > 0;
-  const needle = toolSearchQuery().trim().toLowerCase();
-  const matching = orderedConnections.filter((c) => {
-    const entry = entryForConnection(c);
-    const entryMatches = Boolean(entry) && [
-      entry!.name, entry!.description, ...(entry!.keywords || []),
-    ].some((text) => text.toLowerCase().includes(needle));
-    return !needle
-      || c.name.toLowerCase().includes(needle)
-      || c.target.toLowerCase().includes(needle)
-      || (c.account || '').toLowerCase().includes(needle)
-      || entryMatches;
-  });
-  const reorderable = !needle && matching.length > 1;
-  // The directory renders inline only while nothing is connected — with
-  // nothing to manage, browsing is the page. Once a tool exists, adding
-  // moves to the palette and the list shows only what agents can reach.
-  const showDirectory = !state.connections.length;
-  const alwaysAddable = (entry: CatalogEntry): boolean =>
-    entry.connType === 'pg' || entry.connType === 'ssh' || entry.connType === 'cloud'
-      || ['http', 'mcp'].includes(entry.id);
-  const sections = !showDirectory ? [] : PALETTE_SECTIONS.flatMap((section) => {
-    const sectionEntries = entries.filter(
-      (entry) => entry.section === section && (!isConnected(entry) || alwaysAddable(entry)),
-    );
-    if (!sectionEntries.length) return [];
-    const ordered = connectedCatalogFirst(sectionEntries, state.connections);
-    const collapsible = COLLAPSIBLE_SECTIONS.includes(section) && !toolSearchQuery().trim();
-    const expanded = state.sectionsExpanded.includes(section);
-    const collapsed = collapsible
-      ? collapsedCatalogGroup(sectionEntries, state.connections)
-      : { visible: ordered, hiddenCount: 0 };
-    return [{
-      section,
-      rows: collapsible && !expanded ? collapsed.visible : ordered,
-      expanded,
-      hiddenCount: collapsed.hiddenCount,
-    }];
-  });
-  const detail = selectedConnection();
-  return <>
-    {withReadyCard ? <ConnectionReadyCard /> : null}
-    <div className={`catalog ${state.connDetailOpen ? 'detail-open' : ''}`}>
-      <div className="tools-split">
-        <div className="tools-list">
-          {/* The tray keeps the banner in its page band above the tabs'
-              content; the desktop split seats it atop this column. */}
-          {mode !== 'dropdown' ? <RequestsBanner /> : null}
-          {mode !== 'dropdown' ? <SamplesCard /> : null}
-          {state.connections.length
-            ? <div className="cat-section">
-                {matching.length
-                  ? <ConnectedToolsList items={matching} reorderable={reorderable}
-                      dragging={Boolean(dragConnId)}
-                      keepMountedId={keyboardReorderConnId}
-                      renderItem={(connection) =>
-                        <FlatConnectionRow key={connection.id} connection={connection}
-                          reorderable={reorderable} />} />
-                  : <div className="cat-rows">
-                      <div className="muted-note">No tools match your search.</div>
-                    </div>}
-              </div>
-            : null}
-          {mode === 'dropdown' && state.connections.length
-            ? <div className="cat-section"><div className="cat-rows">
-                <div className="cat-row is-toggle add-tools-row" role="button" tabIndex={0}
-                  data-act="open-add-palette" aria-haspopup="dialog"
-                  aria-label="Add a tool">
-                  <span className="cat-ico" aria-hidden="true"><Icon markup={ICONS.plus} /></span>
-                  <div className="cat-tx"><b>Add a tool</b></div>
-                </div>
-              </div></div>
-            : null}
-          {showDirectory && !sections.length
-            ? <div className="muted-note">No tools match your search.</div>
-            : sections.map(({ section, rows, expanded, hiddenCount }) =>
-                <div key={section} className="cat-section add-section">
-                  <div className="cat-section-h">{section.toUpperCase()}</div>
-                  <div className="cat-rows">
-                    {rows.map((entry) => <CatalogRow key={entry.id} entry={entry} />)}
-                    {hiddenCount > 0
-                      ? <button className="cat-more" data-act="toggle-section-expanded"
-                          data-id={section} aria-expanded={expanded}>
-                          <span>{expanded ? 'Show fewer tools' : 'Show more tools'}</span>
-                          <span className={`cat-more-chev ${expanded ? 'open' : ''}`}
-                            aria-hidden="true"><Icon markup={ICONS.chevronDown} /></span>
-                        </button>
-                      : null}
-                  </div>
-                </div>)}
-        </div>
-        {detail
-          ? <div className="conn-detail-col">
-              <ConnectionAlerts connection={detail} />
-              <aside className="conn-detail-pane" aria-label="Connection details">
-                <ConnectionDetail connection={detail} />
-              </aside>
-            </div>
-          : null}
-      </div>
-      {detail && state.connDetailOpen
-        ? <button className="conn-detail-backdrop" data-act="close-conn-detail"
-            aria-label="Close connection details" tabIndex={-1}></button>
-        : null}
-    </div>
-  </>;
 }
 
 // The credential library always advertises both typed groups. Each heading
@@ -3338,11 +3709,76 @@ const SECRET_CATEGORY_TILES: ReadonlyArray<{
   icon: IconDefinition;
 }> = [
   { id: 'all', label: 'All', icon: ICONS.key },
-  { id: 'passwords', label: 'Passwords', icon: ICONS.globe },
+  { id: 'connections', label: 'Agent Tools', icon: ICONS.globe },
+  { id: 'passwords', label: 'Passwords', icon: ICONS.lock },
   { id: 'secrets', label: 'Secrets', icon: ICONS.fileKey },
   { id: 'codes', label: '2FA Codes', icon: ICONS.timer },
-  { id: 'onepassword', label: '1Password', icon: ICONS.onepassword },
+  { id: 'onepassword', label: 'Connected Vaults', icon: ICONS.onepassword },
 ];
+
+/** The compact category name is enough in navigation. Section registers add
+ * the longer scope as quiet context without making it compete with the name. */
+function AgentToolsSectionHeading({ tray = false }: { tray?: boolean }): ReactNode {
+  return <h2 className={tray ? 'dd-sec-h agent-tools-sec-h' : 'creds-sec-h agent-tools-sec-h'}>
+    Agent Tools <span className="agent-tools-context">MCPs, APIs, Cloud IAMs</span>
+  </h2>;
+}
+
+/** The tool holding the unified inspector, if one does. Tools are only ever
+ * the subject on the scopes that show them, so narrowing to Passwords with a
+ * tool selected hands the pane back to the credentials. */
+function unifiedToolSelection(): ConnectionSummary | null {
+  if (mode === 'dropdown') return null;
+  const scope = state.secretCategory;
+  if (scope !== 'all' && scope !== 'connections') return null;
+  return state.connections.find((c) => c.id === state.selectedConn) ?? null;
+}
+
+/** Tools at the head of the unified inventory: the same rows the Tools page
+ * showed, above the credentials they authenticate with. */
+function UnifiedConnectionsSection(): ReactNode {
+  if (mode === 'dropdown') return null;
+  const scope = state.secretCategory;
+  if (scope !== 'all' && scope !== 'connections') return null;
+  const needle = state.secretSearch.trim().toLowerCase();
+  // A drag in flight orders the list itself, so the row under the pointer
+  // stays where the pointer put it until the drop commits.
+  const byId = new Map(state.connections.map((c) => [c.id, c] as const));
+  const ordered = dragConnOrder
+    ? [
+        ...dragConnOrder.map((id) => byId.get(id))
+          .filter((c): c is ConnectionSummary => Boolean(c)),
+        ...state.connections.filter((c) => !dragConnOrder!.includes(c.id)),
+      ]
+    : state.connections;
+  const matching = ordered.filter((c) => !needle
+    || c.name.toLowerCase().includes(needle)
+    || c.target.toLowerCase().includes(needle)
+    || (c.account || '').toLowerCase().includes(needle));
+  // Reordering only makes sense over the whole list: a filtered view would
+  // silently move rows the user cannot see.
+  const reorderable = !needle && matching.length > 1;
+  // Under All an empty tool list is silent — the credentials below are the
+  // page — unless the whole inventory is empty, which is first run.
+  const bare = !state.connections.length && !state.secrets.length;
+  if (!matching.length && scope === 'all' && !bare) return null;
+  return (
+    <>
+      <AgentToolsSectionHeading />
+      {matching.length
+        ? <ConnectedToolsList items={matching} reorderable={reorderable}
+            dragging={Boolean(dragConnId)} keepMountedId={keyboardReorderConnId}
+            renderItem={(connection) =>
+              <FlatConnectionRow key={connection.id} connection={connection}
+                reorderable={reorderable} />} />
+        : <div className="cred-rows"><div className="muted-note">
+            {state.connections.length
+              ? 'No tools match your search.'
+              : 'No tools yet.'}
+          </div></div>}
+    </>
+  );
+}
 
 // Apple's Passwords app spends a third column on these; Multitool's left
 // edge already belongs to app navigation, so the categories compress into
@@ -3350,6 +3786,10 @@ const SECRET_CATEGORY_TILES: ReadonlyArray<{
 function CredentialCategoryTiles(): ReactNode {
   const counts = new Map<SecretCategory, number>(SECRET_CATEGORY_TILES.map((tile) =>
     [tile.id, state.secrets.filter((secret) => secretInCategory(secret, tile.id)).length]));
+  // Tools live in the same inventory but are not secrets, so their two
+  // scopes count connections rather than reading `secrets`.
+  counts.set('connections', state.connections.length);
+  counts.set('all', (counts.get('all') ?? 0) + state.connections.length);
   // The 1Password scope earns its tile once the integration is in play.
   const showOnePassword = (counts.get('onepassword') ?? 0) > 0
     || state.onepasswordIntegrations.length > 0;
@@ -3381,8 +3821,10 @@ function CredentialCategoryTiles(): ReactNode {
             id={`cred-tile-${tile.id}`} tabIndex={tile.id === stop ? 0 : -1}
             role="radio" aria-checked={on} data-act="secret-category" data-id={tile.id}>
             <span className="cred-tile-ico" aria-hidden="true"><Icon markup={tile.icon} /></span>
-            <span className="cred-tile-label">{tile.label}</span>
-            <span className="cred-tile-count">{counts.get(tile.id)}</span>
+            <span className="cred-tile-tx">
+              <span className="cred-tile-label">{tile.label}</span>
+              <span className="cred-tile-count">{counts.get(tile.id)}</span>
+            </span>
           </button>
         );
       })}
@@ -3400,42 +3842,42 @@ function SecretsView(): ReactNode {
   const typed = supportsTypedCredentials(state.broker);
   const matching = state.secrets.filter((secret) => secretMatches(secret, needle));
   if (mode === 'dropdown') {
-    const ordered = [
-      ...matching.filter((secret) => secret.kind === 'password'),
-      ...matching.filter((secret) => secret.kind !== 'password'),
-    ];
-    // The tray is where the same credential gets grabbed every day: a short
-    // Recent group rides above the inventory. A search speaks for itself, so
-    // the sections yield to plain matches while a needle is active.
-    const recent = needle ? [] : recentSecretUses(3);
+    const passwords = matching.filter((secret) => secret.kind === 'password');
+    const rest = matching.filter((secret) => secret.kind !== 'password');
+    // The tray carries the window's section register (Passwords / Your
+    // Secrets / Connection Secrets) so the two surfaces name the same groups.
+    // A search flattens back to one list: with a needle the groups are noise.
+    const grouped = typed && !needle;
+    // Connection-owned credentials belong to their tool, as on the desktop;
+    // a search still finds them.
+    const yourSecrets = grouped
+      ? rest.filter((secret) => secret.origin !== 'connection') : rest;
+    const connectionSecrets: SecretSummary[] = [];
+    const card = (list: SecretSummary[]): ReactNode => (
+      <CredentialRowsList className="dd-cred-list" secrets={list} rowEstimate={40}
+        keepMountedId={state.dropdownSecretOpen}
+        renderRow={(secret) => <DropdownCredentialRow key={secret.id} secret={secret} />} />
+    );
+    const group = (title: string, list: SecretSummary[]): ReactNode =>
+      list.length
+        ? <><h2 className="dd-sec-h">{title}</h2>{card(list)}</>
+        : null;
+    const body = grouped
+      ? <>
+          {group('Passwords', passwords)}
+          {group('Secrets', yourSecrets)}
+          {group('Connection Secrets', connectionSecrets)}
+        </>
+      : card([...passwords, ...rest]);
     return (
       <div className="dd-creds">
-        {recent.length
-          ? <>
-              <div className="dd-cred-sec-h">Recent</div>
-              <div className="dd-cred-list">
-                {recent.map(({ secret, at }) => (
-                  <DropdownCredentialRow key={`recent-${secret.id}`} secret={secret}
-                    scope="recent" subtitle={usedHint(at)} />
-                ))}
-              </div>
-              <div className="dd-cred-sec-h">All credentials</div>
-            </>
-          : null}
-        {ordered.length
-          ? <CredentialRowsList className="dd-cred-list" secrets={ordered} rowEstimate={40}
-              keepMountedId={state.dropdownSecretOpen?.startsWith('recent:')
-                ? null : state.dropdownSecretOpen}
-              renderRow={(secret) => <DropdownCredentialRow key={secret.id} secret={secret} />} />
+        {passwords.length || rest.length
+          ? body
           : <div className="muted-note dd-cred-empty">
               {state.secrets.length
                 ? 'No saved credentials match your search.'
                 : 'No saved credentials yet.'}
             </div>}
-        {/* With no rows to hang off, the add link joins the centred empty
-            note as one block instead of drifting to the right edge. */}
-        <button className={`credential-group-add${ordered.length ? '' : ' centered'}`}
-          data-act="open-add-secret">＋ Add credential</button>
       </div>
     );
   }
@@ -3444,11 +3886,31 @@ function SecretsView(): ReactNode {
   const passwords = inCategory.filter((secret) => secret.kind === 'password');
   const secrets = inCategory.filter((secret) => secret.kind !== 'password');
   const grouped = typed && category === 'all';
-  const ordered = grouped ? [...passwords, ...secrets] : inCategory;
+  // Credentials minted by connection setup live on the tool that owns them
+  // (ConnectionSecretsSection), not in this list: they are plumbing, and
+  // filing them here made the user scroll their own credentials past it.
+  // A search still reaches them, so nothing becomes unfindable.
+  const splitSecrets = typed && (category === 'all' || category === 'secrets');
+  const yourSecrets = splitSecrets && !needle
+    ? secrets.filter((secret) => secret.origin !== 'connection') : secrets;
+  const connectionSecrets: SecretSummary[] = [];
+  const ordered = grouped ? [...passwords, ...yourSecrets, ...connectionSecrets]
+    : splitSecrets ? [...yourSecrets, ...connectionSecrets]
+    : inCategory;
+  // The Connections scope hides the credential list outright; every other
+  // scope shows it (tools ride above it under All, and are filtered out
+  // entirely by the credential-only scopes).
+  const credentialScope = category !== 'connections';
+  // One inventory, two kinds of subject. A tool wins the inspector only
+  // while it is the standing selection — picking a credential clears it
+  // (see the select-conn / select-secret handlers), so the pane never shows
+  // a stale tool beside a highlighted credential row.
+  const tool = unifiedToolSelection();
   // The inspector always has a subject: an explicit selection when it is
   // still visible under the active tile and search, else the first row.
-  const selected = ordered.find((secret) => secret.id === state.selectedSecret)
-    ?? ordered[0] ?? null;
+  const selected = tool ? null
+    : ordered.find((secret) => secret.id === state.selectedSecret)
+      ?? ordered[0] ?? null;
   // Each card windows its rows against the page scroller; the selected row
   // stays mounted so keyboard focus and the current-row semantics hold.
   const rowCard = (list: SecretSummary[]): ReactNode => (
@@ -3458,10 +3920,26 @@ function SecretsView(): ReactNode {
         selected={secret.id === selected?.id} />} />
   );
   const filteredEmptyNote = category === 'codes' ? 'No credentials have a 2FA code yet.'
-    : category === 'onepassword' ? 'No credentials are linked from 1Password yet.'
+    : category === 'onepassword' ? 'No credentials from connected vaults yet.'
     : category === 'passwords' ? 'No passwords yet.'
     : category === 'secrets' ? 'No secrets yet.'
     : 'No saved credentials yet.';
+  // The user's own secrets card, shared by the All and Secrets views. The
+  // Connection Secrets card only appears once something lives there, so the
+  // split costs nothing until a connection mints a credential.
+  const yourSecretsBody = yourSecrets.length
+    ? rowCard(yourSecrets)
+    : <div className="cred-rows"><div className="muted-note">
+        {state.secrets.some((secret) =>
+          secret.kind !== 'password' && secret.origin !== 'connection')
+          ? 'No secrets match your search.' : 'No secrets yet.'}
+      </div></div>;
+  const connectionSecretsBody = connectionSecrets.length
+    ? <>
+        <h2 className="creds-sec-h">Connection Secrets</h2>
+        {rowCard(connectionSecrets)}
+      </>
+    : null;
   // Both typed groups carry a page-register header; the tray keeps its
   // flat list.
   const listBody = grouped
@@ -3474,20 +3952,23 @@ function SecretsView(): ReactNode {
                 ? 'No passwords match your search.' : 'No passwords yet.'}
             </div></div>}
         <h2 className="creds-sec-h">Secrets</h2>
-        {secrets.length
-          ? rowCard(secrets)
-          : <div className="cred-rows"><div className="muted-note">
-              {state.secrets.some((secret) => secret.kind !== 'password')
-                ? 'No secrets match your search.' : 'No secrets yet.'}
-            </div></div>}
+        {yourSecretsBody}
+        {connectionSecretsBody}
       </>
-    : ordered.length
-      ? rowCard(ordered)
-      : <div className="cred-rows"><div className="muted-note">
-          {needle ? 'No credentials match your search.' : filteredEmptyNote}
-        </div></div>;
+    : splitSecrets
+      ? <>
+          <h2 className="creds-sec-h">Secrets</h2>
+          {yourSecretsBody}
+          {connectionSecretsBody}
+        </>
+      : ordered.length
+        ? rowCard(ordered)
+        : <div className="cred-rows"><div className="muted-note">
+            {needle ? 'No credentials match your search.' : filteredEmptyNote}
+          </div></div>;
+  const paneOpen = tool ? state.connDetailOpen : Boolean(selected) && state.secretDetailOpen;
   return (
-    <div className={`creds ${selected && state.secretDetailOpen ? 'detail-open' : ''}`}>
+    <div className={`creds ${paneOpen ? 'detail-open' : ''}`}>
       <div className="creds-split">
         <div className="creds-list-col"
           onKeyDown={(e) => {
@@ -3499,14 +3980,28 @@ function SecretsView(): ReactNode {
             const next = ordered[at + (e.key === 'ArrowDown' ? 1 : -1)];
             if (!next) return;
             state.selectedSecret = next.id;
+            state.selectedConn = null;
             render();
             focusField(`cred-row-${next.id}`);
           }}>
-          <RequestsBanner />
+          {/* The window seats the notice in its page band above the split;
+              the tray has no band, so it keeps the in-column banner. */}
+          {mode === 'dropdown' ? <RequestsBanner /> : null}
           {typed ? <CredentialCategoryTiles /> : null}
-          {listBody}
+          {/* The sample-tools spotlight followed Tools into the merged page;
+              it is the one offer that seeds an empty inventory. */}
+          {mode !== 'dropdown' ? <SamplesCard /> : null}
+          <UnifiedConnectionsSection />
+          {credentialScope ? listBody : null}
         </div>
-        {selected
+        {tool
+          ? <div className="cred-detail-col">
+              <ConnectionAlerts connection={tool} />
+              <aside className="cred-detail-pane" aria-label={`Details for ${tool.name}`}>
+                <ConnectionDetail connection={tool} />
+              </aside>
+            </div>
+          : selected
           ? <div className="cred-detail-col">
               <aside className="cred-detail-pane"
                 aria-label={`Details for ${credentialDisplayName(selected)}`}>
@@ -3517,34 +4012,37 @@ function SecretsView(): ReactNode {
           // stays, carrying the inbox-style placeholder, instead of the
           // list stretching across the whole page.
           : <div className="cred-detail-col">
-              <aside className="cred-detail-pane is-empty" aria-label="No credentials in this view">
+              <aside className="cred-detail-pane is-empty" aria-label="Nothing selected">
                 <div className="empty">
-                  <div className="empty-ico"><Icon markup={ICONS.key} /></div>
-                  <h3>No credentials here</h3>
+                  <div className="empty-ico">
+                    <Icon markup={category === 'connections' ? ICONS.globe : ICONS.key} />
+                  </div>
+                  <h3>{category === 'connections' ? 'No tool selected' : 'No credentials here'}</h3>
                   <p>{needle
                     ? 'Nothing in this view matches your search.'
-                    : 'Credentials in this category will appear here.'}</p>
+                    : category === 'connections'
+                      ? 'Pick a tool to see how agents reach it.'
+                      : 'Credentials in this category will appear here.'}</p>
                 </div>
               </aside>
             </div>}
       </div>
-      {selected && state.secretDetailOpen
-        ? <button className="cred-detail-backdrop" data-act="close-cred-detail"
-            aria-label="Close credential details" tabIndex={-1}></button>
+      {paneOpen
+        ? <button className="cred-detail-backdrop"
+            data-act={tool ? 'close-conn-detail' : 'close-cred-detail'}
+            aria-label={tool ? 'Close tool details' : 'Close credential details'}
+            tabIndex={-1}></button>
         : null}
     </div>
   );
 }
 
-/* ---- secrets status bar ------------------------------------------------ */
-// Vault state compresses into a status bar flush with the window bottom:
-// the left side is a live inventory, the right side manages 1Password
-// connections from an upward-anchored popover, so toggling it never
-// reflows the table above.
+/* ---- external vault switcher (main-window titlebar) -------------------- */
+// 1Password vaults live next to the local/remote broker switcher: same
+// chrome grammar, dropdown opens downward, and managing them never reflows
+// the credentials table.
 
 function VaultRow({ integration }: { integration: OnePasswordIntegration }): ReactNode {
-  const linked = state.secrets.filter((secret) => secret.source?.kind === 'one_password'
-    && secret.source.integration_id === integration.id).length;
   const method = integration.account || integration.connect_url
     || onePasswordMethodLabel(integration.kind);
   const menuOpen = state.vaultMenuOpen === integration.id;
@@ -3553,7 +4051,6 @@ function VaultRow({ integration }: { integration: OnePasswordIntegration }): Rea
       <span className="onepassword-integration-copy">
         <b>{integration.label}</b>
         <span>{method}</span>
-        <span>{linked} linked {linked === 1 ? 'credential' : 'credentials'}</span>
       </span>
       <span className="onepassword-integration-actions">
         <button className="btn sm" data-act="onepassword-browse"
@@ -3585,47 +4082,60 @@ function VaultRow({ integration }: { integration: OnePasswordIntegration }): Rea
   );
 }
 
-function SecretsStatusBar(): ReactNode {
+/** Main-window titlebar control for 1Password vaults — same shell as
+ * BrokerSwitch. Not shown in the menubar dropdown (too tight a chrome). */
+function VaultSwitch(): ReactNode {
   const available = supportsOnePassword(state.broker);
   const integrations = state.onepasswordIntegrations;
-  const credentialCount = state.secrets.length;
   const open = state.vaultsPanelOpen && integrations.length > 0;
-  const inventory = `${credentialCount} ${credentialCount === 1 ? 'credential' : 'credentials'}`;
+  if (integrations.length) {
+    return (
+      <div className="vault-switch-wrap">
+        {/* Icon only: the toolbar is a fixed run of controls and this one is
+            self-evident from its mark. The count that used to be spelled out
+            rides a badge; the full label stays in the title and aria-label. */}
+        <button
+          className={`broker-btn vault-btn ${open ? 'on' : ''}`}
+          data-act="toggle-vaults-panel"
+          aria-expanded={open} aria-haspopup="true"
+          title={`${integrations.length} external ${integrations.length === 1 ? 'vault' : 'vaults'} · manage 1Password`}
+          aria-label={`Manage 1Password: ${integrations.length} external ${integrations.length === 1 ? 'vault' : 'vaults'}`}>
+          <span className="vault-btn-1p" aria-hidden="true"><Icon markup={ICONS.onepassword} /></span>
+          {integrations.length > 1
+            ? <span className="vault-count" aria-hidden="true">{integrations.length}</span>
+            : null}
+        </button>
+        {open
+          ? <div className="vaults-panel" role="group" aria-label="1Password vaults">
+              {integrations.map((integration) =>
+                <VaultRow key={integration.id} integration={integration} />)}
+              <button className="vaults-connect-more" data-act="onepassword-open">
+                ＋ Connect external vault
+              </button>
+            </div>
+          : null}
+      </div>
+    );
+  }
   return (
-    <footer className="secrets-statusbar">
-      <span className="sb-count">{inventory}</span>
-      <span className="sb-spacer"></span>
-      {integrations.length
-        ? <button className={`sb-vaults ${open ? 'on' : ''}`} data-act="toggle-vaults-panel"
-            aria-expanded={open} aria-haspopup="true" title="Manage 1Password vaults">
-            <span className="sb-1p" aria-hidden="true"><Icon markup={ICONS.onepassword} /></span>
-            {integrations.length} external {integrations.length === 1 ? 'vault' : 'vaults'}
-            <span className={`sb-chev ${open ? 'open' : ''}`} aria-hidden="true">
-              <Icon markup={ICONS.chevronDown} /></span>
-          </button>
-        : <button className="sb-vaults" data-act="onepassword-open" disabled={!available}
-            title={available ? undefined : 'Update this remote broker to use 1Password'}>
-            <span className="sb-1p" aria-hidden="true"><Icon markup={ICONS.onepassword} /></span>
-            {available ? 'Connect 1Password' : 'Unavailable'}
-          </button>}
-      {open
-        ? <div className="vaults-panel" role="group" aria-label="1Password vaults">
-            {integrations.map((integration) =>
-              <VaultRow key={integration.id} integration={integration} />)}
-            <button className="vaults-connect-more" data-act="onepassword-open">
-              ＋ Connect external vault
-            </button>
-          </div>
-        : null}
-    </footer>
+    <div className="vault-switch-wrap">
+      <button
+        className="broker-btn vault-btn is-connect"
+        data-act="onepassword-open" disabled={!available}
+        title={available ? 'Connect 1Password' : 'Update this remote broker to use 1Password'}
+        aria-label={available ? 'Connect 1Password' : '1Password unavailable'}>
+        <span className="vault-btn-1p" aria-hidden="true"><Icon markup={ICONS.onepassword} /></span>
+      </button>
+    </div>
   );
 }
 
 // Console.app-style rows: a proportional timestamp gutter, restrained
 // semantic Lucide icon, then plain primary text with optional detail.
 function ActivityRow({ entry }: { entry: ActivityEntry }): ReactNode {
-  // Attribution and timing stay under the message. The tool gets its own
-  // right-side column so it can be scanned independently across rows.
+  // Attribution and timing stay under the message. The desktop log has room
+  // for a separately scannable tool column; the menu-bar row already names
+  // the tool in its message and needs that width for the message itself.
   const remotePeer = entry.surface === 'remote' ? (entry.approver || 'local socket') : null;
   const hasChips = Boolean(entry.agent) || typeof entry.duration_ms === 'number'
     || entry.confirmation === 'management_token' || Boolean(remotePeer);
@@ -3659,7 +4169,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }): ReactNode {
           </div>
         )}
       </div>
-      {entry.connection
+      {mode !== 'dropdown' && entry.connection
         ? <span className="act-chip act-tool" title={`Tool: ${entry.connection}`}>{entry.connection}</span>
         : null}
     </div>
@@ -4007,7 +4517,7 @@ function ActivityView(): ReactNode {
 async function receiveActivity(entry: ActivityEntry | null | undefined): Promise<void> {
   if (!entry || !entry.at || !entry.text) {
     await loadActivity(true);
-    if (state.tab === 'activity' && !state.sheet && !state.menuOpen) render();
+    if (state.tab === 'activity' && !sheetIsOpen() && !state.menuOpen) render();
     return;
   }
 
@@ -4016,7 +4526,7 @@ async function receiveActivity(entry: ActivityEntry | null | undefined): Promise
   if (duplicate) return;
   state.activity = [entry, ...state.activity];
 
-  if (state.tab !== 'activity' || state.sheet || state.menuOpen) return;
+  if (state.tab !== 'activity' || sheetIsOpen() || state.menuOpen) return;
   // With filters active the cheap prepend would bypass them; re-render.
   if (state.activityQuery || state.activityAgent || state.activityAlertsOnly) {
     render();
@@ -4043,37 +4553,179 @@ function DropdownCatalogSearch({ kind }: { kind: 'tool' | 'secret' }): ReactNode
   );
 }
 
-function TabContent(): ReactNode {
-  if (state.tab === 'activity') return <ActivityView />;
-  if (state.tab === 'start') {
-    return <StartViewPage globalSections={<GlobalSections embeddedInStart />} />;
+/* ---- tray tools: Option B slim bars ------------------------------------- */
+// One narrow full-width bar per tool above the credential inventory (artifact
+// Option B): kind icon, name, state line, live count, and the access switch.
+// Trouble still gets the problem word so the one word that appears is the one
+// that matters. Cap at five bars with an "All tools ›" tail when the list
+// grows; search filters bars and hides the band when nothing matches. Adding
+// a tool is still a main-window job — the tray manages what it lists.
+
+/** How many slim bars the band shows before folding into "All tools ›". */
+const TOOL_BAR_CAP = 5;
+
+/** Tray-local: the overflow tail has been pressed and every tool is listed. */
+let toolsBandShowAll = false;
+
+/** The bar's second line: what this tool is doing for agents right now,
+ * rather than where it points. The destination is a fixed property the
+ * detail pane owns (and the row keeps in its tooltip); what changes — and
+ * what the switch beside it acts on — is whether agents may use the tool,
+ * whether it answered last time, and how recently that was checked. */
+function toolBarState(c: ConnectionSummary, issues: ConnectionIssue[]): string {
+  const checked = c.last_checked_at ? relTimeAgo(c.last_checked_at) : null;
+  if (!c.agent_access.enabled) return 'Off · agents may not use this tool';
+  // The pill already names the problem; this line carries its detail.
+  if (issues.length) {
+    const detail = c.last_detail?.trim() || issues[0]?.text;
+    return [detail, checked].filter(Boolean).join(' · ');
   }
-  // The dropdown puts its catalog search inline above the list; the wide
-  // window has it in the header instead (see MainWindow). The ready card
-  // stays above the search, where the one-markup-blob layout had it.
-  if (mode === 'dropdown' && (state.tab === 'connections' || state.tab === 'secrets')) {
-    const isTools = state.tab === 'connections';
-    return (
-      <>
-        {isTools && <ConnectionReadyCard />}
-        <DropdownCatalogSearch kind={isTools ? 'tool' : 'secret'} />
-        {isTools ? <ConnectionsView withReadyCard={false} /> : <SecretsView />}
-      </>
-    );
-  }
-  if (state.tab === 'secrets') return <SecretsView />;
-  return <ConnectionsView />;
+  return ['Connected', checked, c.agent_access.confirm ? 'confirms each request' : null]
+    .filter(Boolean).join(' · ');
 }
 
-function BrokerReady(): ReactNode {
-  // The badge tracks the *managed* broker: a remote link that is down must
-  // not sit under a green "Ready".
+/** One Option B slim bar: icon, name, state, live count, access switch. Tap
+ * the bar for the tool's detail slide-over; tap the switch to let agents use
+ * the tool or not, without leaving the panel. */
+function ToolBar({ connection: c }: { connection: ConnectionSummary }): ReactNode {
+  const entry = entryForConnection(c);
+  const live = liveCount(c);
+  const selected = state.selectedConn === c.id && state.connDetailOpen;
+  const issues = connectionIssues(c).filter((issue) => issue.tone !== 'info');
+  const on = c.agent_access.enabled;
+  const name = connectionRowName(c);
+  return (
+    <div className={`tool-bar${selected ? ' on' : ''}${on ? '' : ' is-off'}`}
+      role="button" tabIndex={0}
+      data-act="select-conn" data-id={c.id}
+      aria-current={selected ? 'true' : undefined}
+      aria-label={`Show details for ${name}`}>
+      <span className={`tool-bar-ico kind-${connectionKind(c)}`} aria-hidden="true">
+        {entry ? <Icon markup={ICONS[entry.icon] || ''} /> : null}
+      </span>
+      <span className="tool-bar-tx">
+        <b title={c.name}>{name}</b>
+        <span className="tool-bar-dest" title={c.target}>{toolBarState(c, issues)}</span>
+      </span>
+      {live ? <span className="cc-live">{live} live</span> : null}
+      {on && issues.length
+        ? <span className={`cc-pill ${c.last_status === 'failed' ? 'err' : 'warn'}`}
+            title={issues.map((issue) => issue.text).join(' ')}
+            aria-label={`${issues.length} issue${issues.length === 1 ? '' : 's'}`}>
+            {connectionProblemWord(c)}
+          </span>
+        : null}
+      {/* A real button inside the row's role="button" host: closest()
+          dispatch gives the switch its own action, so the row's select
+          never fires from a toggle. */}
+      <button className={`switch tool-bar-switch ${on ? 'on' : ''}`}
+        role="switch" aria-checked={on}
+        data-act={on ? 'disable-tool' : 'enable-tool'} data-conn={c.id}
+        title={on ? 'Agents may use this tool' : 'Agents may not use this tool'}
+        aria-label={`${on ? 'Stop letting' : 'Let'} agents use ${name}`}></button>
+    </div>
+  );
+}
+
+function ToolsLedge(): ReactNode {
+  const needle = state.secretSearch.trim().toLowerCase();
+  // The tray is browse-only, so an empty tool inventory has no useful
+  // action or status to show here. Let the credential inventory move up.
+  if (!state.connections.length) return null;
+  const matching = needle
+    ? state.connections.filter((c) =>
+        c.name.toLowerCase().includes(needle) || c.target.toLowerCase().includes(needle))
+    : state.connections;
+  if (needle && !matching.length) return null;
+  // Overflow keeps troubled tools on screen: attention sorts first (stably),
+  // then the band truncates. Searching and "All tools ›" show every match.
+  const overflow = !needle && !toolsBandShowAll && matching.length > TOOL_BAR_CAP;
+  const run = overflow
+    ? [...matching]
+        .sort((a, b) =>
+          Number(connectionNeedsAttention(b)) - Number(connectionNeedsAttention(a)))
+        .slice(0, TOOL_BAR_CAP)
+    : matching;
+  const extra = matching.length - run.length;
+  return (
+    <div className="dd-tools">
+      <AgentToolsSectionHeading tray />
+      <div className="tools-band" role="toolbar" aria-label="Tools">
+        {run.map((c) => <ToolBar key={c.id} connection={c} />)}
+        {extra > 0
+          ? <button type="button" className="tool-bar-more" data-act="show-all-tools"
+              aria-label={`Show all ${matching.length} tools`}>
+              All tools ›
+            </button>
+          : null}
+      </div>
+    </div>
+  );
+}
+
+/** The tray's single view: the Tools band over the credential inventory,
+ * hosting the tool-detail slide-over the Tools tab used to own. The wrapper
+ * lays out nothing (display: contents) — it exists so .detail-open can
+ * reveal the fixed-position drawer and scrim. */
+function DropdownCredentialsTab(): ReactNode {
+  const detail = selectedConnection();
+  const open = Boolean(detail) && state.connDetailOpen;
+  return (
+    <div className={`dd-combined ${open ? 'detail-open' : ''}`}>
+      <ConnectionReadyCard />
+      <DropdownCatalogSearch kind="secret" />
+      <ToolsLedge />
+      <SecretsView />
+      {open && detail
+        ? <>
+            <div className="conn-detail-col">
+              <ConnectionAlerts connection={detail} />
+              <aside className="conn-detail-pane" aria-label="Connection details">
+                <ConnectionDetail connection={detail} />
+              </aside>
+            </div>
+            <button className="conn-detail-backdrop" data-act="close-conn-detail"
+              aria-label="Close connection details" tabIndex={-1}></button>
+          </>
+        : null}
+    </div>
+  );
+}
+
+function TabContent(): ReactNode {
+  if (state.tab === 'activity') return <ActivityView />;
+  // Connect agents is a window-only surface. The tray offers no route to it,
+  // and refuses one it is handed: the panel is too tight for a walkthrough
+  // whose whole job is copying config paths into another app.
+  if (state.tab === 'start' && mode !== 'dropdown') {
+    return <StartViewPage globalSections={<GlobalSections embeddedInStart />} />;
+  }
+  // The tray's one non-Activity view; the wide window keeps its tab set. The
+  // dropdown puts its search inline above the list; the wide window has it
+  // in the header instead (see MainWindow).
+  if (mode === 'dropdown') return <DropdownCredentialsTab />;
+  // Tools and credentials are one inventory in the window, from first run
+  // onwards: an empty inventory says so and points at the catalog, rather
+  // than handing the whole page to a directory the user then has to leave.
+  return <SecretsView />;
+}
+
+/** The tray's one-line identity: status dot, app name, managed broker.
+ * The dot carries the health the desktop titlebar shows in its switcher, so
+ * the panel needs no second status line under the title. */
+function BrokerIdentityLine(): ReactNode {
   const tone = brokerTone(state.broker);
   const label = tone === 'error' ? 'Unreachable' : tone === 'pending' ? 'Connecting…' : 'Ready';
-  return <div className="dd-sub ready-status">
-    <span className="ready-state" role="status"><span className={`dot dot-${tone}`} aria-hidden="true"></span>
-      <span>{label}</span></span>
-  </div>;
+  const scope = brokerLabel(state.broker);
+  return (
+    <div className="dd-identity dd-identity-line">
+      <span className="ready-state" role="status" aria-label={`Broker ${label}`}>
+        <span className={`dot dot-${tone}`} aria-hidden="true"></span>
+      </span>
+      <div className="dd-title">Multitool</div>
+      <span className="dd-scope" title={`Managing the ${scope} broker · ${label}`}>{scope}</span>
+    </div>
+  );
 }
 
 /* --------------------------- broker switcher ------------------------------ */
@@ -4271,22 +4923,90 @@ function Icon({ markup }: { markup?: IconDefinition }): ReactNode {
   return <AppIcon icon={markup} />;
 }
 
-/** The appearance toggle riding beside the settings gear, in both chromes. */
-function ThemeButton({ className }: { className: string }): ReactNode {
-  const dark = currentTheme() === 'dark';
-  const label = `Switch to ${dark ? 'light' : 'dark'} appearance`;
+/** Stamp an appearance choice on <html> and remember it. Storage can be
+ * unavailable (private contexts); the choice still applies for this window,
+ * it just won't stick. */
+function applyTheme(next: 'light' | 'dark'): void {
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch { /* see above */ }
+  render();
+}
+
+/** The two tabs the unified inventory answers for. Both routes survive so
+ * anything that still navigates to Tools lands on the merged page. */
+function unifiedTab(tab: Tab): boolean {
+  return tab === 'secrets' || tab === 'connections';
+}
+
+/** The window's app menu: the destinations and preferences the sidebar used
+ * to hold, hung off one gear at the trailing edge of the title bar. */
+function AppMenu({ takeover, requestCount }: {
+  takeover: boolean;
+  requestCount: number;
+}): ReactNode {
+  const open = state.menuOpen;
+  const recheckRunning = state.connections.some((c) =>
+    c.mcp_path ? Boolean(state.mcpStatus[c.id]?.running) : Boolean(state.connTests[c.id]?.running));
   return (
-    <button className={className} data-act="toggle-theme" title={label} aria-label={label}>
-      <Icon markup={dark ? ICONS.sun : ICONS.moon} />
-    </button>
+    <div className="app-menu-wrap">
+      <button className={`icon-btn app-menu-btn ${open ? 'on' : ''}`}
+        data-act="toggle-settings-menu" title="Menu" aria-label="Menu"
+        aria-expanded={open} disabled={takeover}>
+        <Icon markup={ICONS.gear} />
+        {requestCount > 0
+          ? <span className="app-menu-badge" aria-label={`${requestCount} pending requests`}></span>
+          : null}
+      </button>
+      {!takeover && open
+        ? <div className="settings-menu">
+            <div className="menu-version">Version {APP_VERSION}</div>
+            {/* The menu is the window's whole navigation now, so it has to
+                carry the way back as well as the way out: the inventory is
+                listed beside the two destinations that leave it, with the
+                current one checked. */}
+            <button className={`menu-item ${unifiedTab(state.tab) ? 'on' : ''}`}
+              aria-current={unifiedTab(state.tab) ? 'page' : undefined}
+              data-act="tab" data-tab="secrets">
+              <Icon markup={ICONS.key} /> Inventory
+            </button>
+            <button className={`menu-item ${state.tab === 'activity' ? 'on' : ''}`}
+              aria-current={state.tab === 'activity' ? 'page' : undefined}
+              data-act="tab" data-tab="activity">
+              <Icon markup={ICONS.activity} /> Activity Log
+              {requestCount > 0
+                ? <span className="menu-count">{requestCount}</span>
+                : null}
+            </button>
+            <button className={`menu-item ${state.tab === 'start' ? 'on' : ''}`}
+              aria-current={state.tab === 'start' ? 'page' : undefined}
+              data-act="tab" data-tab="start">
+              <Icon markup={ICONS.zap} /> Connect agents
+            </button>
+            <div className="menu-rule"></div>
+            <button className="menu-item" data-act="recheck-tools" disabled={recheckRunning}>
+              <Icon markup={ICONS.refresh} />
+              {recheckRunning ? 'Rechecking tools…' : 'Recheck all tools'}
+            </button>
+            <div className="menu-rule"></div>
+            <button className="menu-item" data-act="mode-tray">
+              <Icon markup={ICONS.menubar} /> Minimize to menu bar
+            </button>
+            <button className="menu-item" data-act="open-settings">
+              <Icon markup={ICONS.gear} /> Settings
+            </button>
+          </div>
+        : null}
+    </div>
   );
 }
 
 function viewLoadKeys(tab: Tab): LoadKey[] {
   switch (tab) {
     case 'start': return ['connections', 'identity', 'settings'];
-    case 'connections': return ['connections'];
-    case 'secrets': return ['secrets'];
+    // Both inventory routes render the merged list, so a failure in either
+    // half has to surface on either route.
+    case 'connections':
+    case 'secrets': return ['connections', 'secrets'];
     // Activity is also the requests surface, so it owns their loads too.
     case 'activity': return ['activity', 'sessions', 'approvals', 'elicitations', 'requests'];
   }
@@ -4309,132 +5029,94 @@ function LoadFailureBand(): ReactNode {
 function MainWindow(): ReactNode {
   const takeover = brokerTakeover(state.broker, state.remoteSetup.open);
   const requestCount = activeRequestCount(state.approvals, state.elicitations);
-  const pageTitle = state.tab === 'connections' ? 'Tools'
-    : state.tab === 'secrets' ? 'Credentials'
-    // The sidebar keeps the tab's title-case label; the page header speaks
-    // sentence case.
+  // Tools and credentials share one inventory page now, so it takes the
+  // neutral name of the thing it lists rather than either half's.
+  const pageTitle = unifiedTab(state.tab) ? 'Inventory'
     : state.tab === 'activity' ? 'Activity log'
     : tabLabel(state.tab);
 
-  const recheckRunning = state.connections.some((c) =>
-    c.mcp_path ? Boolean(state.mcpStatus[c.id]?.running) : Boolean(state.connTests[c.id]?.running));
   // The master–detail pages split their header into the same two columns as
   // the content below: title and search share the list column, the actions
   // ride the detail column.
-  const splitHead = state.tab === 'connections' || state.tab === 'secrets';
-  const pageSearch = state.tab === 'connections'
-    ? toolSearchShown()
-      ? <input id="tool-search" className="cat-search" type="search" placeholder="Search tools…"
-          aria-label="Search tools" value={state.toolSearch}
-          onChange={(e) => { state.toolSearch = e.currentTarget.value; render(); }} />
-      : null
-    : state.tab === 'secrets'
-      ? <input id="secret-search" className="cat-search" type="search" placeholder="Search credentials…"
-          aria-label="Search credentials" value={state.secretSearch}
-          onChange={(e) => { state.secretSearch = e.currentTarget.value; render(); }} />
-      : null;
-  const pageAction = state.tab === 'connections'
+  const splitHead = unifiedTab(state.tab);
+  // One inventory, one search field: it filters tools and credentials
+  // together, so it reads and writes the credential needle both halves use.
+  const pageSearch = splitHead
+    ? <input id="secret-search" className="cat-search tb-search" type="search"
+        placeholder="Search"
+        aria-label="Search tools and credentials" value={state.secretSearch}
+        onChange={(e) => { state.secretSearch = e.currentTarget.value; render(); }} />
+    : null;
+  const pageAction = splitHead
     ? <div className="dw-head-actions">
-        <button className="btn primary add-tool-btn" data-act="open-add-palette"
-          aria-haspopup="dialog">
-          <Icon markup={ICONS.plus} /> Add a tool
-        </button>
-        <button className={`btn recheck-tools-btn ${recheckRunning ? 'running' : ''}`}
-          data-act="recheck-tools" disabled={recheckRunning}
-          title="Recheck all tools and connections"
-          aria-label="Recheck all tools and connections">
-          <Icon markup={ICONS.refresh} />
-        </button>
+        <AddCredentialAction />
       </div>
-    : state.tab === 'secrets'
-      ? <div className="dw-head-actions">
-          <button className="btn primary add-tool-btn" data-act="open-add-secret">
-            <Icon markup={ICONS.plus} /> Add credential
-          </button>
-        </div>
-      : state.tab === 'activity'
-        ? <button className="btn" data-act="clear-activity-ask"
-            disabled={!state.activity.length}>Clear activity</button>
-        : null;
+    : state.tab === 'activity'
+      ? <button className="btn" data-act="clear-activity-ask"
+          disabled={!state.activity.length}>Clear activity</button>
+      : null;
 
   return (
     <>
       <div className="surface">
+        {/* The window owns one chrome bar. The traffic lights float over its
+            left edge (titleBarStyle "Overlay"), the title sits centred, and
+            the trailing cluster carries the vault switch, which broker is
+            being managed, and the app menu — the destinations the old
+            sidebar spent a whole column on now hang off the gear. */}
         <div className="dw-titlebar" data-tauri-drag-region="">
-          <span className="dw-title dw-title-center">Multitool</span>
-          <BrokerSwitch />
+          {/* Tauri's drag marker is not inherited by child elements. Repeat
+              it on non-interactive children so their painted areas and the
+              flex gaps around controls still move the window. */}
+          <span className="dw-title" data-tauri-drag-region="">Multitool</span>
+          {/* The inventory search rides the same bar rather than a second
+              header strip below it. Its add action joins the related vault
+              and broker controls in the trailing cluster. */}
+          {!takeover && splitHead
+            ? <div className="dw-toolbar-mid" data-tauri-drag-region="">
+                {pageSearch}
+              </div>
+            : null}
+          <div className="dw-titlebar-controls" data-tauri-drag-region="">
+            {!takeover && splitHead ? pageAction : null}
+            {splitHead ? <VaultSwitch /> : null}
+            {!takeover && !splitHead
+              ? <button className="broker-btn titlebar-back-btn" data-act="tab"
+                  data-tab="secrets">
+                  <Icon markup={ICONS.chevronLeft} /> Back
+                </button>
+              : null}
+            <BrokerSwitch />
+            <AppMenu takeover={Boolean(takeover)} requestCount={requestCount} />
+          </div>
         </div>
         <div className={`dw-body ${takeover === 'choose' ? 'first-run' : ''}`}>
-          <div className={`dw-side ${takeover ? 'disabled' : ''}`}>
-            <div className="dw-brand">
-              <div className="dd-appicon"><Icon markup={ICONS.appIcon} /></div>
-              <div><div className="dd-title">Multitool</div><BrokerReady /></div>
-            </div>
-            <div className="dw-nav">
-              {TABS.map((tab) => (
-                <button key={tab} className={`nav-item ${state.tab === tab ? 'on' : ''}`}
-                  data-act="tab" data-tab={tab} disabled={Boolean(takeover)}>
-                  <span className="nav-tab-label">{tabLabel(tab)}</span>
-                  {tab === 'activity' && requestCount > 0
-                    ? <span className="nav-count" aria-label={`${requestCount} pending requests`}>
-                        {requestCount}
-                      </span>
-                    : null}
-                </button>
-              ))}
-            </div>
-            <div className="dw-settings">
-              {!takeover && state.menuOpen && (
-                <div className="settings-menu">
-                  <div className="menu-version">Version {APP_VERSION}</div>
-                  <button className="menu-item" data-act="mode-tray">
-                    <Icon markup={ICONS.menubar} /> Minimize to menu bar
-                  </button>
-                  <button className="menu-item" data-act="open-settings">
-                    <Icon markup={ICONS.gear} /> Settings
-                  </button>
-                </div>
-              )}
-              <button className={`nav-item gear-btn ${state.menuOpen ? 'on' : ''}`}
-                data-act="toggle-settings-menu" title="Settings" aria-label="Settings"
-                disabled={Boolean(takeover)}>
-                <Icon markup={ICONS.gear} />
-              </button>
-              <ThemeButton className="nav-item theme-btn" />
-            </div>
-          </div>
           <div className="dw-main">
             {takeover
               ? <div className="content broker-takeover"><BrokerPane kind={takeover} /></div>
               : <>
-                  {state.tab !== 'start' && (
-                    // The credentials split needs more room than the reading
-                    // column; its header widens with it so search and Add
-                    // stay on the pane edge.
-                    <div className={`dw-head ${state.tab === 'secrets' ? 'is-wide' : ''} ${splitHead ? 'is-split' : ''}`}>
-                      {splitHead
-                        ? <div className="dw-head-list-col">
-                            <div className="dw-head-title"><h2>{pageTitle}</h2></div>
-                            {pageSearch}
-                          </div>
-                        : <div className="dw-head-title">
-                            <h2>{pageTitle}</h2>
-                            {state.tab === 'activity'
-                              ? <span className={`request-total ${requestCount ? 'has-requests' : ''}`}
-                                  aria-live="polite">
-                                  {requestCount} pending
-                                </span>
-                              : null}
-                          </div>}
+                  {!splitHead && (
+                    <div className="dw-head">
+                      <div className="dw-head-title">
+                        <h2>{pageTitle}</h2>
+                        {state.tab === 'activity'
+                          ? <span className={`request-total ${requestCount ? 'has-requests' : ''}`}
+                              aria-live="polite">
+                              {requestCount} pending
+                            </span>
+                          : null}
+                      </div>
                       {pageAction}
                     </div>
                   )}
-                  {/* The split pages seat the requests banner inside their
-                      list column instead of the page band. */}
-                  {state.tab === 'start' || splitHead ? null : <GlobalSections />}
+                  {/* The notice is window chrome: it spans the content pane
+                      above the split rather than riding inside one column.
+                      Connect agents is the exception — it embeds its own. */}
+                  {state.tab === 'start' ? null : <GlobalSections />}
                   <LoadFailureBand />
-                  <div className="content"><TabContent /></div>
-                  {state.tab === 'secrets' ? <SecretsStatusBar /> : null}
+                  <div className={`content${splitHead ? ' inventory-content' : ''}`}>
+                    <TabContent />
+                  </div>
                 </>}
           </div>
         </div>
@@ -4446,6 +5128,73 @@ function MainWindow(): ReactNode {
   );
 }
 
+/** The tray gear's popover: the destinations and commands the panel would
+ * otherwise have no path to. The desktop window's gear (AppMenu) carries the
+ * window's navigation; this one carries the panel's two views, Settings, and
+ * Quit — which the icon's context menu offers but the open panel itself
+ * never did. Appearance rides along so the one at-a-glance preference
+ * doesn't cost a trip into the Settings sheet.
+ *
+ * Connecting an agent is deliberately not here. It is a sit-down task with
+ * config paths to copy and a key to place, so it belongs to the window; the
+ * panel does not offer it and does not navigate to it (see TabContent). */
+function DropdownMenu({ requestCount }: { requestCount: number }): ReactNode {
+  const open = state.menuOpen;
+  const dark = currentTheme() === 'dark';
+  return (
+    <div className="app-menu-wrap">
+      <button className={`icon-btn app-menu-btn ${open ? 'on' : ''}`}
+        data-act="toggle-settings-menu" title="Menu" aria-label="Menu"
+        aria-expanded={open}>
+        <Icon markup={ICONS.gear} />
+        {requestCount > 0
+          ? <span className="app-menu-badge" aria-label={`${requestCount} pending requests`}></span>
+          : null}
+      </button>
+      {open
+        ? <div className="settings-menu">
+            <div className="menu-version">Multitool {APP_VERSION}</div>
+            {/* The menu is the panel's navigation, so it carries the way back
+                as well as the way out: both views are listed with the current
+                one checked. */}
+            <button className={`menu-item ${state.tab !== 'activity' ? 'on' : ''}`}
+              aria-current={state.tab !== 'activity' ? 'page' : undefined}
+              data-act="tab" data-tab="secrets">
+              <Icon markup={ICONS.key} /> Inventory
+            </button>
+            <button className={`menu-item ${state.tab === 'activity' ? 'on' : ''}`}
+              aria-current={state.tab === 'activity' ? 'page' : undefined}
+              data-act="tab" data-tab="activity">
+              <Icon markup={ICONS.activity} /> Activity Log
+              {requestCount > 0
+                ? <span className="menu-count">{requestCount}</span>
+                : null}
+            </button>
+            <div className="menu-rule"></div>
+            <div className="menu-seg-row">
+              <label id="dd-menu-appearance">Appearance</label>
+              <div className="seg in-form" role="radiogroup" aria-labelledby="dd-menu-appearance">
+                <button className={`seg-btn ${dark ? '' : 'on'}`} data-act="set-theme"
+                  data-theme-mode="light" role="radio" aria-checked={!dark}>Light</button>
+                <button className={`seg-btn ${dark ? 'on' : ''}`} data-act="set-theme"
+                  data-theme-mode="dark" role="radio" aria-checked={dark}>Dark</button>
+              </div>
+            </div>
+            <div className="menu-rule"></div>
+            <button className="menu-item" data-act="open-settings">
+              <Icon markup={ICONS.gear} /> Settings
+            </button>
+            {isNativeHost()
+              ? <button className="menu-item" data-act="quit-app">
+                  <Icon markup={ICONS.power} /> Quit Multitool
+                </button>
+              : null}
+          </div>
+        : null}
+    </div>
+  );
+}
+
 function DropdownWindow(): ReactNode {
   const takeover = brokerTakeover(state.broker, state.remoteSetup.open);
   const requestCount = activeRequestCount(state.approvals, state.elicitations);
@@ -4453,8 +5202,9 @@ function DropdownWindow(): ReactNode {
     return (
       <div className="surface dropdown-surface">
         <div className="dd-head">
-          <div className="dd-appicon"><Icon markup={ICONS.appIcon} /></div>
-          <div className="dd-identity"><div className="dd-title">Multitool</div></div>
+          <div className="dd-identity dd-identity-line">
+            <div className="dd-title">Multitool</div>
+          </div>
           <button className="icon-btn" title="Open as a window" aria-label="Open as a window"
             data-act="mode-window"><Icon markup={ICONS.expand} /></button>
         </div>
@@ -4465,33 +5215,26 @@ function DropdownWindow(): ReactNode {
   return (
     <>
       <div className="surface dropdown-surface">
+        {/* You clicked the Multitool icon to get here, so the panel does not
+            repeat a large brand block: one line carries the status dot, the
+            name, and which broker is being managed. */}
         <div className="dd-head">
-          <div className="dd-appicon"><Icon markup={ICONS.appIcon} /></div>
-          <div className="dd-identity">
-            <div className="dd-title">Multitool</div><BrokerReady />
-          </div>
+          <BrokerIdentityLine />
+          {/* 1Password / external vaults stay in the main window titlebar on
+              the Credentials tab — the menubar is too tight for that surface.
+              Activity used to spend a header slot of its own; it is a
+              destination like the others now, so it lives in the menu and the
+              gear carries the waiting-request mark. */}
           <button className="icon-btn" title="Open as a window" aria-label="Open as a window"
             data-act="mode-window"><Icon markup={ICONS.expand} /></button>
-          <ThemeButton className="icon-btn" />
-          <button className="icon-btn" title="Settings" aria-label="Settings"
-            data-act="open-settings"><Icon markup={ICONS.gear} /></button>
-        </div>
-        <div className="seg">
-          {DROPDOWN_TABS.map((tab) => (
-            <button key={tab} className={`seg-btn ${state.tab === tab ? 'on' : ''}`}
-              data-act="tab" data-tab={tab}>
-              <span>{tabLabel(tab)}</span>
-              {tab === 'activity' && requestCount > 0
-                ? <span className="seg-count">{requestCount}</span>
-                : null}
-            </button>
-          ))}
+          <DropdownMenu requestCount={requestCount} />
         </div>
         <div className="dropdown-content-container">
           {state.tab === 'start' ? null : <GlobalSections />}
           <LoadFailureBand />
-          <div className="content dd-content"><TabContent /></div>
-          {state.tab === 'secrets' ? <SecretsStatusBar /> : null}
+          <div className={`content dd-content${state.tab === 'activity' ? ' activity-content' : ''}`}>
+            <TabContent />
+          </div>
         </div>
       </div>
       <><AddToolPalette /><Sheets /><ConfirmSheet /></>
@@ -4537,8 +5280,8 @@ function SecretContextMenu(): ReactNode {
           ? <button className="menu-item" data-act="unreveal-secret" data-id={secret.id}>
               <Icon markup={ICONS.eyeOff} /> Unreveal {noun}
             </button>
-          : <button className="menu-item" data-act="reveal-secret-ask" data-id={secret.id}>
-              <Icon markup={ICONS.eye} /> Reveal {noun}…
+          : <button className="menu-item" data-act="reveal-secret" data-id={secret.id}>
+              <Icon markup={ICONS.eye} /> Reveal {noun}
             </button>}
         <div className="cred-menu-divider" role="separator"></div>
         <button className="menu-item" data-act="edit-secret" data-id={secret.id}>
@@ -4550,24 +5293,6 @@ function SecretContextMenu(): ReactNode {
       </div>
     </div>,
     document.body,
-  );
-}
-
-/** The detail-pane action menu is portaled out of its scrolling card so the
- * card cannot clip it. positionConnActionMenu keeps it attached to the ⋯
- * trigger and flips it above when there is not enough viewport below. */
-function ConnectionActionMenu(): ReactNode {
-  const connection = !state.connMenuPoint && state.connMenuOpen
-    ? state.connections.find((candidate) => candidate.id === state.connMenuOpen)
-    : null;
-  if (!connection) return null;
-  return createPortal(
-    <div className="tile-menu-wrap conn-action-menu-wrap" data-conn={connection.id}>
-      <div className="tile-menu" aria-label={`Options for ${connection.name}`}>
-        <ConnectionMenuItems connection={connection} />
-      </div>
-    </div>,
-    overlays(),
   );
 }
 
@@ -4705,10 +5430,37 @@ function receiveLockState(next: LockState): void {
   if (booted) render();
 }
 
-function AppRoot(): ReactNode {
+function AttentionHud(): ReactNode {
+  const payload = attentionHudPayload;
+  if (!payload) return <div className="attention-hud-empty" />;
+  const noun = payload.count === 1 ? 'request' : 'requests';
+  return (
+    <div className={`attention-hud-shell${payload.urgent ? ' urgent' : ''}`}
+      role="status" aria-live="polite">
+      <div className="attention-hud-icon" aria-hidden="true">
+        <Icon markup={ICONS.appIcon} />
+        <span />
+      </div>
+      <div className="attention-hud-copy">
+        <strong>{payload.urgent ? 'Request needs attention' : 'Approval waiting'}</strong>
+        <span>{payload.count} {noun} waiting in Multitool.</span>
+      </div>
+      <button className="attention-hud-review" onClick={() => {
+        void invoke('ui_review_attention_hud').catch(console.error);
+      }}>Review</button>
+      <button className="attention-hud-dismiss" title="Dismiss popup" aria-label="Dismiss popup"
+        onClick={() => {
+          attentionHudPayload = null;
+          render();
+          void invoke('ui_hide_attention_hud').catch(console.error);
+        }}>×</button>
+    </div>
+  );
+}
+
+function InteractiveAppRoot(): ReactNode {
   // Subscribes this root to store publications; the revision itself is not
   // used as a key — the windows reconcile in place rather than remounting.
-  useUiRevision(uiStore);
   useBrokerQueryRevision();
   useExternalAppEvents();
   // Waiting requests render on the Activity tab, so that is when the core
@@ -4738,12 +5490,20 @@ function AppRoot(): ReactNode {
       onDragEnd={handleConnectionDragEnd}>
       <RequestLiveRegion />
       {mode === 'dropdown' ? <DropdownWindow /> : <MainWindow />}
-      <ConnectionActionMenu />
       <ConnectionContextMenu />
       <SecretContextMenu />
+      <DropdownTotpMenu />
       <LockOverlay />
     </div>
   );
+}
+
+function AppRoot(): ReactNode {
+  // Every surface publishes through the same tiny external store. The HUD
+  // stops here: it never boots broker data or shares the main/dropdown view
+  // state that can open sheets and menus.
+  useUiRevision(uiStore);
+  return mode === 'attention' ? <AttentionHud /> : <InteractiveAppRoot />;
 }
 
 function RequestLiveRegion(): ReactNode {
@@ -4897,54 +5657,6 @@ function DeleteSecretConfirm(): ReactNode {
   );
 }
 
-// A reveal puts the whole credential on the screen, so it is asked for
-// rather than toggled: the confirm says what will be visible and for how
-// long, since the window drops the value again on its own.
-function RevealSecretConfirm(): ReactNode {
-  const confirm = state.confirm;
-  if (!confirm || confirm.kind !== 'reveal-secret') return null;
-  const secret = state.secrets.find((candidate) => candidate.id === confirm.id);
-  const name = secret ? credentialDisplayName(secret) : 'this credential';
-  return (
-    <>
-      <h3 id="reveal-secret-title">Reveal {name}?</h3>
-      <p>The full value will be shown in the window — visible to anyone looking
-        at your screen, and to anything recording it. It stays on screen until
-        you unreveal it, leave this tab, or the window loses focus.</p>
-      <div className="sheet-actions">
-        <button className="btn" data-act="confirm-cancel">Cancel</button>
-        <button className="btn primary" data-act="reveal-secret-confirm"
-          data-id={String(confirm.id ?? '')}>Reveal</button>
-      </div>
-    </>
-  );
-}
-
-// Editing starts with only a placeholder. Asking to expose the saved value
-// deliberately takes the same confirmed, broker-audited release path as the
-// credential row's Reveal action.
-function RevealEditSecretConfirm(): ReactNode {
-  const confirm = state.confirm;
-  if (!confirm || confirm.kind !== 'reveal-edit-secret') return null;
-  const secret = state.secrets.find((candidate) => candidate.id === confirm.id);
-  const password = secret?.kind === 'password';
-  const noun = password ? 'password' : 'secret';
-  const name = secret ? credentialDisplayName(secret) : `this ${noun}`;
-  return (
-    <>
-      <h3 id="reveal-edit-secret-title">Show {noun} for {name}?</h3>
-      <p>The saved {noun} will be placed in the edit form — visible to anyone
-        looking at your screen, and to anything recording it. It will be hidden
-        again when you uncheck the box or the window loses focus.</p>
-      <div className="sheet-actions">
-        <button className="btn" data-act="confirm-cancel">Cancel</button>
-        <button className="btn primary" data-act="reveal-edit-secret-confirm"
-          data-id={String(confirm.id ?? '')}>Show {noun}</button>
-      </div>
-    </>
-  );
-}
-
 // In-use credentials cannot be deleted until their tools are gone; offer a
 // path to each tool’s delete confirm instead of an inline table-row swap.
 function SecretInUseConfirm(): ReactNode {
@@ -5048,22 +5760,6 @@ function ConfirmSheet(): ReactNode {
       </Sheet>
     );
   }
-  if (kind === 'reveal-secret') {
-    return (
-      <Sheet titleId="reveal-secret-title" className="wide confirm-sheet"
-        backdropAction="confirm-cancel">
-        <RevealSecretConfirm />
-      </Sheet>
-    );
-  }
-  if (kind === 'reveal-edit-secret') {
-    return (
-      <Sheet titleId="reveal-edit-secret-title" className="wide confirm-sheet"
-        backdropAction="confirm-cancel">
-        <RevealEditSecretConfirm />
-      </Sheet>
-    );
-  }
   if (kind === 'del-secret-inuse') {
     return (
       <Sheet titleId="del-secret-inuse-title" className="wide confirm-sheet"
@@ -5094,10 +5790,13 @@ function ConfirmSheet(): ReactNode {
 /** The open sheet: converted forms render as controlled TSX, the rest as
  * React-owned view tree. */
 function Sheets(): ReactNode {
-  if (!state.sheet) return null;
-  switch (state.sheet.kind) {
+  const sheet = activeSheet();
+  if (!sheet) return null;
+  switch (sheet.kind) {
     case 'add-secret':
-      return <Sheet titleId="secret-sheet-title" className="wide"><SecretSheet editing={false} /></Sheet>;
+      return <Sheet titleId="secret-sheet-title" className="wide add-secret-sheet">
+        <SecretSheet editing={false} />
+      </Sheet>;
     case 'edit-secret':
       return <Sheet titleId="secret-sheet-title" className="wide"><SecretSheet editing /></Sheet>;
     case 'onepassword':
@@ -5345,28 +6044,44 @@ function ApprovalSheet(): ReactNode {
     : null;
   return (
     <>
-      <div className="elicit-dlg-ico"><Icon markup={ICONS.shieldAlert} /></div>
-      <h3 id="approval-title" className="elicit-dlg-title untrusted-identity" dir="auto">
-        {agentLabel(approval.agent)} {approvalUnit(approval)}
+      <div className="elicit-dlg-ico"><Icon markup={ICONS.triangleAlert} /></div>
+      <h3 id="approval-title" className="elicit-dlg-title">
+        Allow <span className="untrusted-identity" dir="auto">
+          “{approvalAgentName(approval.agent)}”
+        </span> to use <span className="untrusted-identity" dir="auto">
+          {approvalToolName(approval.connection)}
+        </span>?
       </h3>
-      <div className="elicit-dlg-context untrusted-identity" dir="auto">
-        {approval.connection} · {approval.target}
+      <div className="elicit-dlg-context approval-permission-summary">
+        {approvalPermissionSummary(approval)}
       </div>
       <dl className="approval-facts">
+        <div>
+          <dt>Agent</dt>
+          <dd className="untrusted-identity" dir="auto">
+            {approvalAgentName(approval.agent)}
+          </dd>
+        </div>
+        <div>
+          <dt>Tool</dt>
+          <dd className="untrusted-identity" dir="auto">
+            {approvalToolName(approval.connection)}
+          </dd>
+        </div>
+        <div>
+          <dt>Wants to</dt>
+          <dd className="untrusted-identity" dir="auto">{approvalActionLabel(approval)}</dd>
+        </div>
         <div>
           <dt>{credentialNames.length === 1 ? 'Credential' : 'Credentials'}</dt>
           <dd className="untrusted-identity" dir="auto">
             {credentialNames.length ? credentialNames.join(', ') : 'None'}
           </dd>
         </div>
-        {approval.method
-          ? <div><dt>Method</dt><dd><code>{approval.method}</code></dd></div>
-          : null}
-        {approval.path
-          ? <div><dt>Path</dt><dd><code className="untrusted-identity" dir="auto">
-              {approval.path}
-            </code></dd></div>
-          : null}
+        <div>
+          <dt>Requested</dt>
+          <dd title={absTime(approval.requested_at)}>{relTimeAgo(approval.requested_at)}</dd>
+        </div>
         {approval.host_key_fingerprint
           ? <div><dt>Host key</dt><dd><code>{approval.host_key_fingerprint}</code></dd></div>
           : null}
@@ -5377,13 +6092,7 @@ function ApprovalSheet(): ReactNode {
             : 'approval-consequence'}
             role="status">{hostKeyProvenance}</div>
         : null}
-      {/* The call itself, verbatim and inert: it is the agent's text. */}
-      <div className="approval-call">
-        <div className="approval-summary untrusted-identity" dir="auto">{approval.summary}</div>
-        {approval.detail
-          ? <pre className="approval-detail untrusted-identity" dir="auto">{approval.detail}</pre>
-          : null}
-      </div>
+      <ApprovalRawRequest key={approval.id} approval={approval} />
       {/* What Approve actually hands over. Outside the block above on
           purpose: that is the agent's text, this is ours, and the whole
           point is that it cannot be reworded by the thing being approved. */}
@@ -5395,28 +6104,57 @@ function ApprovalSheet(): ReactNode {
           </div>
         )
         : null}
-      <div className="elicit-dlg-context approval-meta">
-        {approval.waiting > 1
-          ? `${approval.waiting} calls are waiting on this answer · `
-          : ''}
-        Refused automatically in {timeLeft(approval.expires_at)}
-      </div>
+      {approval.waiting > 1
+        ? <div className="elicit-dlg-context approval-meta">
+            {approval.waiting} calls are waiting on this answer
+          </div>
+        : null}
       <div className="sheet-actions elicit-dlg-actions approval-actions">
         <button className="btn elicit-refuse-btn" data-act="approval-deny"
           data-id={approval.id} disabled={answering}>Deny</button>
-        <span className="elicit-dlg-spacer"></span>
         {!hostKeyDecision
           ? <button className="btn" data-act="approval-approve-all"
               data-id={approval.id} disabled={answering}
               title="Allow this call and turn traffic confirmation off for this tool">Stop asking</button>
           : null}
+        <span className="elicit-dlg-spacer"></span>
+        {!hostKeyDecision
+          ? <button className="btn" data-act="approval-approve-once"
+              data-id={approval.id} disabled={answering}
+              title="Allow only this call; the next one asks again">Approve Once</button>
+          : null}
         <button className="btn primary" data-act="approval-approve-window"
           data-id={approval.id} disabled={answering}>
-          {answering ? 'Answering…' : hostKeyDecision ? 'Trust and pin' : `Approve ${minutes}m`}
+          {answering
+            ? 'Answering…'
+            : hostKeyDecision ? 'Trust and pin'
+            : `Approve for ${minutes} minute${minutes === 1 ? '' : 's'}`}
         </button>
       </div>
     </>
   );
+}
+
+/** The agent's literal request remains available for auditability, but it is
+ * no longer the first thing the user has to parse to make the decision. */
+function ApprovalRawRequest({ approval }: { approval: Approval }): ReactNode {
+  const [open, setOpen] = useState(false);
+  return <div className="approval-raw-wrap">
+    <button type="button" className="approval-raw-toggle"
+      aria-expanded={open} aria-controls="approval-raw-request"
+      onClick={() => setOpen((current) => !current)}>
+      <Icon markup={open ? ICONS.chevronDown : ICONS.chevronRight} />
+      {open ? 'Hide raw request' : 'Show raw request'}
+    </button>
+    {open
+      ? <div className="approval-call" id="approval-raw-request">
+          <div className="approval-summary untrusted-identity" dir="auto">{approval.summary}</div>
+          {approval.detail
+            ? <pre className="approval-detail untrusted-identity" dir="auto">{approval.detail}</pre>
+            : null}
+        </div>
+      : null}
+  </div>;
 }
 
 /**
@@ -5622,7 +6360,8 @@ function setDraftField(key: keyof ConnectionDraft & string, errKey: string, valu
 }
 
 /** Which shape the credential sheet is showing. Editing locks the type to
- * the record's; adding follows the segment (secret unless preselected). */
+ * the record's; adding uses the kind chosen from the Add-credential menu
+ * (or secret when the broker has no typed credentials). */
 function sheetSecretKind(editing: boolean, secret: SecretSummary | null): SecretKind {
   if (editing) {
     if (secret) return secret.kind === 'password' ? 'password' : 'secret';
@@ -5631,6 +6370,104 @@ function sheetSecretKind(editing: boolean, secret: SecretSummary | null): Secret
   return supportsTypedCredentials(state.broker) && state.draft.secretKind === 'password'
     ? 'password'
     : 'secret';
+}
+
+/** Credentials page primary action: a typed broker opens a Password / Secret
+ * menu; a legacy untyped broker goes straight to the secret form. */
+function AddCredentialAction(): ReactNode {
+  if (!supportsTypedCredentials(state.broker)) {
+    return (
+      <button className="btn primary add-tool-btn" data-act="open-add-secret">
+        <Icon markup={ICONS.plus} /> Add secret
+      </button>
+    );
+  }
+  // A tool is a different kind of thing from a credential — it is the only
+  // entry that opens the catalog rather than a form — so it sits below a
+  // rule instead of being listed as a third credential type.
+  const addTool = (
+    <>
+      <div className="cred-opt-rule"></div>
+      <button type="button" className="cred-opt" role="option"
+        data-act="open-add-palette" aria-haspopup="dialog">
+        <span className="cred-opt-col"><span className="cred-name">Add tool</span></span>
+      </button>
+    </>
+  );
+  const open = state.formMenuOpen === 'add-credential-menu';
+  return (
+    <div className="add-credential-menu-wrap">
+      <button type="button" id="add-credential-menu"
+        className={`btn primary add-tool-btn ${open ? 'on' : ''}`}
+        data-act="toggle-add-credential-menu"
+        aria-haspopup="listbox" aria-expanded={open}
+        title="Add a credential or tool" aria-label="Add a credential or tool">
+        <Icon markup={ICONS.plus} />
+      </button>
+      {open
+        ? createPortal(
+            <div className="cred-menu add-credential-menu" role="listbox"
+              aria-label="Credential type">
+              <button type="button" className="cred-opt" role="option"
+                data-act="open-add-secret" data-kind="password">
+                <span className="cred-opt-col"><span className="cred-name">Add password</span></span>
+              </button>
+              <button type="button" className="cred-opt" role="option"
+                data-act="open-add-secret" data-kind="secret">
+                <span className="cred-opt-col"><span className="cred-name">Add secret</span></span>
+              </button>
+              {addTool}
+            </div>,
+            overlays(),
+          )
+        : null}
+    </div>
+  );
+}
+
+/** Reveal directly from an inventory action. The broker still audits the
+ * release and the presentation epoch still prevents a late response from
+ * repainting a value after blur or navigation. */
+async function revealSecret(id: string): Promise<void> {
+  state.secretMenuOpen = null;
+  state.secretMenuPoint = null;
+  render();
+  const epoch = brokerEpoch;
+  const presentationEpoch = sensitivePresentationEpoch;
+  try {
+    const value = await invoke('reveal_secret', { id });
+    if (!brokerEpochIsCurrent(epoch) || presentationEpoch !== sensitivePresentationEpoch) return;
+    state.reveal[id] = value;
+    if (mode === 'dropdown') {
+      state.dropdownSecretOpen = id;
+    } else {
+      state.selectedSecret = id;
+      state.selectedConn = null;
+      state.secretDetailOpen = true;
+    }
+    render();
+  } catch (error) {
+    if (brokerEpochIsCurrent(epoch)) toast('⚠ ' + errorMessage(error));
+  }
+}
+
+/** Put a stored value into its existing edit sheet without an intermediate
+ * app confirmation. Dismissing or replacing the sheet while the request is
+ * in flight still discards the released value. */
+async function revealSecretInEditor(id: string): Promise<void> {
+  const epoch = brokerEpoch;
+  const presentationEpoch = sensitivePresentationEpoch;
+  try {
+    const value = await invoke('reveal_secret', { id });
+    if (!brokerEpochIsCurrent(epoch) || presentationEpoch !== sensitivePresentationEpoch) return;
+    if (state.sheet?.kind !== 'edit-secret' || state.sheet.id !== id) return;
+    state.draft.value = value;
+    state.draft.secretValueModified = false;
+    state.draft.showCredentialValue = true;
+    render();
+  } catch (error) {
+    if (brokerEpochIsCurrent(epoch)) toast('⚠ ' + errorMessage(error));
+  }
 }
 
 function SecretSheet({ editing }: { editing: boolean }): ReactNode {
@@ -5648,7 +6485,7 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
     : focus === 'value' ? 'Change password'
     : focus === 'totp' ? (secret?.totp ? 'Change 2FA code' : 'Set up 2FA code')
     : editing ? (password ? 'Edit password' : 'Edit secret')
-    : supportsTypedCredentials(state.broker) ? 'Add credential' : 'Add secret';
+    : password ? 'Add password' : 'Add secret';
   const showValue = Boolean(d.showCredentialValue);
   const generationFormat = d.passwordGenerationFormat ?? 'strong';
   const generatorMenuOpen = state.formMenuOpen === 'password-generator-menu';
@@ -5662,8 +6499,8 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
       return;
     }
     if (editing && !state.draft.secretValueModified) {
-      state.confirm = { kind: 'reveal-edit-secret', id: state.sheet?.id };
-      render();
+      const id = state.sheet?.id;
+      if (id) void revealSecretInEditor(String(id));
       return;
     }
     state.draft.showCredentialValue = true;
@@ -5681,8 +6518,7 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
       }} aria-label={label} />
   );
   // The eye is a styled checkbox, not a button, so the visibility state keeps
-  // checkbox semantics for assistive tech (and the reveal-confirm flow can
-  // decline the check without faking a pressed state).
+  // checkbox semantics for assistive tech.
   const visibilityControl = (
     <label className="sf-eye" title={`${showValue ? 'Hide' : 'Show'} ${password ? 'password' : 'secret'}`}>
       <input type="checkbox" className="sr-only" checked={showValue}
@@ -5694,14 +6530,6 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
   return (
     <>
       <h3 id="secret-sheet-title">{title}</h3>
-      {!editing && supportsTypedCredentials(state.broker)
-        ? <div className="seg in-form secret-kind-seg" role="radiogroup" aria-label="Credential type">
-            <button className={`seg-btn ${password ? 'on' : ''}`} role="radio"
-              aria-checked={password} data-act="secret-kind" data-kind="password">Password</button>
-            <button className={`seg-btn ${!password ? 'on' : ''}`} role="radio"
-              aria-checked={!password} data-act="secret-kind" data-kind="secret">Secret</button>
-          </div>
-        : null}
       {password
         ? <div className="sf-group">
             {focus ? null : <>
@@ -5788,12 +6616,24 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
                     supersedeTotpQrImageScan();
                     state.draft.removeTotp = false;
                     state.draft.totpFromQrImage = false;
+                    clearTotpQrPreview();
                     setDraftField('totp', 'totp', e.currentTarget.value);
                   }} />
               </div>
-              <FieldError k="totp" />
+              {/* Preview strip owns the error copy when a failed capture is shown. */}
+              {d.totpQrPreviewUrl && !d.totpFromQrImage
+                ? null
+                : d.totpCaptureNeedsSettings && state.sheetErrors.totp
+                  ? <div className="field-error totp-capture-error">
+                      <span>{state.sheetErrors.totp}</span>{' '}
+                      <button type="button" className="field-error-link"
+                        data-act="totp-open-screen-settings">Open Settings</button>
+                    </div>
+                  : <FieldError k="totp" />}
               {d.totpFromQrImage
-                ? <div className="field-hint">Scanned from the QR code image</div>
+                ? <div className="field-hint">{d.totpQrSource === 'screen'
+                    ? 'Scanned from screen'
+                    : 'Scanned from the QR code image'}</div>
                 : null}
               <div className="totp-qr-row">
                 {/* The picker input stays in the tree (not created on demand)
@@ -5803,14 +6643,52 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
                   onChange={(e) => {
                     const file = e.currentTarget.files?.[0];
                     e.currentTarget.value = '';
-                    if (file) void fillTotpFromQrImage(file);
+                    if (file) void fillTotpFromQrImage(file, 'file');
                   }} />
+                {isNativeHost()
+                  ? <button type="button" className="btn sm totp-qr-btn"
+                      data-act="totp-qr-screen" disabled={Boolean(d.totpQrImageScanning)}>
+                      <Icon markup={ICONS.scanSearch} />
+                      <span>{d.totpQrImageScanning && d.totpQrSource === 'screen'
+                        ? 'Scanning…'
+                        : 'Capture from Screen…'}</span>
+                    </button>
+                  : null}
                 <button type="button" className="btn sm totp-qr-btn"
                   data-act="totp-qr-image" disabled={Boolean(d.totpQrImageScanning)}>
                   <Icon markup={ICONS.qrCode} />
-                  <span>{d.totpQrImageScanning ? 'Scanning…' : 'Choose QR Code Image…'}</span>
+                  <span>{d.totpQrImageScanning && d.totpQrSource !== 'screen'
+                    ? 'Scanning…'
+                    : 'Choose QR Code Image…'}</span>
                 </button>
               </div>
+              {d.totpQrPreviewUrl && !d.totpFromQrImage
+                ? <div className="totp-qr-preview">
+                    <img className="totp-qr-preview-thumb" src={d.totpQrPreviewUrl}
+                      alt="Captured region" />
+                    <div className="totp-qr-preview-body">
+                      <div className="totp-qr-preview-label">
+                        {d.totpQrSource === 'screen' ? 'Captured from screen' : 'Chosen image'}
+                      </div>
+                      {state.sheetErrors.totp
+                        ? <div className="totp-qr-preview-status">{state.sheetErrors.totp}</div>
+                        : null}
+                      <div className="totp-qr-preview-actions">
+                        {d.totpQrSource === 'screen'
+                          ? <button type="button" className="btn sm"
+                              data-act="totp-qr-screen"
+                              disabled={Boolean(d.totpQrImageScanning)}>Try again</button>
+                          : null}
+                        {d.totpCaptureNeedsSettings
+                          ? <button type="button" className="btn sm"
+                              data-act="totp-open-screen-settings">Open Settings</button>
+                          : null}
+                        <button type="button" className="btn sm ghost"
+                          data-act="totp-qr-preview-dismiss">Dismiss</button>
+                      </div>
+                    </div>
+                  </div>
+                : null}
               {secret?.totp
                 ? <label className="totp-remove-check">
                     <input type="checkbox" checked={Boolean(d.removeTotp)}
@@ -5820,6 +6698,7 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
                         if (e.currentTarget.checked) {
                           state.draft.totp = '';
                           state.draft.totpFromQrImage = false;
+                          clearTotpQrPreview();
                         }
                         delete state.sheetErrors.totp;
                         render();
@@ -5843,16 +6722,34 @@ function SecretSheet({ editing }: { editing: boolean }): ReactNode {
               {linked ? null : <div className="sf-row">
                 <div className="sf-line">
                   <label className="sf-lbl" htmlFor="f-value">{editing ? 'New value' : 'Value'}</label>
-                  {valueField('Value', editing ? EDIT_SECRET_MASK : 'Your secret (saved in Keychain)')}
+                  {valueField('Value', editing ? EDIT_SECRET_MASK : 'Stored in Keychain')}
                   {visibilityControl}
                 </div>
                 <FieldError k="value" />
               </div>}
+              {/* Which desktop list the secret lives in. Only the secret's
+                  own editor moves it — deliberately absent from the
+                  connection sheets, which create Connection Secrets. */}
+              {editing ? <div className="sf-row">
+                <div className="sf-line secret-origin-line">
+                  <label className="sf-lbl" htmlFor="f-secret-origin">Group</label>
+                  <CustomSelect id="f-secret-origin"
+                    options={[['user', 'Secrets'], ['connection', 'Connection Secrets']]}
+                    selectedValue={d.secretOrigin ?? 'user'}
+                    onSelect={(value) => {
+                      state.draft.secretOrigin = value === 'connection' ? 'connection' : 'user';
+                      render();
+                    }} />
+                </div>
+              </div> : null}
             </div>
-            {linked ? <div className="linked-secret-source">
-              <span><Icon markup={ICONS.onepassword} /></span>
-              <div><b>{linked.integration_label}</b>
-                <small>{linked.vault_label} › {linked.item_label} › {linked.field_label}</small></div>
+            {linked ? <div className="linked-secret-source-wrap">
+              <div className="linked-secret-source-label">Synced from external source:</div>
+              <div className="linked-secret-source">
+                <span><Icon markup={ICONS.onepassword} /></span>
+                <div><b>{linked.integration_label}</b>
+                  <small>{linked.vault_label} › {linked.item_label} › {linked.field_label}</small></div>
+              </div>
             </div> : null}
           </>}
       <FormGlobalError />
@@ -7999,75 +8896,123 @@ function receiveMcpAuth(auth: McpAuthState): void {
 function SettingsSheet(): ReactNode {
   const s = state.settings;
   const notifications = state.notificationSettings;
-  const notificationModeBtn = (
-    value: NotificationSettings['mode'],
-    label: string,
-  ): ReactNode => (
-    <button className={`seg-btn ${notifications.mode === value ? 'on' : ''}`}
-      data-act="set-notification-mode" data-id={value} role="radio"
-      aria-checked={notifications.mode === value}>{label}</button>
-  );
-  const notificationRow = <div className="set-row notification-setting"><div className="set-txt">
-      <div className="st-title">Request notifications</div>
-      <div className="st-sub">Native notifications are delivered by this computer and never include request details. Window only still brings the waiting requests forward.</div></div>
-      <div className="seg in-form notification-modes" role="radiogroup" aria-label="Request notifications">
-        {notificationModeBtn('off', 'Window only')}
-        {notificationModeBtn('when_hidden', 'When away')}
-        {notificationModeBtn('always', 'Always')}
-      </div></div>;
   const notificationWarning = notifications.available ? null
     : <div className="notification-warning" role="status">
-      <b>Native notifications are unavailable.</b>
-      <span>{notifications.unavailableReason || 'Use the Request Inbox for waiting requests.'}</span>
+      <b>Notifications unavailable.</b>
+      <span>{notifications.unavailableReason || 'Open Multitool for waiting requests.'}</span>
       {notifications.canRequestPermission
         ? <button className="cd-live-link" data-act="request-notification-permission">Enable notifications</button>
         : notifications.canOpenSystemSettings
         ? <button className="cd-live-link" data-act="open-notification-settings">Open notification settings</button>
         : null}
     </div>;
-  const notificationPreviewRow = notifications.mode === 'off' ? null
-    : <div className="set-row"><div className="set-txt"><div className="st-title">Show agent and tool names</div>
-      <div className="st-sub">Include only those names in notifications. Targets, summaries, and arguments always stay in the Inbox.</div></div>
-      <button className={`switch ${notifications.showContext ? 'on' : ''}`}
-        data-act="toggle-notification-context" role="checkbox"
-        aria-label="Show agent and tool names in notifications"
-        aria-checked={notifications.showContext}></button></div>;
-  const notificationSoundRow = notifications.mode === 'off' ? null
-    : <div className="set-row"><div className="set-txt"><div className="st-title">Play a sound</div>
-      <div className="st-sub">Use this computer’s default notification sound for new and expired requests.</div></div>
+  const healthItem = (
+    label: string,
+    detail: string,
+    state: 'ok' | 'warn' | 'manual',
+  ): ReactNode => <li className={`notification-health-item ${state}`}>
+      <span className="notification-health-mark" aria-hidden="true">
+        {state === 'ok' ? '✓' : state === 'warn' ? '!' : '•'}
+      </span>
+      <span><b>{label}</b><small>{detail}</small></span>
+    </li>;
+  const notificationHealth = !notifications.canOpenSystemSettings
+    ? null
+    : <div className="notification-health" aria-label="Notification reliability">
+        <div className="notification-health-head">
+          <div><b>Notification reliability</b>
+            <span>Turn on persistent, time sensitive notifications to always receive access requests.</span></div>
+        </div>
+        <ul>
+          {healthItem(
+            'Notifications on',
+            notifications.available && notifications.system.alerts === 'enabled'
+              ? 'Allowed by macOS'
+              : 'Permission or alerts need attention',
+            notifications.available && notifications.system.alerts === 'enabled' ? 'ok' : 'warn',
+          )}
+          {healthItem(
+            'Persistent alerts',
+            notifications.system.alertStyle === 'persistent'
+              ? 'Stay until dismissed'
+              : notifications.system.alertStyle === 'temporary'
+                ? 'Currently disappear automatically'
+                : notifications.system.alertStyle === 'none'
+                  ? 'No alert style selected'
+                  : 'Send a preview, then check macOS Settings',
+            notifications.system.alertStyle === 'persistent' ? 'ok' : 'warn',
+          )}
+          {healthItem(
+            'Time Sensitive',
+            !notifications.timeSensitive
+              ? 'Off in Multitool'
+              : notifications.system.timeSensitive === 'enabled'
+                ? 'Allowed by macOS'
+                : 'Requested here, but disabled in macOS',
+            !notifications.timeSensitive
+              ? 'manual'
+              : notifications.system.timeSensitive === 'enabled' ? 'ok' : 'warn',
+          )}
+          {healthItem(
+            'Allowed during Focus Mode',
+            'Choose Multitool under Allowed Apps for every Focus you use',
+            'manual',
+          )}
+        </ul>
+        {/* The preview is the third way to act on this block, so it rides the
+            same row as the two destinations rather than owning a setting row
+            of its own — it sets nothing. Right-aligned, because unlike the
+            other two it acts here instead of leaving the app. */}
+        <div className="notification-health-actions">
+          <button className="btn sm" data-act="open-notification-settings">Notification Settings</button>
+          <button className="btn sm" data-act="open-focus-settings">Focus Settings</button>
+          <button className="btn sm nh-preview" data-act="preview-request-notification"
+            title={notifications.available
+              ? undefined
+              // Unavailable does not disable this: it becomes the retry — a
+              // real attempt re-probes the platform and clears the sticky
+              // reason on success, instead of staying stuck until a restart.
+              : (notifications.unavailableReason || 'Notifications unavailable')}>
+            {notifications.available ? 'Send preview' : 'Try again'}
+          </button>
+        </div>
+      </div>;
+  const notificationSoundRow = <div className="set-row"><div className="set-txt"><div className="st-title">Play a sound on notification</div></div>
       <button className={`switch ${notifications.playSound ? 'on' : ''}`}
         data-act="toggle-notification-sound" role="checkbox"
         aria-label="Play a request notification sound"
         aria-checked={notifications.playSound}></button></div>;
-  const notificationFocusRow = notifications.mode === 'off' ? null
-    : <div className="set-row"><div className="set-txt"><div className="st-title">Time-sensitive delivery</div>
-      <div className="st-sub">Ask the operating system to deliver through Focus or Do Not Disturb where supported. Your system settings remain in control.</div></div>
+  const notificationFocusRow = <div className="set-row"><div className="set-txt"><div className="st-title">Deliver notifications in Focus Mode</div></div>
       <button className={`switch ${notifications.timeSensitive ? 'on' : ''}`}
         data-act="toggle-notification-time-sensitive" role="checkbox"
         aria-label="Use time-sensitive request notifications"
         aria-checked={notifications.timeSensitive}></button></div>;
-  const escalationBtn = (secs: NotificationSettings['escalationSecs'], label: string): ReactNode => (
-    <button className={`seg-btn ${notifications.escalationSecs === secs ? 'on' : ''}`}
-      data-act="set-notification-escalation" data-id={secs} role="radio"
-      aria-checked={notifications.escalationSecs === secs}>{label}</button>
-  );
-  const notificationEscalationRow = notifications.mode === 'off' ? null
-    : <div className="set-row"><div className="set-txt"><div className="st-title">Re-alert before the deadline</div>
-      <div className="st-sub">Bring the requests forward only while the same request is still waiting. The final in-app fallback remains on when re-alerting is off.</div></div>
-      <div className="seg in-form" role="radiogroup" aria-label="Re-alert before a waiting request expires">
-        {escalationBtn(0, 'Off')}{escalationBtn(15, '15 sec')}
-        {escalationBtn(30, '30 sec')}{escalationBtn(60, '1 min')}
-      </div></div>;
+  // Two choices where one is "off" is a switch, not a segmented control: the
+  // 15-second lead time is the feature, so the only real question is whether
+  // to re-alert at all.
+  const escalationOn = notifications.escalationSecs !== 0;
+  const notificationEscalationRow = <div className="set-row"><div className="set-txt">
+      <div className="st-title">Re-alert before the deadline</div>
+      <div className="st-sub">Remind you 15 seconds before a request expires.</div></div>
+      <button className={`switch ${escalationOn ? 'on' : ''}`}
+        data-act="set-notification-escalation" data-id={escalationOn ? 0 : 15}
+        role="checkbox" aria-checked={escalationOn}
+        aria-label="Re-alert before a waiting request expires"></button></div>;
+  const approvalHudRow = <div className="set-row"><div className="set-txt">
+      <div className="st-title">Show approval popup</div>
+      <div className="st-sub">
+        Briefly show a Multitool popup without switching apps. Focus and Do Not
+        Disturb do not hide app-owned popups.
+      </div></div>
+      <button className={`switch ${notifications.showApprovalHud ? 'on' : ''}`}
+        data-act="toggle-approval-hud" role="checkbox"
+        aria-label="Show an app-owned approval popup"
+        aria-checked={notifications.showApprovalHud}></button></div>;
   const lock = state.lock;
   // The lock is this computer's, like the notification rows: it gates these
   // windows, not the broker they are driving.
   const lockRow = <div className="set-row"><div className="set-txt">
-      <div className="st-title">Lock automatically</div>
-      <div className="st-sub">
-        Automatically require Touch ID or your account password to use
-        Multitool's windows. Agents keep working while it is locked — this
-        covers the app, not the broker.
-      </div></div>
+      <div className="st-title">Lock automatically</div></div>
       <button className={`switch ${lock.enabled ? 'on' : ''}`}
         data-act="toggle-app-lock" role="checkbox"
         aria-label="Lock automatically"
@@ -8075,7 +9020,7 @@ function SettingsSheet(): ReactNode {
         aria-checked={lock.enabled}></button></div>;
   const lockWarning = lock.available ? null
     : <div className="notification-warning" role="status">
-      <b>This computer can't authenticate you.</b>
+      <b>Can’t unlock on this computer.</b>
       <span>{lock.unavailableReason || 'Set an account password or enroll Touch ID.'}</span>
     </div>;
   const autoLockBtn = (secs: LockState['autoLockSecs'], label: string): ReactNode => (
@@ -8084,29 +9029,25 @@ function SettingsSheet(): ReactNode {
       aria-checked={lock.autoLockSecs === secs}>{label}</button>
   );
   const autoLockRow = !lock.enabled ? null
-    : <div className="set-row"><div className="set-txt"><div className="st-title">Lock when idle</div>
-      <div className="st-sub">Lock after this long without interaction. ⌘L locks immediately.</div></div>
+    : <div className="set-row"><div className="set-txt"><div className="st-title">Lock when idle</div></div>
       <div className="seg in-form" role="radiogroup" aria-label="Lock when idle">
         {autoLockBtn(0, 'Never')}{autoLockBtn(60, '1 min')}{autoLockBtn(300, '5 min')}
         {autoLockBtn(900, '15 min')}{autoLockBtn(3600, '1 hr')}
       </div></div>;
   const lockOnHideRow = !lock.enabled ? null
-    : <div className="set-row"><div className="set-txt"><div className="st-title">Lock when put away</div>
-      <div className="st-sub">Lock as soon as both the window and the menu-bar dropdown are closed.</div></div>
+    : <div className="set-row"><div className="set-txt"><div className="st-title">Lock when closed</div></div>
       <button className={`switch ${lock.lockOnHide ? 'on' : ''}`}
         data-act="toggle-lock-on-hide" role="checkbox"
-        aria-label="Lock when put away"
+        aria-label="Lock when closed"
         aria-checked={lock.lockOnHide}></button></div>;
   const autostartRow = <div className="set-row"><div className="set-txt">
-      <div className="st-title">Launch Multitool at login</div>
-      <div className="st-sub">Start the broker and tray automatically so agents do not arrive before their approval surface.</div></div>
+      <div className="st-title">Launch Multitool at login</div></div>
       <button className={`switch ${state.launchAtLogin ? 'on' : ''}`}
         data-act="toggle-autostart" role="checkbox"
         aria-label="Launch Multitool at login"
         aria-checked={state.launchAtLogin}></button></div>;
   const sampleToolsRow = <div className="set-row"><div className="set-txt">
-      <div className="st-title">Show sample tools</div>
-      <div className="st-sub">Display the Hacker News and Stack Overflow starter card on the Tools page.</div></div>
+      <div className="st-title">Show sample tools</div></div>
       <button className={`switch ${state.samplesDismissed ? '' : 'on'}`}
         data-act="toggle-sample-tools" role="checkbox"
         aria-label="Show sample tools"
@@ -8128,8 +9069,7 @@ function SettingsSheet(): ReactNode {
   // deliberately never reads (windows.rs) — and could silently reconfigure
   // a desktop app running on the broker host. Local mode only.
   const dockRow = state.broker.mode === 'local'
-    ? <div className="set-row"><div className="set-txt"><div className="st-title">Hide Dock icon in the menu bar</div>
-      <div className="st-sub">When minimized to the menu bar, hide the Dock icon.</div></div>
+    ? <div className="set-row"><div className="set-txt"><div className="st-title">Hide Dock icon when in menu bar</div></div>
       <button className={`switch ${s.menu_bar_hides_dock ? 'on' : ''}`}
         data-act="toggle-menubar-dock" role="checkbox"
         aria-checked={s.menu_bar_hides_dock}></button></div>
@@ -8137,24 +9077,19 @@ function SettingsSheet(): ReactNode {
   // Applies to the broker that actually signs, so unlike the window-chrome
   // toggle above this one is meaningful in remote mode too.
   const hostKeyRow = <div className="set-row"><div className="set-txt">
-      <div className="st-title">Ask before trusting a new SSH host key</div>
-      <div className="st-sub">
-        Unpinned servers are otherwise trusted the first time they answer, and
-        the pin is permanent. Needs Multitool open to answer: with nothing
-        attached, a first login to an unpinned server is refused.
-      </div></div>
+      <div className="st-title">Ask before trusting a new SSH host key</div></div>
     <button className={`switch ${s.confirm_ssh_host_keys ? 'on' : ''}`}
       data-act="toggle-confirm-host-keys" role="checkbox"
       aria-checked={s.confirm_ssh_host_keys}></button></div>;
   const brokerKeyRow = <div className="set-row"><div className="set-txt">
       <div className="st-title">
-        {state.broker.mode === 'local' ? 'This computer’s agent key' : 'Broker agent key'}
+        {state.broker.mode === 'local' ? "Reset this computer's agent key" : 'Broker agent key'}
       </div>
       <div className="st-sub">
         {state.identity?.token_path
           ? `Stored at ${state.identity.token_path}. `
           : ''}
-        Rotating it disconnects every agent using the current key.
+        Disconnects every agent using the current key.
       </div></div>
       <button className="btn danger sm" data-act="rotate-key-ask">Rotate key…</button>
     </div>;
@@ -8163,20 +9098,38 @@ function SettingsSheet(): ReactNode {
   // the web app omits them entirely. Omitted, not disabled: a switch that
   // cannot be moved, with a note explaining why, is worse than the absence.
   const nativeShell = isNativeHost();
+  // Appearance lives here rather than as a chrome button: neither the tray
+  // header nor the window toolbar has room to spend an always-visible slot
+  // on a preference that is set once.
+  const dark = currentTheme() === 'dark';
+  const appearanceRow = <div className="set-row"><div className="set-txt">
+      <div className="st-title">Appearance</div>
+      <div className="st-sub">Match this app to your preferred scheme.</div></div>
+    <div className="seg in-form appearance-seg" role="radiogroup" aria-label="Appearance">
+      <button className={`seg-btn ${dark ? '' : 'on'}`} data-act="set-theme" data-theme-mode="light"
+        role="radio" aria-checked={!dark}>Light</button>
+      <button className={`seg-btn ${dark ? 'on' : ''}`} data-act="set-theme" data-theme-mode="dark"
+        role="radio" aria-checked={dark}>Dark</button>
+    </div></div>;
   return (
     <>
       <h3 id="settings-title">Settings</h3>
+      {appearanceRow}
       {nativeShell && <>
-        {notificationRow}{notificationWarning}{notificationPreviewRow}
-        {notificationSoundRow}{notificationFocusRow}{notificationEscalationRow}
-        {lockRow}{lockWarning}{autoLockRow}{lockOnHideRow}
+        {notificationWarning}{notificationHealth}
+        {/* Re-alert is a property of the popup above it, so the two sit
+            together rather than with the delivery options below. */}
+        {approvalHudRow}{notificationEscalationRow}
+        {notificationSoundRow}{notificationFocusRow}
         {autostartRow}
+        {lockRow}{settingsFailed ? null : dockRow}
+        {lockWarning}{autoLockRow}{lockOnHideRow}
       </>}
       {sampleToolsRow}
-      {brokerKeyRow}
       {settingsFailed
         ? settingsFailureRow
-        : <>{hostKeyRow}{nativeShell ? dockRow : null}</>}
+        : hostKeyRow}
+      {brokerKeyRow}
       <div className="sheet-actions"><button className="btn primary" data-act="sheet-cancel">Done</button></div>
     </>
   );
@@ -8203,10 +9156,20 @@ function flashCopied(id: string): void {
 }
 
 // Focus a sheet field on open (after the render that creates it).
-function focusField(id: string): void {
+// `select: true` fully selects the value so rename-from-title is one paste.
+function focusField(id: string, opts?: { select?: boolean }): void {
   setTimeout(() => {
     const el = document.getElementById(id);
-    if (el) el.focus();
+    if (!el) return;
+    el.focus();
+    if (opts?.select && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+      try {
+        el.select();
+      } catch { /* non-text inputs reject select() */ }
+    }
+    if (opts?.select) {
+      try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch { /* */ }
+    }
   }, 0);
 }
 
@@ -8222,6 +9185,18 @@ function positionFormMenu(): void {
   const rect = trigger.getBoundingClientRect();
   if (menu.classList.contains('password-format-menu')) {
     const width = Math.max(210, rect.width);
+    menu.style.left = `${Math.max(8, rect.right - width)}px`;
+    menu.style.width = `${width}px`;
+  } else if (trigger.id === 'f-secret-origin') {
+    // The compact trigger can be narrower than "Connection Secrets". Keep
+    // both choices readable while anchoring the menu to the button's right.
+    const width = Math.max(160, rect.width);
+    menu.style.left = `${Math.max(8, rect.right - width)}px`;
+    menu.style.width = `${width}px`;
+  } else if (menu.classList.contains('add-credential-menu')) {
+    // Header primary action: keep the menu at least as wide as the button,
+    // right-aligned so it doesn't spill past the pane edge.
+    const width = Math.max(160, rect.width);
     menu.style.left = `${Math.max(8, rect.right - width)}px`;
     menu.style.width = `${width}px`;
   } else {
@@ -8352,35 +9327,146 @@ function fillGeneratedPassword(format: PasswordGenerationFormat): void {
  * with the same messages a bad paste would. */
 let totpQrImageScanGeneration = 0;
 
+/** Drop a blob: preview URL so capture thumbs do not leak after the sheet. */
+function clearTotpQrPreview(): void {
+  const url = state.draft.totpQrPreviewUrl;
+  if (url) URL.revokeObjectURL(url);
+  state.draft.totpQrPreviewUrl = undefined;
+  state.draft.totpQrSource = undefined;
+  state.draft.totpCaptureNeedsSettings = false;
+}
+
 /** A field edit is authoritative over an image decode already in flight. */
 function supersedeTotpQrImageScan(): void {
   totpQrImageScanGeneration += 1;
   state.draft.totpQrImageScanning = false;
 }
 
-async function fillTotpFromQrImage(file: File): Promise<void> {
+function setTotpQrPreview(blob: Blob, source: 'file' | 'screen'): void {
+  clearTotpQrPreview();
+  // Prefer a plain Blob: jsdom's createObjectURL rejects File instances even
+  // though File extends Blob in browsers.
+  const forUrl = blob.type
+    ? new Blob([blob], { type: blob.type })
+    : new Blob([blob]);
+  state.draft.totpQrPreviewUrl = URL.createObjectURL(forUrl);
+  state.draft.totpQrSource = source;
+}
+
+function bytesFromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function pngFileFromBase64(value: string): File {
+  const bytes = bytesFromBase64(value);
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return new File([copy], 'screen-qr.png', { type: 'image/png' });
+}
+
+/** Interactive screen snip → same decode path as the file picker. */
+async function captureTotpFromScreen(): Promise<void> {
   const sheet = state.sheet;
   const generation = ++totpQrImageScanGeneration;
   state.draft.totpQrImageScanning = true;
+  state.draft.totpQrSource = 'screen';
+  state.draft.totpCaptureNeedsSettings = false;
+  delete state.sheetErrors.totp;
+  render();
+  try {
+    const result = await invoke('capture_screen_region');
+    if (state.sheet !== sheet || generation !== totpQrImageScanGeneration) return;
+    if (result.status === 'cancelled') {
+      state.draft.totpQrImageScanning = false;
+      render();
+      toast('Capture cancelled');
+      return;
+    }
+    if (result.status === 'permission_denied') {
+      state.draft.totpQrImageScanning = false;
+      state.draft.totpFromQrImage = false;
+      // No bitmap to show; drop a prior thumb so the field error + Open Settings
+      // row is not hidden behind a stale capture strip.
+      clearTotpQrPreview();
+      state.draft.totpCaptureNeedsSettings = true;
+      state.sheetErrors = {
+        ...state.sheetErrors,
+        totp: 'Screen Recording permission is required to capture a QR code.',
+      };
+      render();
+      return;
+    }
+    if (result.status === 'failed') {
+      state.draft.totpQrImageScanning = false;
+      state.draft.totpFromQrImage = false;
+      clearTotpQrPreview();
+      state.sheetErrors = {
+        ...state.sheetErrors,
+        totp: result.message || 'Couldn’t capture the screen.',
+      };
+      render();
+      return;
+    }
+    await fillTotpFromQrImage(pngFileFromBase64(result.png_base64), 'screen', generation);
+  } catch (error) {
+    if (state.sheet !== sheet || generation !== totpQrImageScanGeneration) return;
+    state.draft.totpQrImageScanning = false;
+    state.draft.totpFromQrImage = false;
+    state.sheetErrors = {
+      ...state.sheetErrors,
+      totp: errorMessage(error) || 'Couldn’t capture the screen.',
+    };
+    render();
+  }
+}
+
+async function fillTotpFromQrImage(
+  file: Blob,
+  source: 'file' | 'screen' = 'file',
+  existingGeneration?: number,
+): Promise<void> {
+  const sheet = state.sheet;
+  const generation = existingGeneration ?? ++totpQrImageScanGeneration;
+  state.draft.totpQrImageScanning = true;
+  state.draft.totpQrSource = source;
+  state.draft.totpCaptureNeedsSettings = false;
+  // Screen captures always show what was snipped; file picks only preview on
+  // failure so a successful chooser stays as light as before.
+  if (source === 'screen') setTotpQrPreview(file, source);
+  else clearTotpQrPreview();
   delete state.sheetErrors.totp;
   render();
   let decoded: string | null = null;
   let failure: string | null = null;
   try {
     decoded = await decodeQrImage(file);
-    if (!decoded) failure = 'No QR code found in that image';
+    if (!decoded) {
+      failure = source === 'screen'
+        ? 'No QR code found in that selection.'
+        : 'No QR code found in that image';
+    }
   } catch {
-    failure = 'That image could not be read';
+    failure = source === 'screen'
+      ? 'That capture couldn’t be read.'
+      : 'That image could not be read';
   }
   if (state.sheet !== sheet || generation !== totpQrImageScanGeneration) return;
   state.draft.totpQrImageScanning = false;
   if (failure !== null) {
     state.draft.totpFromQrImage = false;
+    // File path: show a thumb only when decode failed (v1: screen always).
+    if (source === 'file') setTotpQrPreview(file, source);
     state.sheetErrors = { ...state.sheetErrors, totp: failure };
   } else {
     state.draft.totp = decoded ?? '';
     state.draft.totpFromQrImage = true;
     state.draft.removeTotp = false;
+    // Happy path: drop the thumb; the masked field + hint is confirmation.
+    clearTotpQrPreview();
+    state.draft.totpQrSource = source;
     delete state.sheetErrors.totp;
   }
   render();
@@ -8789,6 +9875,9 @@ async function saveSecret(): Promise<void> {
             id: sheet.id ?? '',
             newName: name,
             newValue: valueModified ? value : null,
+            newOrigin: state.draft.secretOrigin !== (editingSecret?.origin ?? 'user')
+              ? state.draft.secretOrigin ?? null
+              : null,
           });
     } catch (error) {
       if (brokerEpochIsCurrent(epoch)) showFormError(error);
@@ -9174,7 +10263,8 @@ async function saveConnInner(sheet: SheetState): Promise<void> {
 }
 
 function closeSheet() {
-  const releaseDropdown = isProtectedFormSheet();
+  const sheet = activeSheet();
+  const releaseDropdown = isProtectedFormSheet(sheet);
   // Closing the sign-in sheet mid-flow aborts the flow: no listener stays
   // behind waiting for a browser approval the user walked away from.
   if (state.sheet?.kind === 'mcp-auth' && state.mcpAuth && !isTerminalAuth(state.mcpAuth)) {
@@ -9186,6 +10276,9 @@ function closeSheet() {
   state.onepasswordFlow = null;
   state.approvalHostKeyProvenance = null;
   setSheet(null);
+  // Revoke any capture thumb before the draft is wiped.
+  clearTotpQrPreview();
+  supersedeTotpQrImageScan();
   state.draft = {};
   // The elicitation dialog's answers may include secrets; they must not
   // outlive the dialog that collected them.
@@ -9232,7 +10325,7 @@ function connDraftSignature(): string {
 }
 
 function requestCloseSheet(): void {
-  const kind = state.sheet?.kind;
+  const kind = activeSheet()?.kind;
   if ((kind === 'add-conn' || kind === 'edit-conn') && state.sheetBaseline !== null) {
     if (connDraftSignature() !== state.sheetBaseline) {
       state.confirmDiscard = true;
@@ -9267,27 +10360,28 @@ function positionSecretContextMenu(): void {
   positionPointerMenu('.secret-context-menu-wrap', state.secretMenuPoint);
 }
 
-/** Anchor the detail pane's portaled action menu without letting any edge
- * leave the viewport. The menu itself has a viewport-bounded max-height, so
- * its final measured box can always be placed inside these insets. */
+/** Anchor the tray 2FA well menu under its pill. */
+function positionDropdownTotpMenu(): void {
+  const id = state.dropdownTotpMenu;
+  if (!id) return;
+  const trigger = [...document.querySelectorAll<HTMLElement>(
+    'button[data-act="toggle-totp-menu"]',
+  )].find((candidate) => candidate.dataset.id === id);
+  const wrap = document.querySelector<HTMLElement>('.dd-totp-menu-wrap');
+  if (trigger && wrap) placeAnchoredMenu(wrap, trigger, 'end');
+}
+
+/** Anchor the reconnect sheet's ⋯ menu to its trigger. Anchored (rather
+ * than pointer-placed) menus are this one and the context menus; the tool
+ * inspector spends no ⋯ of its own since its actions became rows. */
 function positionConnActionMenu(): void {
   const id = state.connMenuOpen;
-  if (!id || state.connMenuPoint) return;
-  // Sheet reconnect ⋯ uses the same toggle id prefix and its own portal.
-  if (id.startsWith('sheet:')) {
-    const trigger = Array.from(
-      document.querySelectorAll<HTMLElement>('[data-act="toggle-conn-menu"]'),
-    ).find((candidate) => candidate.dataset.id === id);
-    const wrap = document.querySelector<HTMLElement>('.sheet-conn-menu-wrap');
-    if (trigger && wrap) placeAnchoredMenu(wrap, trigger, 'start');
-    return;
-  }
+  if (!id || state.connMenuPoint || !id.startsWith('sheet:')) return;
   const trigger = Array.from(
-    document.querySelectorAll<HTMLElement>('[data-conn-menu-trigger]'),
-  ).find((candidate) => candidate.dataset.connMenuTrigger === id);
-  const wrap = document.querySelector<HTMLElement>('.conn-action-menu-wrap');
-  if (!trigger || !wrap) return;
-  placeAnchoredMenu(wrap, trigger);
+    document.querySelectorAll<HTMLElement>('[data-act="toggle-conn-menu"]'),
+  ).find((candidate) => candidate.dataset.id === id);
+  const wrap = document.querySelector<HTMLElement>('.sheet-conn-menu-wrap');
+  if (trigger && wrap) placeAnchoredMenu(wrap, trigger, 'start');
 }
 
 /** Copy-format menu on the detail-pane address field. */
@@ -9323,7 +10417,7 @@ function positionCatalogConnectMenu(): void {
   if (trigger && wrap) placeAnchoredMenu(wrap, trigger);
 }
 
-/** Vault ⋯ menu inside the Secrets status-bar popover. */
+/** Vault ⋯ menu inside the titlebar vaults popover. */
 function positionVaultMenu(): void {
   const id = state.vaultMenuOpen;
   if (!id) return;
@@ -9378,6 +10472,7 @@ function handleRowContextMenu(e: ReactMouseEvent<HTMLDivElement>): void {
   if (connectionId) {
     e.preventDefault();
     state.selectedConn = connectionId;
+    state.selectedSecret = null;
     state.connMenuOpen = connectionId;
     state.connMenuPoint = { x: e.clientX, y: e.clientY };
     state.secretMenuOpen = null;
@@ -9389,6 +10484,8 @@ function handleRowContextMenu(e: ReactMouseEvent<HTMLDivElement>): void {
   const secretId = target?.closest<HTMLElement>('[data-secret-row]')?.dataset.secretRow;
   if (!secretId) return;
   e.preventDefault();
+  state.selectedConn = null;
+  state.selectedSecret = secretId;
   state.secretMenuOpen = secretId;
   state.secretMenuPoint = { x: e.clientX, y: e.clientY };
   state.connMenuOpen = null;
@@ -9403,7 +10500,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
   // The checkbox is presentational; stop the browser toggling it so the
   // rendered state stays authoritative.
   // Dismiss the desktop settings popover on any click outside it (its own
-  // toggle handles itself; menu-item clicks close it in their handlers).
+  // toggle handles itself; menu-item clicks are handled below).
   if (state.menuOpen && !target?.closest('.settings-menu') &&
       !(btn && btn.dataset.act === 'toggle-settings-menu')) {
     state.menuOpen = false;
@@ -9437,7 +10534,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     // fall through: the clicked action runs and its render reflects the close
   }
   if (state.vaultsPanelOpen
-      && !target?.closest('.secrets-statusbar')
+      && !target?.closest('.vault-switch-wrap')
       && !target?.closest('.vault-menu-wrap')) {
     state.vaultsPanelOpen = false;
     if (!btn) { render(); return; }
@@ -9453,7 +10550,6 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
   if (state.connMenuOpen
       && !target?.closest('.tile-menu-wrap')
       && !target?.closest('.sheet-conn-menu-wrap')
-      && !target?.closest('.conn-action-menu-wrap')
       && !target?.closest('.conn-context-menu-wrap')) {
     state.connMenuOpen = null;
     state.connMenuPoint = null;
@@ -9463,6 +10559,13 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
   if (state.secretMenuOpen && !target?.closest('.secret-context-menu-wrap')) {
     state.secretMenuOpen = null;
     state.secretMenuPoint = null;
+    if (!btn) { render(); return; }
+    // fall through: the clicked action runs and its render reflects the close
+  }
+  if (state.dropdownTotpMenu
+      && !target?.closest('.dd-totp-menu-wrap')
+      && !target?.closest('button[data-act="toggle-totp-menu"]')) {
+    state.dropdownTotpMenu = null;
     if (!btn) { render(); return; }
     // fall through: the clicked action runs and its render reflects the close
   }
@@ -9480,7 +10583,10 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     if (!btn) { render(); return; }
     // fall through: the clicked action runs and its render reflects the close
   }
-  if (state.formMenuOpen && !target?.closest('.cred-select') && !target?.closest('.cred-menu')) {
+  if (state.formMenuOpen
+      && !target?.closest('.cred-select')
+      && !target?.closest('.cred-menu')
+      && !target?.closest('.add-credential-menu-wrap')) {
     state.formMenuOpen = null;
     if (!btn) { render(); return; }
     // fall through: the clicked action runs and its render reflects the close
@@ -9488,6 +10594,15 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
   if (!btn) return;
   const act = btn.dataset.act;
   const id = btn.dataset.id ?? '';
+  // Every app-menu destination or command dismisses the popover as soon as
+  // it is selected. Render before running longer async commands such as the
+  // tool recheck so the menu does not linger while they start. Appearance is
+  // the exception: its segmented control previews in place, and closing on
+  // the first tap would hide the other half of the choice.
+  if (state.menuOpen && btn.closest('.settings-menu') && act !== 'set-theme') {
+    state.menuOpen = false;
+    render();
+  }
   switch (act) {
     case 'tab': {
       const tab = btn.dataset.tab;
@@ -9511,6 +10626,29 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       resetScroll();
       break;
     }
+    // The tray's Activity view sits behind the header toggle, not a tab;
+    // switching off lands back on the combined Credentials view. Same
+    // transient-state hygiene as the 'tab' case above.
+    case 'toggle-activity': {
+      clearSensitivePresentation();
+      state.tab = state.tab === 'activity' ? 'secrets' : 'activity';
+      state.confirm = null;
+      state.startMenuOpen = null;
+      state.addPalette = null;
+      state.catalogActionMenuOpen = null;
+      closeVaultsPanel();
+      state.activityAgentMenuOpen = false;
+      state.connMenuOpen = null;
+      state.connMenuPoint = null;
+      state.epMenuOpen = null;
+      state.epOptsMenuOpen = null;
+      state.connDetailOpen = false;
+      state.secretDetailOpen = false;
+      render();
+      resetScroll();
+      break;
+    }
+
     case 'retry-view-loads':
       await refresh('all');
       break;
@@ -9657,14 +10795,14 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     }
     case 'mode-tray': state.menuOpen = false; run(() => invoke('ui_set_mode', { mode: 'tray' })); break;
     case 'mode-window': run(() => invoke('ui_set_mode', { mode: 'window' })); break;
+    case 'quit-app': run(() => invoke('ui_quit')); break;
     case 'toggle-settings-menu': state.menuOpen = !state.menuOpen; render(); break;
-    case 'toggle-theme': {
-      const next = currentTheme() === 'dark' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = next;
-      // Storage can be unavailable (private contexts); the switch still
-      // applies for this window, the choice just won't stick.
-      try { localStorage.setItem('theme', next); } catch { /* see above */ }
-      render();
+    // Appearance is set from the Settings sheet's segmented control, which
+    // picks a scheme outright — clicking the selected side is a no-op rather
+    // than a flip.
+    case 'set-theme': {
+      const next = btn?.dataset.themeMode;
+      if (next === 'light' || next === 'dark') applyTheme(next);
       break;
     }
     case 'toggle-conn-menu':
@@ -9821,110 +10959,37 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       }
       break;
 
-    case 'reveal-secret-ask':
-      state.secretMenuOpen = null;
-      state.secretMenuPoint = null;
-      state.confirm = { kind: 'reveal-secret', id };
-      render();
+    case 'reveal-secret':
+      await revealSecret(id);
       break;
-    case 'reveal-secret-confirm': {
-      const epoch = brokerEpoch;
-      const presentationEpoch = sensitivePresentationEpoch;
-      try {
-        const value = await invoke('reveal_secret', { id });
-        if (!brokerEpochIsCurrent(epoch)) break;
-        if (presentationEpoch !== sensitivePresentationEpoch) {
-          if (state.confirm?.kind === 'reveal-secret' && state.confirm.id === id) {
-            state.confirm = null;
-            render();
-          }
-          break;
-        }
-        state.reveal[id] = value;
-        // A confirmed reveal must land somewhere visible. The value renders
-        // in the inspector (window) or the expanded row (tray), so surface
-        // that container — the row that was right-clicked may be neither
-        // selected nor expanded, and the narrow layout may have the
-        // inspector closed.
-        if (mode === 'dropdown') {
-          state.dropdownSecretOpen = id;
-        } else {
-          state.selectedSecret = id;
-          state.secretDetailOpen = true;
-        }
-        state.confirm = null;
-        render();
-      } catch (error) {
-        if (brokerEpochIsCurrent(epoch)) toast('⚠ ' + errorMessage(error));
-      }
-      break;
-    }
-    case 'reveal-edit-secret-confirm': {
-      const epoch = brokerEpoch;
-      const presentationEpoch = sensitivePresentationEpoch;
-      try {
-        const value = await invoke('reveal_secret', { id });
-        if (!brokerEpochIsCurrent(epoch)) break;
-        if (presentationEpoch !== sensitivePresentationEpoch) {
-          if (state.confirm?.kind === 'reveal-edit-secret' && state.confirm.id === id) {
-            state.confirm = null;
-            render();
-          }
-          break;
-        }
-        // The edit form may have been dismissed while the broker request was
-        // in flight. Never put a released value into another sheet or draft.
-        if (state.sheet?.kind === 'edit-secret' && state.sheet.id === id) {
-          state.draft.value = value;
-          state.draft.secretValueModified = false;
-          state.draft.showCredentialValue = true;
-        }
-        state.confirm = null;
-        render();
-      } catch (error) {
-        if (brokerEpochIsCurrent(epoch)) toast('⚠ ' + errorMessage(error));
-      }
-      break;
-    }
     case 'unreveal-secret':
       delete state.reveal[id];
       state.secretMenuOpen = null;
       state.secretMenuPoint = null;
       render();
       break;
-    case 'copy-secret':
-      if (await run(() => invoke('copy_secret', { id }))) {
-        noteSecretUsed(id);
+    case 'copy-secret': {
+      // Remote brokers and 1Password-linked fields can take a moment to
+      // resolve; keep "Copying…" on the mask until the pasteboard write
+      // returns so the click does not look dead.
+      if (state.copying === id) break;
+      state.copying = id;
+      render();
+      const ok = await run(() => invoke('copy_secret', { id }));
+      if (state.copying === id) state.copying = null;
+      if (ok) {
         toast('📋 Copied for 30s');
         flashCopied(id);
-      }
-      break;
-    case 'copy-user': {
-      // The user name is public metadata, so the webview clipboard suffices;
-      // no broker round-trip and no 30s clear.
-      const text = btn.dataset.text ?? '';
-      if (!text) break;
-      try {
-        await navigator.clipboard.writeText(text);
-        noteSecretUsed(id);
-        flashCopied(`user:${id}`);
-      } catch {
-        toast('⚠ Could not copy');
+      } else {
+        render();
       }
       break;
     }
     case 'select-secret':
-      // A shown code belongs to the moment it was asked for; moving to
-      // another credential puts the button back.
-      if (state.selectedSecret !== id) state.totpVisible = null;
-      state.selectedSecret = id;
-      // Inert in the wide layout; in the narrow one this rides the
-      // inspector over the list (same shape as the tools slide-over).
-      state.secretDetailOpen = true;
+      selectCredentialRow(id);
       render();
       break;
     case 'show-totp':
-      noteSecretUsed(id);
       state.totpVisible = id;
       render();
       break;
@@ -9937,16 +11002,32 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       state.secretDetailOpen = false;
       render();
       break;
-    case 'toggle-dd-secret': {
-      const openKey = btn.dataset.scope === 'recent' ? `recent:${id}` : id;
-      state.dropdownSecretOpen = state.dropdownSecretOpen === openKey ? null : openKey;
+    case 'toggle-dd-secret':
+      state.dropdownSecretOpen = state.dropdownSecretOpen === id ? null : id;
+      state.dropdownTotpMenu = null;
       render();
       break;
-    }
+    // A tray row's deep link. The native side picks the window (and defers
+    // while a protected form holds the panel); in a browser there is no
+    // second window, so the inventory selects in place.
+    case 'open-credential':
+      state.dropdownTotpMenu = null;
+      if (isNativeHost()) {
+        run(() => invoke('ui_open_credential', { id }));
+      } else {
+        selectCredentialRow(id);
+        render();
+      }
+      break;
+    case 'toggle-totp-menu':
+      state.dropdownTotpMenu = state.dropdownTotpMenu === id ? null : id;
+      render();
+      break;
     case 'secret-row-menu': {
       // The ⋯ trigger reuses the right-click menu, anchored under itself;
       // positionPointerMenu clamps the placement to the viewport.
       const rect = btn.getBoundingClientRect();
+      state.dropdownTotpMenu = null;
       state.secretMenuOpen = id;
       state.secretMenuPoint = { x: rect.left, y: rect.bottom + 4 };
       render();
@@ -9970,28 +11051,69 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         }
       }
       break;
+    // The tray has no Tools tab: its combined view hosts the same detail
+    // slide-over the Tools tab used to own.
     case 'show-connection':
-      state.tab = 'connections';
+      state.tab = mode === 'dropdown' ? 'secrets' : 'connections';
       state.addPalette = null;
       state.selectedConn = id;
+      state.selectedSecret = null;
       state.connDetailOpen = true;
       state.confirm = null;
       render();
       break;
     case 'delete-using-connection':
-      state.tab = 'connections';
+      state.tab = mode === 'dropdown' ? 'secrets' : 'connections';
       state.addPalette = null;
       state.selectedConn = id;
+      state.selectedSecret = null;
       state.connDetailOpen = true;
       state.confirm = { kind: 'del-conn', id };
       render();
       break;
+    case 'edit-credential-title': {
+      // Click the hero title to rename: passwords edit Website in place
+      // (Passwords-style); secrets open the name sheet. The target field is
+      // fully selected so the next keystroke replaces it.
+      const secret = state.secrets.find((candidate) => candidate.id === id);
+      if (!secret) break;
+      const editInPlace = secret.kind === 'password'
+        && secret.source?.kind !== 'one_password';
+      if (editInPlace) {
+        state.detailEdit = {
+          id: secret.id,
+          field: 'site',
+          value: secret.site ?? '',
+        };
+        render();
+        focusField('cdet-site', { select: true });
+        break;
+      }
+      if (!await holdDropdownFormOpen()) break;
+      state.secretMenuOpen = null;
+      state.secretMenuPoint = null;
+      state.dropdownTotpMenu = null;
+      setSheet({ kind: 'edit-secret', id });
+      state.draft = {
+        name: secret.name ?? '',
+        value: '',
+        secretKind: secret.kind,
+        secretOrigin: secret.origin ?? 'user',
+        site: secret.site ?? '',
+        username: secret.username ?? '',
+      };
+      state.sheetErrors = {};
+      render();
+      focusField(secret.kind === 'password' ? 'f-site' : 'f-name', { select: true });
+      break;
+    }
     case 'edit-secret':
     case 'change-password':
     case 'setup-code': {
       if (!await holdDropdownFormOpen()) break;
       state.secretMenuOpen = null;
       state.secretMenuPoint = null;
+      state.dropdownTotpMenu = null;
       // The inspector's per-field flows are the same edit sheet narrowed to
       // the one row they change.
       const focus = act === 'change-password' ? 'value' as const
@@ -9999,12 +11121,13 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       setSheet({ kind: 'edit-secret', id, focus });
       // Controlled fields read the draft, so seed the public identity fields
       // only. The credential value and 2FA seed remain write-only; the value
-      // input renders its mask as a placeholder until a confirmed reveal.
+      // input renders its mask as a placeholder until the user reveals it.
       const secret = state.secrets.find((s) => s.id === id);
       state.draft = {
         name: secret?.name ?? '',
         value: '',
         secretKind: secret?.kind,
+        secretOrigin: secret?.origin ?? 'user',
         site: secret?.site ?? '',
         username: secret?.username ?? '',
       };
@@ -10015,23 +11138,25 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       else focusField('f-site');
       break;
     }
+    case 'toggle-add-credential-menu':
+      state.formMenuOpen = state.formMenuOpen === 'add-credential-menu'
+        ? null
+        : 'add-credential-menu';
+      render();
+      if (state.formMenuOpen) focusMenuOption();
+      break;
     case 'open-add-secret': {
       if (!await holdDropdownFormOpen()) break;
+      state.formMenuOpen = null;
+      // Typed brokers require an explicit kind from the Add-credential menu
+      // (data-kind). Legacy untyped brokers only store secrets.
       const kind = supportsTypedCredentials(state.broker)
-        ? btn.dataset.kind === 'secret' ? 'secret' as const : 'password' as const
+        ? btn.dataset.kind === 'secret' ? 'secret' as const
+          : btn.dataset.kind === 'password' ? 'password' as const
+          : 'password' as const
         : undefined;
       setSheet({ kind: 'add-secret' });
       state.draft = kind ? { secretKind: kind } : {};
-      state.sheetErrors = {};
-      render();
-      focusField(kind === 'password' ? 'f-site' : 'f-name');
-      break;
-    }
-    case 'secret-kind': {
-      const kind = btn.dataset.kind === 'password' ? 'password' as const : 'secret' as const;
-      if (state.draft.secretKind === kind) break;
-      supersedeTotpQrImageScan();
-      state.draft.secretKind = kind;
       state.sheetErrors = {};
       render();
       focusField(kind === 'password' ? 'f-site' : 'f-name');
@@ -10055,13 +11180,26 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'totp-qr-image':
       document.getElementById('f-totp-qr')?.click();
       break;
+    case 'totp-qr-screen':
+      if (isNativeHost()) void captureTotpFromScreen();
+      break;
+    case 'totp-open-screen-settings':
+      void invoke('open_screen_recording_settings')
+        .catch((error) => toast('⚠ ' + errorMessage(error)));
+      break;
+    case 'totp-qr-preview-dismiss':
+      clearTotpQrPreview();
+      delete state.sheetErrors.totp;
+      render();
+      break;
     case 'copy-totp': {
       const epoch = brokerEpoch;
       try {
         const secondsRemaining = await invoke('copy_secret_totp', { id });
         if (!brokerEpochIsCurrent(epoch)) break;
-        noteSecretUsed(id);
+        state.dropdownTotpMenu = null;
         toast(`🔑 2FA code copied · valid ${secondsRemaining}s`);
+        render();
       } catch (error) {
         if (brokerEpochIsCurrent(epoch)) toast('⚠ ' + errorMessage(error));
       }
@@ -10154,11 +11292,18 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       }
       break;
     }
+    case 'show-all-tools':
+      toolsBandShowAll = true;
+      render();
+      break;
     case 'select-conn':
       state.selectedConn = id;
       // In the wide layout the panel is always on screen and this flag is
       // inert; in the narrow layout it opens the slide-over.
       state.connDetailOpen = true;
+      state.dropdownTotpMenu = null;
+      // See select-secret: the shared inspector has one subject at a time.
+      state.selectedSecret = null;
       render();
       break;
     case 'close-conn-detail':
@@ -10685,6 +11830,29 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'open-notification-settings':
       await run(() => invoke('open_notification_settings'));
       break;
+    case 'open-focus-settings':
+      await run(() => invoke('open_focus_settings'));
+      break;
+    case 'preview-request-notification': {
+      // Delivery is awaited on the native side. On failure the platform is
+      // marked unavailable before the invoke rejects — pull that sticky
+      // health into React on the first attempt (the event alone can race a
+      // success toast and leave Settings looking healthy until a later click).
+      try {
+        const view = await invoke('preview_request_notification');
+        notificationSettingsEpoch += 1;
+        state.notificationSettings = view;
+        toast('🔔 Preview notification sent');
+      } catch (error) {
+        toast('⚠ ' + errorMessage(error));
+        try {
+          notificationSettingsEpoch += 1;
+          state.notificationSettings = await invoke('get_notification_settings');
+        } catch { /* keep the last known view */ }
+      }
+      render();
+      break;
+    }
     case 'mcp-auth-cancel': {
       const auth = state.mcpAuth;
       if (!auth || isTerminalAuth(auth)) { closeSheet(); break; }
@@ -10718,6 +11886,31 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       await run(() => invoke('set_tool_access', { connectionId: btn.dataset.conn || '', enabled: false }));
       toast('🔌 Disabled for agents'); await refresh('all');
       break;
+    case 'credential-access-on':
+    case 'credential-access-off': {
+      const secret = state.secrets.find((candidate) => candidate.id === id);
+      if (!secret) break;
+      const connections = state.connections.filter((connection) =>
+        connection.secret_names.includes(secret.name));
+      if (!connections.length) break;
+      const enabled = act === 'credential-access-on';
+      const changed = await run(async () => {
+        let wrote = false;
+        for (const connection of connections) {
+          if (connection.agent_access.enabled === enabled) continue;
+          wrote = await invoke('set_tool_access', {
+            connectionId: connection.id,
+            enabled,
+          }) || wrote;
+        }
+        return wrote;
+      });
+      if (changed) {
+        toast(enabled ? '🔌 Enabled for agents' : '🔌 Disabled for agents');
+      }
+      await refresh('connections');
+      break;
+    }
     case 'confirm-on':
       if (await run(() => invoke('set_confirm_mode', { connectionId: btn.dataset.conn || '', on: true }))) {
         toast('🛡️ Traffic will be confirmed with you first');
@@ -10891,56 +12084,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     // Traffic confirmation: the queue row opens the dialog, and the answer
     // releases (or refuses) the parked call broker-side.
     case 'approval-open': {
-      if (!await holdDropdownFormOpen()) break;
-      const approval = state.approvals.find((candidate) => candidate.id === id);
-      setSheet({ kind: 'approval', id });
-      render();
-      if (approval?.unit === 'host_key' && approval.host_key_fingerprint) {
-        const connection = state.connections.find(
-          (candidate) => candidate.id === approval.connection_id,
-        );
-        if (connection?.host && isNativeHost()) {
-          state.approvalHostKeyProvenance = {
-            approvalId: approval.id,
-            loading: true,
-            candidates: [],
-            revokedFingerprints: [],
-            hasCertificateAuthority: false,
-          };
-          render();
-          try {
-            const lookup = await invoke('check_known_hosts', {
-              host: connection.host,
-              port: connection.port ?? 22,
-            });
-            if (state.sheet?.kind === 'approval' && state.sheet.id === approval.id) {
-              state.approvalHostKeyProvenance = {
-                approvalId: approval.id,
-                loading: false,
-                ...lookup,
-              };
-              render();
-            }
-          } catch (error) {
-            if (state.sheet?.kind === 'approval' && state.sheet.id === approval.id) {
-              state.approvalHostKeyProvenance = {
-                approvalId: approval.id,
-                loading: false,
-                candidates: [],
-                revokedFingerprints: [],
-                hasCertificateAuthority: false,
-                error: errorMessage(error),
-              };
-              render();
-            }
-          }
-        }
-      }
-      // The triggering queue row disappears behind a modal. Put keyboard
-      // focus on the safest answer instead of leaving it on a hidden node.
-      setTimeout(() => {
-        document.querySelector<HTMLElement>('[data-act="approval-deny"]')?.focus();
-      }, 0);
+      await presentApprovalSheet(id);
       break;
     }
     case 'approval-approve-window': {
@@ -10954,6 +12098,12 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       const approval = state.approvals.find((a) => a.id === id);
       await answerApproval(id, 'approve_all',
         `✅ Approved. ${approval?.connection ?? 'this tool'} no longer asks`);
+      break;
+    }
+    case 'approval-approve-once': {
+      const approval = state.approvals.find((a) => a.id === id);
+      await answerApproval(id, 'approve_once',
+        `✅ Approved this call. ${approval?.connection ?? 'This tool'} will ask again`);
       break;
     }
     case 'approval-deny': {
@@ -10980,26 +12130,6 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'sheet-cancel': requestCloseSheet(); break;
     case 'discard-keep': state.confirmDiscard = false; render(); break;
     case 'discard-confirm': closeSheet(); break;
-    case 'set-notification-mode': {
-      if (id !== 'off' && id !== 'when_hidden' && id !== 'always') break;
-      const settings: NotificationSettings = {
-        ...state.notificationSettings,
-        mode: id,
-      };
-      const settingsEpoch = notificationSettingsEpoch;
-      try {
-        const saved = await invoke('set_notification_settings', { settings });
-        if (settingsEpoch === notificationSettingsEpoch) state.notificationSettings = saved;
-        const label = id === 'off'
-          ? 'use the Inbox window only'
-          : id === 'always' ? 'always on' : 'on when you’re away';
-        toast(`🔔 Request notifications ${label}`);
-      } catch (error) {
-        toast('⚠ ' + errorMessage(error));
-      }
-      render();
-      break;
-    }
     case 'request-notification-permission': {
       try {
         state.notificationSettings = await invoke('request_notification_permission');
@@ -11087,24 +12217,6 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       render();
       break;
     }
-    case 'toggle-notification-context': {
-      const settings: NotificationSettings = {
-        ...state.notificationSettings,
-        showContext: !state.notificationSettings.showContext,
-      };
-      const settingsEpoch = notificationSettingsEpoch;
-      try {
-        const saved = await invoke('set_notification_settings', { settings });
-        if (settingsEpoch === notificationSettingsEpoch) state.notificationSettings = saved;
-        toast(settings.showContext
-          ? '🔔 Notifications show agent and tool names'
-          : '🔔 Notification previews are private');
-      } catch (error) {
-        toast('⚠ ' + errorMessage(error));
-      }
-      render();
-      break;
-    }
     case 'toggle-notification-sound': {
       const settings: NotificationSettings = {
         ...state.notificationSettings,
@@ -11143,7 +12255,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     }
     case 'set-notification-escalation': {
       const secs = Number(id);
-      if (secs !== 0 && secs !== 15 && secs !== 30 && secs !== 60) break;
+      if (secs !== 0 && secs !== 15) break;
       const settings: NotificationSettings = {
         ...state.notificationSettings,
         escalationSecs: secs,
@@ -11153,8 +12265,26 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         const saved = await invoke('set_notification_settings', { settings });
         if (settingsEpoch === notificationSettingsEpoch) state.notificationSettings = saved;
         toast(secs === 0
-          ? '🔕 Native request re-alerts off'
-          : `🔔 Requests re-alert ${secs} seconds before expiry`);
+          ? '🔕 Re-alerts off'
+          : `🔔 Re-alert ${secs} seconds before expiry`);
+      } catch (error) {
+        toast('⚠ ' + errorMessage(error));
+      }
+      render();
+      break;
+    }
+    case 'toggle-approval-hud': {
+      const settings: NotificationSettings = {
+        ...state.notificationSettings,
+        showApprovalHud: !state.notificationSettings.showApprovalHud,
+      };
+      const settingsEpoch = notificationSettingsEpoch;
+      try {
+        const saved = await invoke('set_notification_settings', { settings });
+        if (settingsEpoch === notificationSettingsEpoch) state.notificationSettings = saved;
+        toast(settings.showApprovalHud
+          ? '✓ Approval popup on'
+          : 'Approval popup off');
       } catch (error) {
         toast('⚠ ' + errorMessage(error));
       }
@@ -11165,7 +12295,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       {
         const on = !state.settings.menu_bar_hides_dock;
         await run(() => invoke('set_menu_bar_hides_dock', { on }));
-        toast(on ? '🚢 Dock icon hidden in the menu bar' : '🚢 Dock icon kept in the menu bar');
+        toast(on ? '🚢 Dock icon hidden when in the menu bar' : '🚢 Dock icon kept when in the menu bar');
       }
       await refresh('settings');
       break;
@@ -11415,7 +12545,7 @@ function handleAppKeyDown(e: KeyboardEvent): void {
   }
   // Ctrl-Tab / Ctrl-Shift-Tab cycle the left-nav tabs when the main window is
   // open (a modal sheet keeps focus).
-  if (e.key === 'Tab' && e.ctrlKey && !state.sheet) {
+  if (e.key === 'Tab' && e.ctrlKey && !sheetIsOpen()) {
     e.preventDefault();
     // The dropdown has no Connect agents tab; cycle only the tabs it shows.
     const ring: readonly Tab[] = mode === 'dropdown' ? DROPDOWN_TABS : TABS;
@@ -11448,6 +12578,11 @@ function handleAppKeyDown(e: KeyboardEvent): void {
       render();
       return;
     }
+    if (state.dropdownTotpMenu) {
+      state.dropdownTotpMenu = null;
+      render();
+      return;
+    }
     if (state.epMenuOpen) { state.epMenuOpen = null; render(); return; }
     if (state.epOptsMenuOpen) { state.epOptsMenuOpen = null; render(); return; }
     // The detail slide-overs only exist in the narrow layout; in the wide
@@ -11467,7 +12602,7 @@ function handleAppKeyDown(e: KeyboardEvent): void {
       return;
     }
     if (state.confirmDiscard) { state.confirmDiscard = false; render(); return; }
-    if (state.sheet) { requestCloseSheet(); return; }
+    if (sheetIsOpen()) { requestCloseSheet(); return; }
     if (state.confirm) { state.confirm = null; render(); return; }
     if (mode === 'dropdown') invoke('ui_hide_dropdown');
   } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && state.sheet &&
@@ -11511,7 +12646,7 @@ function handleAppKeyDown(e: KeyboardEvent): void {
     if (state.confirmDiscard) return;
     if (state.sheet && (state.sheet.kind === 'add-secret' || state.sheet.kind === 'edit-secret')) { e.preventDefault(); saveSecret(); }
     else if (state.sheet && (state.sheet.kind === 'add-conn' || state.sheet.kind === 'edit-conn')) { e.preventDefault(); saveConn(); }
-  } else if (e.key === 'Tab' && state.sheet) {
+  } else if (e.key === 'Tab' && sheetIsOpen()) {
     // Keep keyboard focus inside the modal sheet, wrapping at either end.
     // The discard confirm stacks over the form sheet and takes the trap.
     const sheet = document.querySelector<HTMLElement>('.sheet.discard-confirm')
@@ -11665,17 +12800,18 @@ async function boot() {
   // rendered state every minute while the relevant tab is open.
   setInterval(() => {
     if ((state.tab === 'activity' || state.tab === 'connections')
-        && !state.sheet && !state.menuOpen) render();
+        && !sheetIsOpen() && !state.menuOpen) render();
   }, 60000);
   // Approval deadlines are measured in seconds; keep the visible countdown
-  // honest while the dialog is open instead of freezing at its first paint.
-  // The Activity page's waiting cards render the same countdowns, so it
-  // ticks too while something is waiting; the log itself only needs the
-  // minute interval above.
+  // honest while the dialog, Activity cards, or cross-tab request banner is
+  // showing instead of freezing at first paint.
   setInterval(() => {
-    if (state.sheet?.kind === 'approval'
-        || (state.tab === 'activity' && !state.sheet && !state.menuOpen
-          && activeRequestCount(state.approvals, state.elicitations) > 0)) render();
+    if (state.sheet?.kind === 'approval') {
+      render();
+      return;
+    }
+    if (sheetIsOpen() || state.menuOpen) return;
+    if (activeRequestCount(state.approvals, state.elicitations) > 0) render();
   }, 1000);
   // Live updates from the core.
   await listen('aka://broker-changed', async (ev) => {
@@ -11771,8 +12907,29 @@ async function boot() {
     state.sheetErrors = {};
     render();
   });
-  await listen('aka://open-requests', () => {
-    void consumePendingOpenRequests();
+  // A tray credential row's deep link: show the inventory with that row as
+  // the inspector's subject. Nothing sensitive rides the event — the id
+  // names a row, and the value still has to be asked for by name here.
+  await listen('aka://open-credential', (event) => {
+    if (isProtectedFormSheet()) return;
+    const id = event.payload?.id;
+    if (!id) return;
+    clearSensitivePresentation();
+    state.tab = 'secrets';
+    selectCredentialRow(id);
+    render();
+  });
+  await listen('aka://open-requests', (event) => {
+    // Prefer the event payload's deep-link when the pending slot was already
+    // drained (or never set). Fall back to the pending slot for boot races.
+    void (async () => {
+      const fromEvent = event.payload?.id;
+      if (fromEvent) {
+        await openRequestsSurface(fromEvent);
+        return;
+      }
+      await consumePendingOpenRequests();
+    })();
   });
   // A tray click may have preceded this listener or waited behind a
   // protected dropdown form.
@@ -11800,13 +12957,63 @@ async function boot() {
     state.connMenuPoint = null;
     state.secretMenuOpen = null;
     state.secretMenuPoint = null;
+    state.dropdownTotpMenu = null;
     state.epMenuOpen = null;
     state.epOptsMenuOpen = null;
     render();
   });
 }
 
-const reactRoot = createRoot(root());
+/** The popup is intentionally a tiny independent surface. It listens only
+ * for its privacy-minimized payload and never reads broker or shell view
+ * state, so it cannot duplicate a sheet from either interactive window. */
+async function bootAttentionHud(): Promise<void> {
+  let eventRevision = 0;
+  await listen('aka://attention-hud', (event) => {
+    eventRevision += 1;
+    attentionHudPayload = event.payload;
+    render();
+  });
+  const revisionBeforeRead = eventRevision;
+  try {
+    const current = await invoke('ui_get_attention_hud');
+    // Do not let a slower initial read replace a newer event that arrived
+    // after the listener was installed.
+    if (eventRevision === revisionBeforeRead) attentionHudPayload = current;
+  } catch (error) {
+    console.error('ui_get_attention_hud', error);
+    if (eventRevision === revisionBeforeRead) attentionHudPayload = null;
+  }
+  render();
+}
+
+// One React root for the lifetime of the webview. HMR re-renders into it
+// with the updated module graph instead of createRoot-twice or a cold boot
+// that blanks query-backed secrets/tools.
+const reactRoot = appHot?.reactRoot ?? createRoot(root());
+if (import.meta.hot) {
+  import.meta.hot.data.reactRoot = reactRoot;
+  import.meta.hot.data.brokerEpoch = brokerEpoch;
+  import.meta.hot.data.notificationSettingsEpoch = notificationSettingsEpoch;
+  import.meta.hot.data.knownApprovalIds = knownApprovalIds;
+  import.meta.hot.data.approvalsBootstrapped = approvalsBootstrapped;
+  import.meta.hot.data.attentionHudPayload = attentionHudPayload;
+  import.meta.hot.data.booted = booted;
+  // Persist mutable boot flags after each successful boot / epoch bump.
+  import.meta.hot.accept();
+  import.meta.hot.dispose((data) => {
+    const next = data as AppHotData;
+    next.reactRoot = reactRoot;
+    next.bootStarted = true;
+    next.booted = booted;
+    next.brokerEpoch = brokerEpoch;
+    next.notificationSettingsEpoch = notificationSettingsEpoch;
+    next.knownApprovalIds = knownApprovalIds;
+    next.approvalsBootstrapped = approvalsBootstrapped;
+    next.attentionHudPayload = attentionHudPayload;
+  });
+}
+
 flushSync(() => {
   reactRoot.render(
     <StrictMode>
@@ -11817,4 +13024,17 @@ flushSync(() => {
   );
 });
 reactMounted = true;
-void boot();
+
+if (appHot?.bootStarted) {
+  // Hot update after the first boot: keep the live data and event listeners;
+  // only the newly compiled AppRoot tree is swapped in above.
+  booted = true;
+  if (import.meta.hot) import.meta.hot.data.booted = true;
+  render();
+} else {
+  if (import.meta.hot) import.meta.hot.data.bootStarted = true;
+  const bootSurface = mode === 'attention' ? bootAttentionHud() : boot();
+  void bootSurface.then(() => {
+    if (import.meta.hot) import.meta.hot.data.booted = true;
+  });
+}

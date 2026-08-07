@@ -2,6 +2,11 @@ export type ConnectionType = 'api' | 'pg' | 'ssh' | 'cloud';
 
 export type SecretKind = 'secret' | 'password';
 
+/** Which desktop list a secret lives in: the user's own secrets, or the
+ * credentials created alongside a connection. Older brokers omit it, which
+ * reads as the user's own. */
+export type SecretOrigin = 'user' | 'connection';
+
 export interface SecretSummary {
   id: string;
   name: string;
@@ -11,6 +16,9 @@ export interface SecretSummary {
   updated_at: string;
   /** Records from before typing arrive without a kind and are secrets. */
   kind?: SecretKind;
+  /** Records from before grouping arrive without an origin and are the
+   * user's own. */
+  origin?: SecretOrigin;
   /** Password metadata: the canonical host the password signs in to. */
   site?: string | null;
   username?: string | null;
@@ -38,6 +46,13 @@ export interface TotpCode {
   code: string;
   seconds_remaining: number;
 }
+
+/** Outcome of desktop interactive screen-region capture for 2FA QR enrollment. */
+export type ScreenRegionCapture =
+  | { status: 'captured'; png_base64: string }
+  | { status: 'cancelled' }
+  | { status: 'permission_denied' }
+  | { status: 'failed'; message: string };
 
 export interface OnePasswordIntegration {
   id: string;
@@ -452,7 +467,7 @@ export interface RequestRecord {
 }
 
 /** What the user chose on a prompt. */
-export type ApprovalDecision = 'approve_window' | 'approve_all' | 'deny';
+export type ApprovalDecision = 'approve_window' | 'approve_all' | 'approve_once' | 'deny';
 
 /**
  * Which broker this app manages and the state of the link to it. Local
@@ -487,22 +502,49 @@ export interface Settings {
   confirm_ssh_host_keys: boolean;
 }
 
+export type NotificationSettingStatus = 'enabled' | 'disabled' | 'unsupported' | 'unknown';
+export type NotificationAlertStyle = 'temporary' | 'persistent' | 'none' | 'unknown';
+
+export interface NotificationSystemSettings {
+  alerts: NotificationSettingStatus;
+  sounds: NotificationSettingStatus;
+  notificationCenter: NotificationSettingStatus;
+  timeSensitive: NotificationSettingStatus;
+  alertStyle: NotificationAlertStyle;
+}
+
 /** Native request notifications are local to this desktop shell. */
 export interface NotificationSettings {
+  /** Compatibility field; the native shell fixes delivery to `always`. */
   mode: 'off' | 'when_hidden' | 'always';
-  /** Include agent and connection names, never request summaries/details. */
+  /** Fixed on: include names, never request summaries/details. */
   showContext: boolean;
   /** Play the operating system's default notification sound. */
   playSound: boolean;
   /** Ask the operating system for time-sensitive delivery through Focus/DND. */
   timeSensitive: boolean;
   /** Seconds before a still-waiting request surfaces the Inbox; zero is off. */
-  escalationSecs: 0 | 15 | 30 | 60;
+  escalationSecs: 0 | 15;
+  /**
+   * Compatibility field fixed on by the native shell: newly parked traffic
+   * opens its decision sheet if no protected form is active.
+   */
+  presentApprovalsAsModal: boolean;
+  /** Show a brief app-owned popup that is not filtered by Focus/DND. */
+  showApprovalHud: boolean;
   /** Runtime platform health; preferences can still be edited when false. */
   available: boolean;
   unavailableReason?: string;
   canOpenSystemSettings: boolean;
   canRequestPermission: boolean;
+  /** Effective operating-system controls, distinct from Multitool's choices. */
+  system: NotificationSystemSettings;
+}
+
+/** Privacy-minimized contents of the app-owned approval popup. */
+export interface AttentionHudPayload {
+  count: number;
+  urgent: boolean;
 }
 
 /**
@@ -813,7 +855,9 @@ export interface CommandMap {
     settings: NotificationSettings;
   }, NotificationSettings>;
   request_notification_permission: CommandSpec<undefined, NotificationSettings>;
+  preview_request_notification: CommandSpec<undefined, NotificationSettings>;
   open_notification_settings: CommandSpec<undefined, void>;
+  open_focus_settings: CommandSpec<undefined, void>;
   get_lock_state: CommandSpec<undefined, LockState>;
   set_lock_settings: CommandSpec<{
     settings: { enabled: boolean; autoLockSecs: number; lockOnHide: boolean };
@@ -850,6 +894,8 @@ export interface CommandMap {
     newUsername?: string | null;
     /** An empty string removes the 2FA factor. */
     newTotp?: string | null;
+    /** Moves the secret between Secrets and Connection Secrets. */
+    newOrigin?: SecretOrigin | null;
   }, void>;
   delete_secret: CommandSpec<{ id: string }, void>;
   /** The whole value, for a reveal the user asked for and confirmed. */
@@ -886,6 +932,10 @@ export interface CommandMap {
   oauth_connect: CommandSpec<{ input: ConnectionInput; clientSecret?: string | null }, void>;
   oauth_reconnect: CommandSpec<{ id: string }, void>;
   open_url: CommandSpec<{ url: string }, void>;
+  /** Interactive screen-region capture for 2FA QR enrollment (macOS). */
+  capture_screen_region: CommandSpec<undefined, ScreenRegionCapture>;
+  /** Opens System Settings → Screen Recording privacy. */
+  open_screen_recording_settings: CommandSpec<undefined, void>;
   set_tool_access: CommandSpec<{ connectionId: string; enabled: boolean }, boolean>;
   set_confirm_mode: CommandSpec<{ connectionId: string; on: boolean }, boolean>;
   set_expose_response_credentials: CommandSpec<
@@ -917,11 +967,16 @@ export interface CommandMap {
   set_menu_bar_hides_dock: CommandSpec<{ on: boolean }, void>;
   set_confirm_ssh_host_keys: CommandSpec<{ on: boolean }, void>;
   ui_set_mode: CommandSpec<{ mode: string }, void>;
+  ui_open_credential: CommandSpec<{ id: string }, void>;
+  ui_quit: CommandSpec<undefined, void>;
   ui_hide_main: CommandSpec<undefined, void>;
   ui_hide_dropdown: CommandSpec<undefined, void>;
   ui_set_dropdown_form_active: CommandSpec<{ active: boolean }, void>;
   ui_set_request_inbox_visible: CommandSpec<{ visible: boolean }, void>;
-  ui_take_open_requests: CommandSpec<undefined, boolean>;
+  ui_take_open_requests: CommandSpec<undefined, { open: boolean; id?: string | null }>;
+  ui_get_attention_hud: CommandSpec<undefined, AttentionHudPayload | null>;
+  ui_hide_attention_hud: CommandSpec<undefined, void>;
+  ui_review_attention_hud: CommandSpec<undefined, void>;
 }
 
 export type CommandName = keyof CommandMap;
@@ -944,11 +999,15 @@ export interface EventMap {
   'aka://mcp-auth-changed': McpAuthState;
   'aka://connect-requested': { agent: string; service: string };
   'aka://open-settings': Record<string, never>;
-  'aka://open-requests': Record<string, never>;
+  /** Show one inventory row, named by id — never a value. */
+  'aka://open-credential': { id?: string | null };
+  /** Open the Request Inbox; `id` deep-links a still-pending approval sheet. */
+  'aka://open-requests': { id?: string | null };
   'aka://notification-settings-changed': NotificationSettings;
   'aka://lock-changed': LockState;
   'aka://dropdown-hidden': Record<string, never>;
   'aka://dropdown-shown': Record<string, never>;
+  'aka://attention-hud': AttentionHudPayload;
 }
 
 export type EventName = keyof EventMap;

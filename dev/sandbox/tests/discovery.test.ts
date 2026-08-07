@@ -43,7 +43,7 @@ test('the manifest describes the protocol without a credential', async () => {
   // The budgets an agent needs to plan retries and timeouts are machine
   // readable, not prose-only.
   assert.equal(manifest.ticket_ttl_seconds, 60);
-  assert.equal(manifest.approval_timeout_seconds, 90);
+  assert.equal(manifest.approval_timeout_seconds, 300);
   assert.equal(manifest.request_id_max_bytes, 256);
   assert.ok(Number(manifest.recommended_client_timeout_seconds) >= 90);
   assert.equal(manifest.socket, broker.socketPath);

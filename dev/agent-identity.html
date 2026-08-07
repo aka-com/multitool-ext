@@ -1,0 +1,1212 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multitool — attested agent identity (every surface, every assurance tier)</title>
+<style>
+/* Tokens copied from ui/styles.css (light) + its data-theme="dark" block. */
+:root{
+  color-scheme: light;
+  --ink:#1d1d1f; --ink-2:#2c2c30; --ink-3:#3c3c42;
+  --muted:#66666f; --muted-2:#6d6d76; --faint:#707078;
+  --accent:#0a7cff; --accent-text:#0a7cff; --accent-ink:#0a63d0;
+  --accent-wash:rgba(10,124,255,.08); --accent-wash-2:rgba(10,124,255,.12);
+  --accent-border:rgba(10,124,255,.32);
+  --danger:#ff3b30; --danger-ink:#d70015; --danger-text:#7a1208;
+  --danger-wash:rgba(255,59,48,.08); --danger-border:rgba(255,59,48,.38);
+  --amber-ink:#7a5410; --amber-strong:#b06a00;
+  --amber-wash:rgba(255,190,50,.16); --amber-border:rgba(200,140,20,.3);
+  --warning-dot:#d59600;
+  --ok-ink:#1a8f3c; --ok-solid:#34c759;
+  --ok-wash:rgba(52,199,89,.09); --ok-border:rgba(52,199,89,.28);
+  --kind-db-ink:#2a6f9e; --kind-db-wash:rgba(50,130,180,.12);
+  --kind-api-ink:#a8541f; --kind-api-wash:rgba(190,100,40,.12);
+  --kind-mcp-ink:#4a4ec4; --kind-mcp-wash:rgba(88,92,220,.10);
+  --kind-ssh-ink:#0e9b78; --kind-ssh-wash:rgba(47,208,160,.14);
+  --surface:rgba(246,246,249,.98);
+  --panel:#fbfbfd; --field-bg:#fff; --btn-bg:#fff; --btn-hover:#f2f2f5;
+  --card-bg:rgba(255,255,255,.72);
+  --chip-bg:rgba(0,0,0,.06); --chip-ink:#4c4c53;
+  --hover:rgba(0,0,0,.06); --wash:rgba(0,0,0,.025); --wash-2:rgba(0,0,0,.04);
+  --seg-bg:rgba(0,0,0,.065); --seg-on-bg:#fff; --seg-on-ink:#111;
+  --backdrop:rgba(20,20,30,.28);
+  --switch-off:rgba(0,0,0,.22);
+  --line:rgba(0,0,0,.08); --line-soft:rgba(0,0,0,.06);
+  --line-mid:rgba(0,0,0,.10); --line-strong:rgba(0,0,0,.14);
+  --line-field:rgba(0,0,0,.16);
+  --shadow-xs:0 1px 1px rgba(15,20,45,.04);
+  --shadow-sm:0 1px 3px rgba(15,20,45,.05);
+  --shadow-menu:0 10px 28px rgba(15,20,45,.12);
+  --shadow-sheet:0 14px 34px rgba(15,20,45,.16);
+  --shadow-float:0 16px 40px rgba(15,20,45,.14),0 2px 10px rgba(15,20,45,.08);
+  --shadow-toast:0 8px 22px rgba(15,20,45,.18);
+  --b-agent-bg:rgba(0,0,0,.07); --b-agent-ink:#555;
+  --b-pg-bg:#dfeef4; --b-pg-ink:#2b6a8f;
+  --desktop:linear-gradient(135deg,#c8d4e8,#dcd4e4 55%,#e8d8cc);
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ink:#ececf0; --ink-2:#d8d8de; --ink-3:#c9c9d2;
+  --muted:#9a9aa4; --muted-2:#8e8e96; --faint:#8b8b95;
+  --accent-text:#58a6ff; --accent-ink:#7db8ff;
+  --accent-wash:rgba(88,166,255,.12); --accent-wash-2:rgba(88,166,255,.18);
+  --accent-border:rgba(88,166,255,.32);
+  --danger-ink:#ff6b61; --danger-text:#ffb3ab;
+  --danger-wash:rgba(255,90,80,.14); --danger-border:rgba(255,110,100,.48);
+  --amber-ink:#e9bb63; --amber-strong:#ffb04d;
+  --amber-wash:rgba(255,190,50,.13); --amber-border:rgba(255,190,80,.32);
+  --warning-dot:var(--amber-strong);
+  --ok-ink:#4cd07d; --ok-solid:#30d158;
+  --ok-wash:rgba(76,208,125,.10); --ok-border:rgba(76,208,125,.30);
+  --kind-db-ink:#8ec4e8; --kind-db-wash:rgba(50,130,180,.18);
+  --kind-api-ink:#e8a077; --kind-api-wash:rgba(190,100,40,.18);
+  --kind-mcp-ink:#a3a6ff; --kind-mcp-wash:rgba(88,92,220,.20);
+  --kind-ssh-ink:#4fe0b8; --kind-ssh-wash:rgba(47,208,160,.16);
+  --surface:rgba(16,16,20,.98);
+  --panel:#1b1b20; --field-bg:#131317; --btn-bg:#26262d; --btn-hover:#30303a;
+  --card-bg:rgba(255,255,255,.045);
+  --chip-bg:rgba(255,255,255,.08); --chip-ink:#c9c9d2;
+  --hover:rgba(255,255,255,.07); --wash:rgba(255,255,255,.03); --wash-2:rgba(255,255,255,.05);
+  --seg-bg:rgba(255,255,255,.09); --seg-on-bg:#3d3d46; --seg-on-ink:#fff;
+  --backdrop:rgba(0,0,0,.55);
+  --switch-off:rgba(255,255,255,.26);
+  --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.07);
+  --line-mid:rgba(255,255,255,.12); --line-strong:rgba(255,255,255,.16);
+  --line-field:rgba(255,255,255,.18);
+  --shadow-xs:0 1px 1px rgba(0,0,0,.28);
+  --shadow-sm:0 1px 3px rgba(0,0,0,.32);
+  --shadow-menu:0 10px 28px rgba(0,0,0,.48);
+  --shadow-sheet:0 14px 34px rgba(0,0,0,.55);
+  --shadow-float:0 16px 40px rgba(0,0,0,.55),0 2px 10px rgba(0,0,0,.35);
+  --shadow-toast:0 8px 22px rgba(0,0,0,.55);
+  --b-agent-bg:rgba(255,255,255,.10); --b-agent-ink:#b8b8c0;
+  --b-pg-bg:rgba(90,170,210,.18); --b-pg-ink:#93d2ee;
+  --desktop:linear-gradient(135deg,#2a3040,#3a3448 55%,#443a38);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:.9375rem;color:var(--ink);background:var(--desktop);
+  -webkit-font-smoothing:antialiased;min-height:100vh;padding-bottom:56px;
+}
+button{font-family:inherit;color:inherit;cursor:default}
+svg{display:block}
+code{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:calc(1em - .0625rem)}
+
+/* ---------- page chrome ---------- */
+.page-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:18px 22px 4px}
+.page-head h1{font-size:1.0625rem;font-weight:700}
+.page-head p{font-size:.8125rem;color:var(--ink-2);max-width:60rem;line-height:1.55}
+.theme-flip{
+  margin-left:auto;border:1px solid var(--line-mid);background:var(--panel);color:var(--ink-2);
+  border-radius:999px;padding:6px 13px;font-size:.78125rem;font-weight:600;box-shadow:var(--shadow-sm);
+}
+.theme-flip:hover{background:var(--btn-hover)}
+
+/* ---------- sticky tier control ---------- */
+.control{
+  position:sticky;top:0;z-index:40;margin:12px 22px 0;padding:11px 14px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  border:1px solid var(--line-mid);border-radius:12px;
+  background:var(--surface);box-shadow:var(--shadow-float);
+  backdrop-filter:saturate(180%) blur(20px);
+}
+.control-lbl{font-size:.71875rem;font-weight:650;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em}
+.seg{display:inline-flex;gap:2px;padding:2px;border-radius:9px;background:var(--seg-bg)}
+.seg button{
+  border:0;background:transparent;color:var(--ink-3);border-radius:7px;
+  padding:5px 11px;font-size:.78125rem;font-weight:600;white-space:nowrap;
+}
+.seg button.on{background:var(--seg-on-bg);color:var(--seg-on-ink);box-shadow:var(--shadow-sm)}
+.control-sep{width:1px;align-self:stretch;background:var(--line-mid)}
+.tglbtn{
+  border:1px solid var(--line-mid);background:var(--btn-bg);border-radius:999px;
+  padding:5px 12px;font-size:.75rem;font-weight:600;color:var(--ink-2);box-shadow:var(--shadow-xs);
+}
+.tglbtn.on{background:var(--accent-wash-2);border-color:var(--accent-border);color:var(--accent-ink)}
+.tier-note{font-size:.71875rem;color:var(--muted);flex:1;min-width:16rem;line-height:1.45}
+.tier-note b{color:var(--ink-2);font-weight:650}
+
+/* ---------- sections ---------- */
+.wrap{max-width:72rem;margin:0 auto;padding:0 22px}
+.gap{
+  margin-top:20px;border:1px solid var(--line-mid);border-radius:14px;
+  background:var(--surface);box-shadow:var(--shadow-float);overflow:hidden;
+}
+.gap-head{padding:15px 18px 13px;border-bottom:1px solid var(--line)}
+.gap-head h2{font-size:.9375rem;font-weight:700;display:flex;align-items:baseline;gap:9px}
+.gap-head h2 em{
+  font-style:normal;font-size:.6875rem;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.05em;border:1px solid var(--line-mid);
+  border-radius:999px;padding:2px 7px;flex:none;
+}
+.gap-head p{margin-top:7px;font-size:.78125rem;color:var(--ink-2);line-height:1.6;max-width:64rem}
+.gap-head p + p{margin-top:5px}
+.gap-head code{background:var(--wash-2);border-radius:4px;padding:1px 4px;color:var(--ink-2)}
+.gap-head b.prop{color:var(--accent-ink);font-weight:650}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.side{padding:16px 18px 18px}
+.side + .side{border-left:1px solid var(--line)}
+.side-tag{
+  display:inline-block;margin-bottom:12px;padding:2px 9px;border-radius:999px;
+  font-size:.625rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+}
+.side-tag.impl{background:var(--chip-bg);color:var(--chip-ink)}
+.side-tag.mock{background:var(--accent-wash-2);color:var(--accent-ink)}
+.side-note{margin-top:11px;font-size:.71875rem;color:var(--muted);line-height:1.5}
+.stage{display:flex;flex-direction:column;gap:10px;align-items:stretch}
+@media (max-width:900px){.cmp{grid-template-columns:1fr}.side + .side{border-left:0;border-top:1px solid var(--line)}}
+
+/* highlight mode */
+body.hl .miss{outline:1.5px dashed var(--amber-strong);outline-offset:3px;border-radius:6px}
+
+/* ---------- REAL APP COMPONENTS (from ui/styles.css) ---------- */
+/* approval sheet */
+.sheet{
+  background:var(--panel);border:1px solid var(--line-mid);border-radius:13px;
+  box-shadow:var(--shadow-sheet);padding:20px 22px 16px;text-align:center;
+}
+.elicit-dlg-ico{
+  display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;
+  margin-bottom:10px;border-radius:12px;color:var(--amber-strong);
+  background:var(--amber-wash);border:1px solid var(--amber-border);
+}
+.elicit-dlg-ico svg{width:22px;height:22px}
+.elicit-dlg-title{font-size:.96875rem;font-weight:650;margin-bottom:4px;line-height:1.4}
+.approval-permission-summary{max-width:480px;line-height:1.5;margin:0 auto;
+  font-size:.78125rem;color:var(--muted)}
+.approval-facts{
+  display:grid;gap:7px;margin:14px auto 0;padding:12px 14px;max-width:480px;
+  text-align:left;font-size:.78125rem;background:var(--field-bg);
+  border:1px solid var(--line-field);border-radius:9px;
+}
+.approval-facts div{display:grid;grid-template-columns:92px minmax(0,1fr);gap:12px;align-items:start}
+.approval-facts dt{color:var(--muted)}
+.approval-facts dd{margin:0;min-width:0;color:var(--ink);font-weight:500;overflow-wrap:anywhere}
+.untrusted-identity{unicode-bidi:isolate}
+.approval-consequence{
+  display:flex;align-items:flex-start;gap:8px;margin:10px auto 0;padding:8px 11px;
+  max-width:460px;text-align:left;border-radius:8px;font-size:.75rem;line-height:1.5;
+  color:var(--ink-2);background:var(--amber-wash);border:1px solid var(--amber-border);
+}
+.approval-consequence svg{flex:0 0 auto;width:14px;height:14px;margin-top:2px;color:var(--amber-strong)}
+.approval-raw-toggle{
+  display:inline-flex;align-items:center;gap:4px;margin-top:9px;padding:3px 5px;border:0;
+  border-radius:6px;background:transparent;color:var(--muted);font:inherit;font-size:.75rem;font-weight:600;
+}
+.approval-raw-toggle:hover{color:var(--ink-2);background:var(--hover)}
+.approval-actions{display:flex;align-items:center;gap:8px;margin-top:16px}
+.btn{
+  border:1px solid var(--line-field);background:var(--btn-bg);color:var(--ink-2);
+  border-radius:7px;padding:6px 12px;font-size:.8125rem;font-weight:600;box-shadow:var(--shadow-xs);
+}
+.btn:hover{background:var(--btn-hover)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.danger{color:var(--danger-ink)}
+.spacer{flex:1}
+
+/* request banner + cards */
+.request-banner{
+  width:100%;display:flex;align-items:center;gap:10px;padding:9px 11px;
+  border:1px solid var(--amber-border);border-radius:10px;background:var(--amber-wash);
+  color:var(--ink);text-align:left;font:inherit;
+}
+.request-banner-ico{flex:0 0 auto;display:inline-flex;color:var(--amber-strong)}
+.request-banner-ico svg{width:16px;height:16px}
+.request-banner-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.request-banner-copy b{font-size:.84375rem;font-weight:650}
+.request-banner-copy span{color:var(--muted);font-size:.71875rem;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.request-banner-cta{flex:0 0 auto;color:var(--accent-text);font-size:.75rem;font-weight:650}
+.request-list{
+  display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line);
+  border-radius:11px;background:var(--card-bg);box-shadow:var(--shadow-sm);
+}
+.request-card{
+  width:100%;display:flex;align-items:center;gap:11px;padding:10px 12px;border:0;
+  background:transparent;color:var(--ink);text-align:left;font:inherit;
+}
+.request-card + .request-card{border-top:1px solid var(--line)}
+.request-card:hover{background:var(--field-bg)}
+.request-card-ico{
+  flex:0 0 auto;width:28px;height:28px;display:inline-flex;align-items:center;
+  justify-content:center;border-radius:8px;background:var(--amber-wash);
+  color:var(--amber-strong);border:1px solid var(--amber-border);
+}
+.request-card-ico svg{width:15px;height:15px}
+.request-card-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.request-ask{font-size:.8125rem;font-weight:650;line-height:1.35;overflow-wrap:anywhere}
+.request-context{color:var(--muted);font-size:.71875rem;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.request-card-side{flex:0 0 auto;display:flex;align-items:center;gap:10px}
+.request-when{color:var(--muted);font-size:.6875rem;white-space:nowrap}
+.request-card-action{color:var(--accent-text);font-size:.75rem;font-weight:650}
+
+/* activity rows */
+.act-list{display:flex;flex-direction:column;border:1px solid var(--line);
+  border-radius:11px;background:var(--card-bg);overflow:hidden;box-shadow:var(--shadow-sm)}
+.act-row{display:flex;align-items:center;gap:10px;padding:9px 12px;font-size:.8125rem}
+.act-row + .act-row{border-top:1px solid var(--line-soft)}
+.act-ico{flex:none;width:22px;height:22px;display:inline-flex;align-items:center;
+  justify-content:center;border-radius:6px;background:var(--wash-2);color:var(--muted-2)}
+.act-ico svg{width:13px;height:13px}
+.act-ico.ok{background:var(--ok-wash);color:var(--ok-ink)}
+.act-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.act-title{font-size:.8125rem;color:var(--ink-2)}
+.act-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.act-chip{
+  font-size:.6875rem;color:var(--muted);border:1px solid var(--line);
+  border-radius:999px;padding:0 7px;line-height:16px;white-space:nowrap;
+}
+.act-chip.act-tool{color:var(--kind-api-ink);border-color:var(--kind-api-wash);
+  background:var(--kind-api-wash)}
+.act-when{flex:none;font-size:.6875rem;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* live sessions */
+.live-head{font-size:.78125rem;font-weight:600;color:var(--muted);padding:0 2px 6px}
+.live-row{
+  display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line);
+  border-radius:9px;background:var(--card-bg);box-shadow:var(--shadow-sm);
+}
+.badge{display:inline-block;padding:2px 8px;border-radius:9px;font-size:.75rem;
+  font-weight:600;white-space:nowrap}
+.b-pg{background:var(--b-pg-bg);color:var(--b-pg-ink)}
+.live-txt{flex:1;min-width:0;font-size:.8125rem;color:var(--ink-2)}
+.s-sub{font-size:.71875rem;color:var(--muted)}
+
+/* segmented filter trigger */
+.seg-btn{
+  display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-mid);
+  background:var(--btn-bg);border-radius:7px;padding:4px 10px;font-size:.75rem;
+  font-weight:600;color:var(--ink-3);box-shadow:var(--shadow-xs);
+}
+.seg-btn:hover{background:var(--btn-hover)}
+.menu{
+  margin-top:6px;border:1px solid var(--line-mid);border-radius:10px;background:var(--panel);
+  box-shadow:var(--shadow-menu);padding:5px;min-width:16rem;
+}
+.menu-item{display:flex;align-items:center;gap:8px;width:100%;padding:6px 9px;border:0;
+  background:transparent;border-radius:7px;font-size:.8125rem;color:var(--ink-2);text-align:left}
+.menu-item:hover{background:var(--hover)}
+.menu-item .count{margin-left:auto;font-size:.6875rem;color:var(--muted)}
+.menu-sep{height:1px;margin:5px 4px;background:var(--line)}
+.menu-head{font-size:.625rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);padding:6px 9px 3px}
+
+/* toast */
+.toast-demo{
+  display:inline-flex;align-items:center;gap:9px;padding:10px 14px;border-radius:11px;
+  background:var(--panel);border:1px solid var(--line-mid);box-shadow:var(--shadow-toast);
+  font-size:.8125rem;color:var(--ink-2);max-width:100%;
+}
+
+/* ---------- NEW: the identity chip + disclosure ---------- */
+.idchip{
+  display:inline-flex;align-items:center;gap:5px;padding:1px 8px 1px 6px;border-radius:999px;
+  font-size:.6875rem;font-weight:650;white-space:nowrap;vertical-align:1px;
+  border:1px solid transparent;
+}
+.idchip svg{width:11px;height:11px;flex:none}
+.idchip.verified{background:var(--ok-wash);color:var(--ok-ink);border-color:var(--ok-border)}
+.idchip.identified{background:var(--chip-bg);color:var(--chip-ink);border-color:var(--line-mid)}
+.idchip.claimed{background:transparent;color:var(--muted);border-color:var(--line-mid);
+  border-style:dashed}
+.idname{font-weight:650}
+.idquote{unicode-bidi:isolate}
+.id-inline{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap}
+.id-details{
+  border:0;background:transparent;padding:0;color:var(--accent-text);
+  font:inherit;font-size:.6875rem;font-weight:650;text-decoration:underline;
+  text-underline-offset:2px;
+}
+.disc{
+  margin:10px auto 0;max-width:480px;text-align:left;border:1px solid var(--line-mid);
+  border-radius:10px;background:var(--panel);box-shadow:var(--shadow-menu);padding:13px 14px;
+}
+.disc.hide{display:none}
+.disc-top{display:flex;align-items:flex-start;gap:10px;padding-bottom:11px;
+  border-bottom:1px solid var(--line)}
+.disc-badge{
+  flex:none;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:9px;background:var(--ok-wash);color:var(--ok-ink);border:1px solid var(--ok-border);
+}
+.disc-badge.weak{background:var(--chip-bg);color:var(--chip-ink);border-color:var(--line-mid)}
+.disc-badge.none{background:transparent;color:var(--muted);border:1px dashed var(--line-strong)}
+.disc-badge svg{width:17px;height:17px}
+.disc-top-txt{min-width:0}
+.disc-title{font-size:.8125rem;font-weight:700}
+.disc-sub{font-size:.71875rem;color:var(--muted);margin-top:2px;line-height:1.45}
+.disc-sect{padding-top:11px}
+.disc-sect + .disc-sect{margin-top:11px;border-top:1px solid var(--line)}
+.disc-h{font-size:.625rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:6px}
+.disc-kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:4px 12px;font-size:.71875rem}
+.disc-kv dt{color:var(--muted)}
+.disc-kv dd{color:var(--ink-2);overflow-wrap:anywhere}
+.disc-kv dd code{font-size:.6875rem}
+.link-list{display:flex;flex-direction:column;gap:7px}
+.link{display:flex;gap:8px;font-size:.71875rem;line-height:1.5;color:var(--ink-2)}
+.link-mark{flex:none;width:15px;height:15px;margin-top:1px;display:inline-flex;
+  align-items:center;justify-content:center;border-radius:999px}
+.link-mark svg{width:10px;height:10px}
+.link-mark.ok{background:var(--ok-wash);color:var(--ok-ink)}
+.link-mark.no{background:var(--chip-bg);color:var(--muted)}
+.chain{
+  margin-top:8px;padding:8px 10px;border-radius:7px;background:var(--wash-2);
+  font-size:.6875rem;color:var(--ink-2);line-height:1.7;overflow-wrap:anywhere;
+}
+.chain b{font-weight:650;color:var(--ink)}
+.chain .dim{color:var(--muted)}
+.means{display:flex;flex-direction:column;gap:7px}
+.mean{display:flex;gap:8px;font-size:.71875rem;line-height:1.5}
+.mean .g{flex:none;font-weight:700;width:12px}
+.mean.yes .g{color:var(--ok-ink)}
+.mean.no .g{color:var(--danger-ink)}
+.mean b{font-weight:650;color:var(--ink)}
+
+/* callout */
+.callout{
+  margin:20px 0 0;padding:14px 16px;border:1px solid var(--accent-border);border-radius:12px;
+  background:var(--accent-wash);font-size:.78125rem;line-height:1.6;color:var(--ink-2);
+}
+.callout h3{font-size:.8125rem;font-weight:700;color:var(--ink);margin-bottom:7px}
+.callout ul{margin:6px 0 0 18px}
+.callout li{margin-bottom:5px}
+.callout code{background:var(--wash-2);border-radius:4px;padding:1px 4px}
+.rulegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:12px;margin-top:11px}
+.rule{border:1px solid var(--line-mid);border-radius:10px;background:var(--panel);padding:11px 12px}
+.rule h4{font-size:.71875rem;font-weight:700;margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.rule p{font-size:.6875rem;color:var(--muted);line-height:1.55}
+.rule .dot{width:7px;height:7px;border-radius:999px;flex:none}
+.dot.ok{background:var(--ok-solid)}.dot.warn{background:var(--warning-dot)}
+.dot.off{background:var(--switch-off)}
+
+/* matrix table */
+.matrix{width:100%;border-collapse:collapse;font-size:.75rem;margin-top:4px}
+.matrix th,.matrix td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line-soft)}
+.matrix th{font-size:.625rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  font-weight:700}
+.matrix tr:last-child td{border-bottom:0}
+.matrix td b{font-weight:650}
+.matrix tr.active td{background:var(--accent-wash)}
+.toast-fixed{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);
+  padding:9px 15px;border-radius:10px;background:var(--panel);border:1px solid var(--line-mid);
+  box-shadow:var(--shadow-toast);font-size:.8125rem;color:var(--ink-2);
+  opacity:0;pointer-events:none;transition:opacity .16s,transform .16s;z-index:99;
+}
+.toast-fixed.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <div>
+    <h1>Attested agent identity — every surface, every assurance tier</h1>
+    <p>Today every agent-plane caller is named by a self-reported <code>x-multitool-client</code> header
+      (<code>daemon/mod.rs:281</code>), and the UI says so everywhere by wrapping the name in
+      <code>.untrusted-identity</code> plus a "self-reported" tooltip. This proposal adds an
+      OS-attested identity beside that label, and re-ranks the UI so the <em>verified</em> name leads
+      when there is one. Because attestation is only strong on macOS over the control socket, every
+      surface has to degrade honestly — flip the tier switch to see all four states.</p>
+  </div>
+  <button class="theme-flip" id="themeFlip">Light / dark</button>
+</div>
+
+<div class="control">
+  <span class="control-lbl">Assurance</span>
+  <div class="seg" id="tierSeg">
+    <button data-tier="verified" class="on">Verified</button>
+    <button data-tier="identified">Identified</button>
+    <button data-tier="interpreter">Interpreter</button>
+    <button data-tier="claimed">Claimed</button>
+  </div>
+  <div class="control-sep"></div>
+  <button class="tglbtn" id="spoofBtn">Agent names itself "Claude Code ✓"</button>
+  <button class="tglbtn" id="hlBtn">Highlight changes</button>
+  <p class="tier-note" id="tierNote"></p>
+</div>
+
+<div class="wrap">
+
+<!-- ============================ SURFACE 1 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 1</em>Traffic-confirmation sheet — the decision that matters most</h2>
+    <p>The approval sheet is where an unverified name does the most damage: it is an input to a human
+      trust decision. Today the title is <code>Allow "{approvalAgentName(agent)}" to use …</code>
+      (<code>app.tsx:5988</code>) and the facts list carries one <b>Agent</b> row
+      (<code>app.tsx:5998</code>), both fed by the self-reported label.</p>
+    <p><b class="prop">Proposal:</b> when the OS attested the caller, the attested program name becomes
+      the headline and loses its quotes — quotes are for strings we cannot vouch for. The verified
+      chip lives <em>outside</em> the name, in chrome the label's own text cannot reproduce, and the
+      self-reported label drops to its own <b>Reported as</b> row whenever it differs. When nothing was
+      attested, the sheet keeps today's quoted-and-isolated treatment and says plainly that the name is
+      self-reported.</p>
+  </div>
+  <div class="cmp">
+    <div class="side">
+      <span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <div class="sheet">
+          <span class="elicit-dlg-ico">{ICON:shieldAlert}</span>
+          <h3 class="elicit-dlg-title">Allow "<span class="untrusted-identity" data-slot="impl-title">Claude Code</span>"
+            to use <span class="untrusted-identity">GitHub</span>?</h3>
+          <p class="approval-permission-summary">Multitool will send this request to
+            api.github.com with your GitHub token attached.</p>
+          <dl class="approval-facts">
+            <div><dt>Agent</dt><dd class="untrusted-identity" data-slot="impl-fact">Claude Code</dd></div>
+            <div><dt>Tool</dt><dd class="untrusted-identity">GitHub</dd></div>
+            <div><dt>Wants to</dt><dd class="untrusted-identity">Create an issue in raymond/multitool</dd></div>
+            <div><dt>Credential</dt><dd>GITHUB_API_KEY</dd></div>
+            <div><dt>Requested</dt><dd>just now</dd></div>
+          </dl>
+          <div class="approval-consequence">{ICON:alertTriangle}
+            <span>Approving lets this agent write to your repository.</span></div>
+          <button class="approval-raw-toggle">{ICON:chevronRight} Show raw request</button>
+          <div class="approval-actions">
+            <button class="btn danger" data-toast="Denied (mockup)">Deny</button>
+            <span class="spacer"></span>
+            <button class="btn" data-toast="Approved once (mockup)">Approve Once</button>
+            <button class="btn primary" data-toast="Approved for 15 minutes (mockup)">Approve for 15 min</button>
+          </div>
+        </div>
+        <p class="side-note">Every rendering of the name is identical whether the caller is really
+          Claude Code or a shell script that chose the header. The tooltip is the only signal, and
+          tooltips do not survive a screenshot or a glance.</p>
+      </div>
+    </div>
+    <div class="side">
+      <span class="side-tag mock">Proposed</span>
+      <div class="stage">
+        <div class="sheet">
+          <span class="elicit-dlg-ico">{ICON:shieldAlert}</span>
+          <h3 class="elicit-dlg-title" data-slot="mock-title"></h3>
+          <p class="approval-permission-summary">Multitool will send this request to
+            api.github.com with your GitHub token attached.</p>
+          <dl class="approval-facts">
+            <div class="miss"><dt>Agent</dt><dd data-slot="mock-fact-agent"></dd></div>
+            <div class="miss" data-slot="mock-fact-reported-row"><dt>Reported as</dt>
+              <dd data-slot="mock-fact-reported"></dd></div>
+            <div><dt>Tool</dt><dd class="untrusted-identity">GitHub</dd></div>
+            <div><dt>Wants to</dt><dd class="untrusted-identity">Create an issue in raymond/multitool</dd></div>
+            <div><dt>Credential</dt><dd>GITHUB_API_KEY</dd></div>
+            <div><dt>Requested</dt><dd>just now</dd></div>
+          </dl>
+          <div class="approval-consequence">{ICON:alertTriangle}
+            <span>Approving lets this agent write to your repository.</span></div>
+          <div class="disc hide" id="disc"></div>
+          <button class="approval-raw-toggle">{ICON:chevronRight} Show raw request</button>
+          <div class="approval-actions">
+            <button class="btn danger" data-toast="Denied (mockup)">Deny</button>
+            <span class="spacer"></span>
+            <button class="btn" data-toast="Approved once (mockup)">Approve Once</button>
+            <button class="btn primary" data-slot="mock-approve-window"
+              data-toast="Approved — window scoped to this session (mockup)"></button>
+          </div>
+        </div>
+        <p class="side-note">Click <b>Details</b> in the Agent row to open the disclosure. Note the
+          approve-for-N-minutes button: its label changes too, because the approval <em>window</em> is
+          what attestation actually secures (see Surface 7).</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SURFACE 2 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 2</em>Requests banner and waiting cards — the glance surfaces</h2>
+    <p>The banner names a lone request through <code>approvalWantsLine()</code>
+      (<code>approval-presentation.ts:71</code>), and each waiting card repeats the name in its context
+      line via <code>shortAgent()</code> (<code>app.tsx:1034</code>, card at <code>app.tsx:1189</code>).
+      These are the surfaces a user reads in half a second, so they get the least room and the most
+      benefit from a single unforgeable glyph.</p>
+    <p><b class="prop">Proposal:</b> one 11px shield-check ahead of the name at verified tier, nothing
+      at all at the lower tiers — an absent mark is the signal. No extra words: the banner line is
+      already ellipsised at one line, so the chip must cost nothing but its glyph.</p>
+  </div>
+  <div class="cmp">
+    <div class="side">
+      <span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <button class="request-banner">
+          <span class="request-banner-ico">{ICON:shieldAlert}</span>
+          <span class="request-banner-copy">
+            <b>1 request waiting</b>
+            <span class="untrusted-identity" data-slot="impl-banner"></span>
+          </span>
+          <span class="request-banner-cta">Review</span>
+        </button>
+        <div class="request-list">
+          <button class="request-card">
+            <span class="request-card-ico">{ICON:shieldAlert}</span>
+            <span class="request-card-body">
+              <b class="request-ask untrusted-identity">POST /repos/raymond/multitool/issues</b>
+              <span class="request-context untrusted-identity" data-slot="impl-card"></span>
+            </span>
+            <span class="request-card-side"><span class="request-when">0:42</span>
+              <span class="request-card-action">Review</span></span>
+          </button>
+          <button class="request-card">
+            <span class="request-card-ico">{ICON:bell}</span>
+            <span class="request-card-body">
+              <b class="request-ask untrusted-identity">Which environment should I deploy?</b>
+              <span class="request-context untrusted-identity">codex → deploy-bot · paused on run_task</span>
+            </span>
+            <span class="request-card-side"><span class="request-when">2:10</span>
+              <span class="request-card-action">Answer</span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="side">
+      <span class="side-tag mock">Proposed</span>
+      <div class="stage">
+        <button class="request-banner">
+          <span class="request-banner-ico">{ICON:shieldAlert}</span>
+          <span class="request-banner-copy">
+            <b>1 request waiting</b>
+            <span class="miss" data-slot="mock-banner"></span>
+          </span>
+          <span class="request-banner-cta">Review</span>
+        </button>
+        <div class="request-list">
+          <button class="request-card">
+            <span class="request-card-ico">{ICON:shieldAlert}</span>
+            <span class="request-card-body">
+              <b class="request-ask untrusted-identity">POST /repos/raymond/multitool/issues</b>
+              <span class="request-context miss" data-slot="mock-card"></span>
+            </span>
+            <span class="request-card-side"><span class="request-when">0:42</span>
+              <span class="request-card-action">Review</span></span>
+          </button>
+          <button class="request-card">
+            <span class="request-card-ico">{ICON:bell}</span>
+            <span class="request-card-body">
+              <b class="request-ask untrusted-identity">Which environment should I deploy?</b>
+              <span class="request-context">
+                <span class="idchip claimed">{ICON:helpCircle} unverified</span>
+                <span class="idquote">"codex"</span> → deploy-bot · paused on run_task</span>
+            </span>
+            <span class="request-card-side"><span class="request-when">2:10</span>
+              <span class="request-card-action">Answer</span></span>
+          </button>
+        </div>
+        <p class="side-note">The second card is pinned at <b>claimed</b> tier on purpose: a mixed queue
+          is the realistic case, and the two rows have to be visually distinguishable at a glance
+          without reading either name.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SURFACE 3 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 3</em>Identity disclosure — the new chrome</h2>
+    <p>This is the one genuinely new surface. It is the answer to "verified by what?", reachable from
+      the Agent row of the approval sheet, from an activity row, and from a live session. It has to do
+      two jobs that pull in opposite directions: show the evidence chain, and stop the user from
+      over-reading it.</p>
+    <p><b class="prop">Proposal:</b> a popover in three parts — what was attested, how (the two-link
+      chain, each link marked pass/absent), and an explicit <em>what this does and does not mean</em>
+      block. That last block is not decoration: a verified agent that has been prompt-injected is
+      still verified, and the disclosure is the only place with room to say so.</p>
+  </div>
+  <div class="cmp">
+    <div class="side">
+      <span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <div class="sheet" style="text-align:left;padding:16px">
+          <p style="font-size:.78125rem;color:var(--muted);line-height:1.6">There is no equivalent
+            today. The nearest thing is the <code>title</code> attribute on each name —
+            <em>"Agent names are self-reported"</em> — and the activity row's
+            <code>remote: &lt;peer&gt;</code> chip, which reports a socket address for
+            management-plane calls only (<code>request_peer</code>,
+            <code>daemon/mod.rs:129</code>, and it is always <code>None</code> on the Unix
+            socket).</p>
+        </div>
+      </div>
+    </div>
+    <div class="side">
+      <span class="side-tag mock">Proposed</span>
+      <div class="stage">
+        <div class="disc miss" data-slot="disc-static" style="margin:0;max-width:none"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SURFACE 4 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 4</em>Activity log — rows, chips, and the agent filter</h2>
+    <p>Each row carries <code>reported as "{entry.agent}"</code> in an <code>.act-chip</code>
+      (<code>app.tsx:4129</code>), and the Agent filter lists those raw strings
+      (<code>app.tsx:4391</code>). Because the chip text is the only record, history cannot distinguish
+      a real Claude Code call from anything that borrowed the name — including retroactively, after you
+      learn a key leaked.</p>
+    <p><b class="prop">Proposal:</b> persist the attestation next to the label on
+      <code>AuditEntry</code> and render it as the chip, so the log becomes evidence. The filter groups
+      by attested identity, with claimed labels collected under a separate heading — that grouping is
+      the fastest way to spot "something used codex's name from an unattested session at 03:00".</p>
+  </div>
+  <div class="cmp">
+    <div class="side">
+      <span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <div class="act-list">
+          <div class="act-row">
+            <span class="act-ico ok">{ICON:check}</span>
+            <span class="act-body"><span class="act-title">Request allowed — GitHub</span>
+              <span class="act-chips"><span class="act-chip untrusted-identity" data-slot="impl-act"></span>
+                <span class="act-chip act-tool">github</span>
+                <span class="act-chip">128 ms</span></span></span>
+            <span class="act-when">09:41</span>
+          </div>
+          <div class="act-row">
+            <span class="act-ico ok">{ICON:check}</span>
+            <span class="act-body"><span class="act-title">Session opened — analytics</span>
+              <span class="act-chips"><span class="act-chip untrusted-identity">reported as "codex"</span>
+                <span class="act-chip act-tool">analytics</span></span></span>
+            <span class="act-when">09:38</span>
+          </div>
+        </div>
+        <button class="seg-btn" style="align-self:flex-start;margin-top:2px">Agent:
+          <span class="untrusted-identity" data-slot="impl-filter"></span> {ICON:chevronDown}</button>
+      </div>
+    </div>
+    <div class="side">
+      <span class="side-tag mock">Proposed</span>
+      <div class="stage">
+        <div class="act-list">
+          <div class="act-row">
+            <span class="act-ico ok">{ICON:check}</span>
+            <span class="act-body"><span class="act-title">Request allowed — GitHub</span>
+              <span class="act-chips"><span class="miss" data-slot="mock-act"></span>
+                <span class="act-chip act-tool">github</span>
+                <span class="act-chip">128 ms</span></span></span>
+            <span class="act-when">09:41</span>
+          </div>
+          <div class="act-row">
+            <span class="act-ico">{ICON:check}</span>
+            <span class="act-body"><span class="act-title">Session opened — analytics</span>
+              <span class="act-chips">
+                <span class="idchip claimed">{ICON:helpCircle} unverified</span>
+                <span class="act-chip idquote">"codex"</span>
+                <span class="act-chip act-tool">analytics</span></span></span>
+            <span class="act-when">09:38</span>
+          </div>
+        </div>
+        <button class="seg-btn" style="align-self:flex-start;margin-top:2px" id="filterBtn">Agent:
+          <span data-slot="mock-filter"></span> {ICON:chevronDown}</button>
+        <div class="menu hide" id="filterMenu" style="align-self:flex-start">
+          <div class="menu-head">Verified programs</div>
+          <button class="menu-item">{ICON:shieldCheck}<span>Claude Code</span>
+            <span class="count">1,204</span></button>
+          <button class="menu-item">{ICON:shieldCheck}<span>Claude Desktop</span>
+            <span class="count">86</span></button>
+          <div class="menu-sep"></div>
+          <div class="menu-head">Self-reported only</div>
+          <button class="menu-item">{ICON:helpCircle}<span class="idquote">"codex"</span>
+            <span class="count">311</span></button>
+          <button class="menu-item">{ICON:helpCircle}<span class="idquote">"agent"</span>
+            <span class="count">27</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SURFACE 5 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 5</em>Live sessions, elicitation, and the connect-request toast</h2>
+    <p>Three smaller surfaces that name an agent. <code>LiveSessions</code>
+      (<code>app.tsx:1043</code>) is the one place today that prints the agent name
+      <em>without</em> <code>.untrusted-identity</code> — worth fixing regardless of this feature. The
+      elicitation dialog leads with <code>agentLabel()</code> (<code>app.tsx:5828</code>), and the
+      connect-request toast interpolates the name directly (<code>app.tsx:12837</code>).</p>
+    <p><b class="prop">Proposal:</b> the same chip, sized down. In the toast the chip is the difference
+      between "some process wants a new connection" and "Claude Code wants a new connection" — and the
+      request quota that defends against notification flooding should key off the attested identity,
+      not the label it chose (<code>broker.rs:2359</code> debounces on
+      <code>(client, service)</code> today).</p>
+  </div>
+  <div class="cmp">
+    <div class="side">
+      <span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <p class="live-head">Active now</p>
+        <div class="live-row"><span class="badge b-pg">Postgres</span>
+          <span class="live-txt"><span data-slot="impl-live"></span><br>
+            <span class="s-sub">2 min · analytics</span></span></div>
+        <div class="sheet" style="padding:16px 18px">
+          <span class="elicit-dlg-ico">{ICON:bell}</span>
+          <h3 class="elicit-dlg-title untrusted-identity" data-slot="impl-elicit"></h3>
+          <p class="approval-permission-summary">Which environment should I deploy to?</p>
+        </div>
+        <div class="toast-demo">🤖 <span class="untrusted-identity" data-slot="impl-toast"></span></div>
+      </div>
+    </div>
+    <div class="side">
+      <span class="side-tag mock">Proposed</span>
+      <div class="stage">
+        <p class="live-head">Active now</p>
+        <div class="live-row"><span class="badge b-pg">Postgres</span>
+          <span class="live-txt"><span class="miss" data-slot="mock-live"></span><br>
+            <span class="s-sub">2 min · analytics</span></span></div>
+        <div class="sheet" style="padding:16px 18px">
+          <span class="elicit-dlg-ico">{ICON:bell}</span>
+          <h3 class="elicit-dlg-title miss" data-slot="mock-elicit"></h3>
+          <p class="approval-permission-summary">Which environment should I deploy to?</p>
+        </div>
+        <div class="toast-demo miss" data-slot="mock-toast"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SURFACE 6 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 6</em>Where each tier comes from — the honest matrix</h2>
+    <p>The tier is not a preference, it is whatever the operating system could actually prove on the
+      path the caller used. The active row follows the switch above.</p>
+  </div>
+  <div class="side" style="padding:4px 18px 16px">
+    <table class="matrix">
+      <thead><tr><th>Tier</th><th>How it arises</th><th>What the OS proved</th><th>UI treatment</th></tr></thead>
+      <tbody>
+        <tr data-row="verified">
+          <td><b>Verified</b></td>
+          <td>macOS, control socket. Broker checks its socket peer's code signature against its own,
+            then trusts that peer's report of its signed parent.</td>
+          <td>The program is genuinely the one it claims, signed by a known team.</td>
+          <td>Attested name leads, unquoted, green shield.</td>
+        </tr>
+        <tr data-row="identified">
+          <td><b>Identified</b></td>
+          <td>Linux, control socket. <code>SO_PEERCRED</code> plus <code>/proc/&lt;pid&gt;/exe</code>;
+            no signature to check.</td>
+          <td>An executable path, defeatable by same-user <code>ptrace</code>.</td>
+          <td>Name leads, grey chip reading "identified", no shield.</td>
+        </tr>
+        <tr data-row="interpreter">
+          <td><b>Interpreter</b></td>
+          <td>Agent runs under <code>node</code> / <code>python3</code> — e.g. an npm install of a
+            harness. The runtime is signed; the agent is not.</td>
+          <td>Only the runtime's identity, which says nothing about the script.</td>
+          <td>Self-reported label leads (quoted); runtime shown as a secondary fact.</td>
+        </tr>
+        <tr data-row="claimed">
+          <td><b>Claimed</b></td>
+          <td>Hosted broker over TCP, a direct endpoint client, or any process using the shared agent
+            key without the helper.</td>
+          <td>Nothing. <code>HOSTING.md:8</code> already says this.</td>
+          <td>Today's treatment, made explicit: quoted, isolated, dashed "unverified" chip.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================ SURFACE 7 ============================ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Surface 7</em>The part that is not cosmetic — approval-window scoping</h2>
+    <p>An identity feature that only changes labels is theatre. The concrete behavioural win is in
+      <code>approvals.rs:414</code>: an "approve for 15 minutes" window is currently keyed by the
+      <em>self-reported</em> label, so any caller that sends the same header rides the window a user
+      opened for something else. That is a real privilege-transfer bug that attestation closes.</p>
+    <p><b class="prop">Proposal:</b> key the window on the attested session when there is one, and say
+      so on the button and in the resulting activity entry. At claimed tier the wording must get
+      <em>weaker</em> than today's, not stronger — it is the same behaviour, now disclosed.</p>
+  </div>
+  <div class="cmp">
+    <div class="side">
+      <span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <div class="sheet" style="padding:14px 16px;text-align:left">
+          <p style="font-size:.78125rem;color:var(--ink-2);line-height:1.6">
+            <b>Approve for 15 min</b><br>
+            <span style="color:var(--muted);font-size:.71875rem">Applies to further requests from an
+            agent reporting the label <span class="idquote">"claude-code"</span> — whichever process
+            that is.</span></p>
+        </div>
+      </div>
+    </div>
+    <div class="side">
+      <span class="side-tag mock">Proposed</span>
+      <div class="stage">
+        <div class="sheet miss" style="padding:14px 16px;text-align:left">
+          <p style="font-size:.78125rem;color:var(--ink-2);line-height:1.6"
+             data-slot="mock-window-copy"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="callout">
+  <h3>Copy rules the mockup is enforcing</h3>
+  <ul>
+    <li><b>Quotes mean "we cannot vouch for this string."</b> Attested names lose the quotes; claimed
+      names keep them. That makes the punctuation itself carry meaning consistently across all seven
+      surfaces.</li>
+    <li><b>The verified mark never sits inside attacker-controlled text.</b> Flip the spoof switch at
+      any tier: a label of <code>Claude Code ✓ verified by Anthropic</code> renders inside the quoted,
+      BiDi-isolated slot and never acquires chrome. This is why the chip is a separate element and the
+      attested name is a separate field, not a formatted version of the label.</li>
+    <li><b>Absence is a signal, not a gap.</b> Lower tiers get a dashed outline chip rather than
+      nothing, so "unverified" reads as a determination Multitool made rather than a feature that
+      failed to load.</li>
+    <li><b>Verified is an identity claim, never a safety claim.</b> Every disclosure states that a
+      verified agent can still be steered by content it read. Nothing in the UI says "trusted".</li>
+    <li><b>No tier grants anything extra.</b> Attestation only ever adds confidence to a decision the
+      user still makes; a claimed session keeps exactly today's authority, so there is no incentive to
+      downgrade and nothing new to attack.</li>
+  </ul>
+  <div class="rulegrid">
+    <div class="rule"><h4><span class="dot ok"></span>Ships as a real defence</h4>
+      <p>Approval-window scoping, per-identity connect-request quotas, and an audit trail that
+        separates attested from claimed. All three work without any new authorization model.</p></div>
+    <div class="rule"><h4><span class="dot warn"></span>Needs plumbing first</h4>
+      <p>Peer credentials on the Unix listener: it is served with a bare <code>axum::serve</code>
+        (<code>daemon/mod.rs:841</code>), so there is no per-connection info at all today — TCP gets
+        <code>ConnectInfo</code>, the socket gets nothing.</p></div>
+    <div class="rule"><h4><span class="dot off"></span>Explicitly out of scope</h4>
+      <p>This does not isolate agents from each other, and it is not authorization. A same-user process
+        can still use the shared key directly — it simply arrives as <em>claimed</em> and gets its own
+        approval prompts.</p></div>
+  </div>
+</div>
+
+</div>
+
+<div class="toast-fixed" id="toast"></div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+/* ---------- inline icon set (Lucide-shaped, matching ui/src/icons.tsx) ---------- */
+const ICONS = {
+  shieldCheck: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+  shieldAlert: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  helpCircle: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/><path d="M12 17h.01"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  alertTriangle: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M9 2v2"/><path d="M15 2v2"/><path d="M9 20v2"/><path d="M15 20v2"/><path d="M2 9h2"/><path d="M2 15h2"/><path d="M20 9h2"/><path d="M20 15h2"/>',
+  terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+};
+const svg = (n, sw) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' +
+  (sw || 2) + '" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[n] || '') + '</svg>';
+
+/* Expand {ICON:name} placeholders left in the markup. */
+document.body.innerHTML = document.body.innerHTML.replace(
+  /\{ICON:(\w+)\}/g, (_, n) => svg(n));
+
+/* ---------- the four assurance tiers ---------- */
+const SPOOF_LABEL = 'Claude Code ✓ verified by Anthropic';
+const PLAIN_LABEL = 'claude-code';
+
+const TIERS = {
+  verified: {
+    kind: 'verified',
+    chipText: 'verified',
+    program: 'Claude Code',
+    label: PLAIN_LABEL,
+    signer: 'Anthropic, PBC',
+    team: 'Q6L2SF6YDW',
+    csid: 'com.anthropic.claude-code',
+    path: '/Users/raymond/.local/share/claude/versions/2.1.226',
+    runtime: null,
+    discTitle: 'Verified program identity',
+    discSub: 'macOS confirmed the signature of the process that opened this session.',
+    links: [
+      ['ok', 'The <b>multitool</b> helper on the control socket was checked against this broker’s own code signature.'],
+      ['ok', 'That helper reported its parent, and macOS confirmed the parent’s signature by audit token.'],
+    ],
+    chain: '<b>Claude Code</b> <span class="dim">(signed: Anthropic, PBC)</span> → <b>multitool mcp</b> <span class="dim">(signed: same team as broker)</span> → <span class="dim">control socket</span>',
+    means: [
+      ['yes', 'This really is <b>Claude Code</b>, signed by Anthropic — not a program that chose the name.'],
+      ['no', 'It does <b>not</b> mean the request is safe. A verified agent can still be steered by content it read. Judge the request on the lines above.'],
+    ],
+    windowCopy: 'Applies only to this verified <b>Claude Code</b> session. A different process cannot join the window by sending the same name, and the window ends when the session does.',
+    note: '<b>Verified</b> — the flagship case: native-install Claude Code or Claude Desktop on macOS, reaching the broker over the local control socket.',
+  },
+  identified: {
+    kind: 'identified',
+    chipText: 'identified',
+    program: 'Cursor',
+    label: 'cursor',
+    signer: null,
+    team: null,
+    csid: null,
+    path: '/opt/cursor/cursor',
+    runtime: null,
+    discTitle: 'Identified, not signature-verified',
+    discSub: 'This platform can name the executable but cannot prove it has not been tampered with.',
+    links: [
+      ['ok', 'The peer on the control socket was read from <b>SO_PEERCRED</b>, then resolved through <code>/proc/&lt;pid&gt;/exe</code>.'],
+      ['no', 'No code signature to check on this platform, and a same-user process may be able to attach to the helper.'],
+    ],
+    chain: '<b>Cursor</b> <span class="dim">(/opt/cursor/cursor, unsigned)</span> → <b>multitool mcp</b> → <span class="dim">control socket</span>',
+    means: [
+      ['yes', 'The program at this path launched the session, and it is not the same as an unrelated caller.'],
+      ['no', 'It is <b>not</b> proof of authorship. Treat it as attribution for your own log, not as a security boundary.'],
+    ],
+    windowCopy: 'Applies to this session only. The session is identified but not signature-verified, so treat the window as convenience rather than containment.',
+    note: '<b>Identified</b> — Linux, or an unsigned/ad-hoc build on macOS. An executable path, no cryptographic proof.',
+  },
+  interpreter: {
+    kind: 'identified',
+    chipText: 'runtime only',
+    program: null,
+    label: PLAIN_LABEL,
+    signer: 'Node.js Foundation',
+    team: null,
+    csid: null,
+    path: '/opt/homebrew/bin/node',
+    runtime: 'node v22.4.0',
+    discTitle: 'Only the runtime could be identified',
+    discSub: 'The session was launched by an interpreter, so the signature belongs to node — not to the agent running inside it.',
+    links: [
+      ['ok', 'The <b>multitool</b> helper on the control socket was verified against this broker’s own signature.'],
+      ['no', 'Its parent is <b>node</b>. Verifying an interpreter proves nothing about the script it is running, so the name below stays self-reported.'],
+    ],
+    chain: '<span class="dim">unknown script</span> → <b>node</b> <span class="dim">(/opt/homebrew/bin/node)</span> → <b>multitool mcp</b> → <span class="dim">control socket</span>',
+    means: [
+      ['yes', 'Something running under <b>node</b> opened this session from this machine.'],
+      ['no', 'The name is still <b>self-reported</b>. An npm-installed harness attests as its runtime; install the native build if you want a verified name.'],
+    ],
+    windowCopy: 'Applies to this session only. The name is self-reported — the window is bound to the session, not to the name.',
+    note: '<b>Interpreter</b> — an npm/pip-installed harness. The runtime is signed, the agent is not, so the label must keep leading.',
+  },
+  claimed: {
+    kind: 'claimed',
+    chipText: 'unverified',
+    program: null,
+    label: PLAIN_LABEL,
+    signer: null,
+    team: null,
+    csid: null,
+    path: null,
+    runtime: null,
+    discTitle: 'Self-reported name only',
+    discSub: 'Multitool has no operating-system evidence for this name.',
+    links: [
+      ['no', 'This session arrived over TCP, where the peer is the reverse proxy rather than the caller — the same limit <code>HOSTING.md</code> documents for the client label.'],
+      ['no', 'No attested helper, so no parent could be reported.'],
+    ],
+    chain: '<span class="dim">unknown caller → TCP listener (hosted mode)</span>',
+    means: [
+      ['no', 'Any program that holds the shared agent key can choose this name, including one imitating another agent.'],
+      ['yes', 'It is still useful as your own bookkeeping — just never as an authorization or trust signal.'],
+    ],
+    windowCopy: 'Applies to further requests from any caller reporting <span class="idquote">this same name</span>. Multitool cannot tell those callers apart, so keep the window short.',
+    note: '<b>Claimed</b> — hosted/TCP, a direct-endpoint client, or a process using the shared key without the helper. Exactly today’s behaviour, now labelled.',
+  },
+};
+
+let tier = 'verified';
+let spoof = false;
+
+const esc = (s) => String(s).replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function T(){
+  const t = TIERS[tier];
+  const label = spoof ? SPOOF_LABEL : t.label;
+  /* An attested program name is ours; a label is the agent's. Never mix them. */
+  return Object.assign({}, t, {label, quoted: '"' + esc(label) + '"'});
+}
+
+/* Chip is always a separate element from any agent-controlled text. */
+function chip(t, opts){
+  const o = opts || {};
+  const icon = t.kind === 'verified' ? 'shieldCheck'
+    : t.kind === 'identified' ? 'cpu' : 'helpCircle';
+  const text = o.short ? (t.kind === 'verified' ? 'verified' : t.chipText) : t.chipText;
+  return '<span class="idchip ' + t.kind + '" title="' + esc(t.discSub) + '">' +
+    svg(icon, 2.2) + (o.glyphOnly ? '' : '<span>' + text + '</span>') + '</span>';
+}
+
+/* The headline identity: attested name unquoted, else the quoted label. */
+function headline(t, opts){
+  const o = opts || {};
+  if (t.program) {
+    return chip(t, o) + ' <span class="idname">' + esc(t.program) + '</span>';
+  }
+  return chip(t, o) + ' <span class="idquote">' + t.quoted + '</span>';
+}
+
+const SLOTS = {
+  /* ---- Surface 1: approval sheet ---- */
+  'impl-title': t => esc(t.label),
+  'impl-fact': t => esc(t.label),
+  'mock-title': t => t.program
+    ? 'Allow <span class="id-inline">' + headline(t) + '</span> to use <span class="untrusted-identity">GitHub</span>?'
+    : 'Allow <span class="id-inline">' + headline(t) + '</span> to use <span class="untrusted-identity">GitHub</span>?',
+  'mock-fact-agent': t => '<span class="id-inline">' + headline(t) +
+    (t.signer && t.program ? ' <span style="color:var(--muted);font-weight:400">· ' + esc(t.signer) + '</span>' : '') +
+    ' <button class="id-details" data-disc>Details</button></span>',
+  'mock-fact-reported': t => '<span class="idquote">' + t.quoted + '</span>' +
+    (t.runtime ? ' <span style="color:var(--muted)">· runs under ' + esc(t.runtime) + '</span>' : ''),
+  'mock-approve-window': t => t.program
+    ? 'Approve this session for 15 min'
+    : 'Approve for 15 min',
+
+  /* ---- Surface 2: banner + cards ---- */
+  'impl-banner': t => esc(t.label) + ' wants to create an issue on GitHub',
+  'mock-banner': t => (t.program
+      ? chip(t, {glyphOnly: true}) + ' <span class="idname">' + esc(t.program) + '</span>'
+      : chip(t, {glyphOnly: true}) + ' <span class="idquote">' + t.quoted + '</span>') +
+    ' <span style="color:var(--muted)">wants to create an issue on GitHub</span>',
+  'impl-card': t => esc(t.label) + ' → github · api.github.com',
+  'mock-card': t => (t.program
+      ? chip(t, {glyphOnly: true}) + ' <span class="idname">' + esc(t.program) + '</span>'
+      : chip(t, {glyphOnly: true}) + ' <span class="idquote">' + t.quoted + '</span>') +
+    ' → github · api.github.com',
+
+  /* ---- Surface 4: activity ---- */
+  'impl-act': t => 'reported as ' + t.quoted,
+  'mock-act': t => t.program
+    ? chip(t) + ' <span class="act-chip idname" style="border-color:var(--ok-border)">' +
+      esc(t.program) + '</span>'
+    : chip(t) + ' <span class="act-chip idquote">' + t.quoted + '</span>',
+  'impl-filter': t => t.quoted,
+  'mock-filter': t => t.program
+    ? '<span class="id-inline">' + chip(t, {glyphOnly: true}) + ' ' + esc(t.program) + '</span>'
+    : '<span class="id-inline">' + chip(t, {glyphOnly: true}) + ' <span class="idquote">' +
+      t.quoted + '</span></span>',
+
+  /* ---- Surface 5: live / elicit / toast ---- */
+  'impl-live': t => esc(t.label) + ' → analytics',
+  'mock-live': t => '<span class="id-inline">' + headline(t, {glyphOnly: true}) +
+    ' <span style="color:var(--muted)">→ analytics</span></span>',
+  'impl-elicit': t => 'Agent reported as ' + t.quoted + ' says deploy-bot asked for input',
+  'mock-elicit': t => '<span class="id-inline">' + headline(t) +
+    ' <span style="font-weight:400">says <span class="untrusted-identity">deploy-bot</span> asked for input</span></span>',
+  'impl-toast': t => esc(t.label) + ' asked to connect “Linear”',
+  'mock-toast': t => '<span class="id-inline">' + headline(t, {glyphOnly: true}) +
+    ' <span>asked to connect <span class="untrusted-identity">“Linear”</span></span></span>',
+
+  /* ---- Surface 7: window scoping ---- */
+  'mock-window-copy': t => '<b>' + (t.program ? 'Approve this session for 15 min' :
+      'Approve for 15 min') + '</b><br><span style="color:var(--muted);font-size:.71875rem">' +
+    t.windowCopy + '</span>',
+};
+
+/* The disclosure popover, rendered for both the sheet and the standalone example. */
+function disclosure(t){
+  const badgeCls = t.kind === 'verified' ? '' : (t.kind === 'identified' ? 'weak' : 'none');
+  const icon = t.kind === 'verified' ? 'shieldCheck' : (t.kind === 'identified' ? 'cpu' : 'helpCircle');
+  const kv = [];
+  if (t.program) kv.push(['Program', esc(t.program)]);
+  if (t.signer) kv.push(['Signed by', esc(t.signer) + (t.team ?
+    ' <code>(Team ' + esc(t.team) + ')</code>' : '')]);
+  if (t.csid) kv.push(['Identifier', '<code>' + esc(t.csid) + '</code>']);
+  if (t.runtime) kv.push(['Runtime', esc(t.runtime)]);
+  if (t.path) kv.push(['Executable', '<code>' + esc(t.path) + '</code>']);
+  kv.push(['Reported as', '<span class="idquote">' + t.quoted + '</span>']);
+
+  return '' +
+    '<div class="disc-top"><span class="disc-badge ' + badgeCls + '">' + svg(icon, 2) + '</span>' +
+      '<span class="disc-top-txt"><span class="disc-title">' + esc(t.discTitle) + '</span>' +
+      '<span class="disc-sub">' + t.discSub + '</span></span></div>' +
+    '<div class="disc-sect"><div class="disc-h">What Multitool has</div>' +
+      '<dl class="disc-kv">' + kv.map(r => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('') +
+      '</dl></div>' +
+    '<div class="disc-sect"><div class="disc-h">How it was checked</div>' +
+      '<div class="link-list">' + t.links.map(l =>
+        '<span class="link"><span class="link-mark ' + l[0] + '">' +
+        svg(l[0] === 'ok' ? 'check' : 'x', 3) + '</span><span>' + l[1] + '</span></span>').join('') +
+      '</div><div class="chain">' + t.chain + '</div></div>' +
+    '<div class="disc-sect"><div class="disc-h">What this does and does not mean</div>' +
+      '<div class="means">' + t.means.map(m =>
+        '<span class="mean ' + m[0] + '"><span class="g">' + (m[0] === 'yes' ? '✓' : '✕') +
+        '</span><span>' + m[1] + '</span></span>').join('') + '</div></div>';
+}
+
+function render(){
+  const t = T();
+  Object.keys(SLOTS).forEach(name => {
+    $$('[data-slot="' + name + '"]').forEach(el => { el.innerHTML = SLOTS[name](t); });
+  });
+  /* The "Reported as" row only earns space when it adds something. */
+  const showReported = !!t.program || spoof;
+  $$('[data-slot="mock-fact-reported-row"]').forEach(el =>
+    el.style.display = showReported ? '' : 'none');
+
+  $('#disc').innerHTML = disclosure(t);
+  $('[data-slot="disc-static"]').innerHTML = disclosure(t);
+  $$('#tierSeg button').forEach(b => b.classList.toggle('on', b.dataset.tier === tier));
+  $('#tierNote').innerHTML = TIERS[tier].note;
+  $$('.matrix tr[data-row]').forEach(r => r.classList.toggle('active', r.dataset.row === tier));
+  $('#spoofBtn').classList.toggle('on', spoof);
+}
+
+/* ---------- interactions ---------- */
+$('#tierSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-tier]');
+  if (!b) return;
+  tier = b.dataset.tier;
+  $('#disc').classList.add('hide');
+  render();
+});
+$('#spoofBtn').addEventListener('click', () => {
+  spoof = !spoof;
+  render();
+  showToast(spoof
+    ? 'Label swapped for an imitation string — note it never gains chrome'
+    : 'Back to the ordinary label');
+});
+$('#hlBtn').addEventListener('click', () => {
+  document.body.classList.toggle('hl');
+  $('#hlBtn').classList.toggle('on', document.body.classList.contains('hl'));
+});
+$('#themeFlip').addEventListener('click', () => {
+  const d = document.documentElement;
+  d.dataset.theme = d.dataset.theme === 'dark' ? 'light' : 'dark';
+});
+document.body.addEventListener('click', e => {
+  if (e.target.closest('[data-disc]')) {
+    $('#disc').classList.toggle('hide');
+    return;
+  }
+  if (e.target.closest('#filterBtn')) {
+    $('#filterMenu').classList.toggle('hide');
+    return;
+  }
+  const t = e.target.closest('[data-toast]');
+  if (t) showToast(t.dataset.toast);
+});
+
+const toastEl = $('#toast'); let tt = null;
+function showToast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(tt);
+  tt = setTimeout(() => toastEl.classList.remove('show'), 2100);
+}
+
+/* .hide needs to exist for the menu/disclosure toggles. */
+const st = document.createElement('style');
+st.textContent = '.hide{display:none!important}';
+document.head.appendChild(st);
+
+render();
+</script>
+</body>
+</html>

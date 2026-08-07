@@ -1,4 +1,6 @@
 import {
+  Activity,
+  PanelRight,
   Bell,
   BookOpen,
   Bot,
@@ -45,6 +47,7 @@ import {
   SquarePen,
   Plug,
   Plus,
+  Power,
   QrCode,
   RefreshCw,
   RotateCcwKey,
@@ -66,11 +69,33 @@ import {
   UserRoundX,
   X,
   Zap,
+  type IconNode,
 } from 'lucide';
 import type { IconDefinition } from './icon';
 
+// Monochrome lockup matching src-tauri/icons/tray.svg (and the app icon
+// mark without the silver tile): Lucide bot beside a round-bow key, both
+// at one shared stroke weight. Used for brand chrome (sidebar, tray head,
+// lock screen, broker pane). Credential UI keeps the plain Key glyph —
+// notably the "All" credentials category tile.
+const APP_LOGO: IconNode = [
+  // Bot, scaled into the left half of the 24 grid.
+  ['path', { d: 'M7.36 7.64 V5.32 H5.04' }],
+  ['rect', { width: '9.28', height: '6.96', x: '2.72', y: '7.64', rx: '1.16' }],
+  ['path', { d: 'M1.56 11.12h1.16' }],
+  ['path', { d: 'M12 11.12h1.16' }],
+  ['path', { d: 'M9.1 10.54v1.16' }],
+  ['path', { d: 'M5.62 10.54v1.16' }],
+  // Round-bow key on the right (tray key geometry, not Lucide Key).
+  ['circle', { cx: '19.4', cy: '7.4', r: '3.3' }],
+  ['path', { d: 'M19.4 10.7v9.3' }],
+  ['path', { d: 'M19.4 15.2h-3.4' }],
+  ['path', { d: 'M19.4 18.2h-4.2' }],
+];
+
 export const LUCIDE_ICONS: Record<string, IconDefinition> = {
-  appIcon: { kind: 'lucide', node: Key, size: 15 },
+  activity: { kind: 'lucide', node: Activity, size: 15 },
+  appIcon: { kind: 'lucide', node: APP_LOGO, size: 15 },
   bookOpen: { kind: 'lucide', node: BookOpen, size: 15 },
   bot: { kind: 'lucide', node: Bot, size: 15 },
   botMessageSquare: { kind: 'lucide', node: BotMessageSquare, size: 15 },
@@ -87,6 +112,7 @@ export const LUCIDE_ICONS: Record<string, IconDefinition> = {
   trash: { kind: 'lucide', node: Trash, size: 13 },
   gear: { kind: 'lucide', node: Settings, size: 15 },
   menubar: { kind: 'lucide', node: RotateCcwKey, size: 14 },
+  power: { kind: 'lucide', node: Power, size: 15 },
   bell: { kind: 'lucide', node: Bell, size: 15 },
   circleQuestion: { kind: 'lucide', node: CircleQuestionMark, size: 15 },
   circleCheck: { kind: 'lucide', node: CircleCheck, size: 15 },
@@ -119,6 +145,7 @@ export const LUCIDE_ICONS: Record<string, IconDefinition> = {
   moon: { kind: 'lucide', node: Moon, size: 15 },
   sun: { kind: 'lucide', node: Sun, size: 15 },
   palette: { kind: 'lucide', node: Palette, size: 15 },
+  panelRight: { kind: 'lucide', node: PanelRight, size: 15 },
   plug: { kind: 'lucide', node: Plug, size: 15 },
   plugSm: { kind: 'lucide', node: Plug, size: 14 },
   plus: { kind: 'lucide', node: Plus, size: 12 },

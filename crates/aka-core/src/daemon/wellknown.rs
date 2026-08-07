@@ -270,14 +270,18 @@ only the outcome:
 
 - approved — the call proceeds normally;
 - refused — `403 {{"reason": "approval_denied"}}`. The refusal also stands
-  for calls made shortly after it, so **do not retry**: ask your user;
-- unanswered — `408 {{"reason": "approval_timeout"}}`. A retry is
-  reasonable here; it asks again.
+  for calls made shortly after it, so **do not retry**: ask your user.
+  The upstream was not reached;
+- unanswered — `408 {{"reason": "approval_timeout"}}`. Multitool asked a human
+  and nobody answered in time — this is not a dead connector. Tell the user
+  to open Multitool Desktop → Request Inbox. A retry is reasonable; it asks
+  again. The upstream was not reached.
 
 `403 {{"reason": "approval_unavailable"}}` means the connection asks for
-confirmation but no answering surface is attached, or the bounded prompt
-queue is full. Retrying will not help until Multitool is attached or capacity
-is available.
+confirmation but no Multitool Desktop approval surface is attached, or the
+bounded prompt queue is full. Retrying will not help until Multitool Desktop
+is open (and up to date) or capacity is available. The upstream was not
+reached.
 
 Set your HTTP client timeout to **at least {client_timeout} seconds**
 (confirmation wait + direct-endpoint upload + upstream and elicitation
@@ -651,9 +655,9 @@ mod tests {
         assert!(m.get("access_grant_ttl_seconds").is_none());
         // A call on a confirm-on tool parks for at most this long, and the
         // advertised client timeout has to cover it.
-        assert_eq!(m["approval_timeout_seconds"], 90);
+        assert_eq!(m["approval_timeout_seconds"], 300);
         assert_eq!(m["elicitation_timeout_seconds"], 300);
-        assert_eq!(m["recommended_client_timeout_seconds"], 600);
+        assert_eq!(m["recommended_client_timeout_seconds"], 900);
         assert!(
             m["approval_timeout_seconds"].as_u64().unwrap()
                 + BrokerConfig::default().endpoint_upload_timeout.as_secs()
@@ -788,7 +792,7 @@ mod tests {
             "256 UTF-8 bytes",
             "PGPASSWORD",
             "expires_in_seconds",
-            "at least 600 seconds",
+            "at least 900 seconds",
             "denied_by_policy",
             "\"wired\": true",
             "\"mcp_path\": \"/mcp\"",

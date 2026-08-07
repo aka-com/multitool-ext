@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { activeRequestCount, activeRequests, anchorExpiry, recentRequests } from '../src/requests';
+import {
+  activeRequestCount,
+  activeRequests,
+  anchorExpiry,
+  deadlineOutcomeVerb,
+  recentRequests,
+} from '../src/requests';
 import type { Approval, ElicitationRequest, RequestRecord } from '../src/types';
 
 function approval(id: string, expiresAt: string): Approval {
@@ -61,6 +67,20 @@ test('active requests are unified and ordered by the soonest deadline', () => {
     'approval-later',
   ]);
   assert.equal(activeRequestCount([approval('one', '2026-07-24T12:01:00Z')], []), 1);
+});
+
+test('deadline outcomes distinguish ignored questions from refused approvals', () => {
+  const approvalRequest = activeRequests(
+    [approval('approval', '2026-07-24T12:01:00Z')],
+    [],
+  )[0];
+  const elicitationRequest = activeRequests(
+    [],
+    [elicitation('elicitation', '2026-07-24T12:01:00Z')],
+  )[0];
+
+  assert.equal(deadlineOutcomeVerb(approvalRequest), 'refused');
+  assert.equal(deadlineOutcomeVerb(elicitationRequest), 'ignored');
 });
 
 test('active request sorting does not mutate broker snapshots', () => {

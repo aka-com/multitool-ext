@@ -112,9 +112,12 @@ pub struct BrokerConfig {
     pub max_endpoints: usize,
 
     /// How long a traffic-confirmation prompt waits for an answer before
-    /// the parked call is refused. Deliberately below
+    /// the parked call is refused. Sized for a human noticing Multitool
+    /// Desktop (about five minutes by default), and deliberately below
     /// `recommended_client_timeout`, so an unanswered prompt surfaces as a
     /// broker refusal the agent can read rather than as its own timeout.
+    /// With no approval surface attached, confirmed traffic still fails
+    /// closed after `approval_surface_grace` rather than waiting this long.
     pub approval_timeout: Duration,
     /// How long a newly unavailable confirmation waits for a request surface
     /// to reconnect. This is always capped by `approval_timeout`.
@@ -149,6 +152,8 @@ impl BrokerConfig {
     ///   to disk instead of buffering in memory.
     /// - `MULTITOOL_MAX_REDIRECTS` — redirect-chain budget per operation.
     /// - `MULTITOOL_PER_IDENTITY_PER_MIN` — capability-call rate limit.
+    /// - `MULTITOOL_APPROVAL_TIMEOUT_SECS` — how long a confirmation prompt
+    ///   waits for a human answer when a surface is attached.
     pub fn overridden_from_env(mut self) -> Self {
         self.apply_env(|name| std::env::var(name).ok());
         self
@@ -213,6 +218,12 @@ impl BrokerConfig {
             value(&get, "MULTITOOL_PER_IDENTITY_PER_MIN"),
         ) {
             self.per_identity_per_min = per_min.min(u32::MAX as u64) as u32;
+        }
+        if let Some(secs) = parse(
+            "MULTITOOL_APPROVAL_TIMEOUT_SECS",
+            value(&get, "MULTITOOL_APPROVAL_TIMEOUT_SECS"),
+        ) {
+            self.approval_timeout = Duration::from_secs(secs);
         }
     }
 
@@ -305,9 +316,9 @@ impl Default for BrokerConfig {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             // An MCP call may spend the full approval, body-upload,
-            // upstream-operation, and elicitation budgets; leave another 30
-            // seconds for broker and transport overhead.
-            recommended_client_timeout: Duration::from_secs(10 * 60),
+            // upstream-operation, and elicitation budgets; leave headroom
+            // above that floor for broker and transport overhead.
+            recommended_client_timeout: Duration::from_secs(15 * 60),
             outcome_retention: Duration::from_secs(600),
             outcome_retention_max_entries: 1024,
             outcome_retention_max_bytes: 64 * 1024 * 1024,
@@ -340,7 +351,10 @@ impl Default for BrokerConfig {
             per_ticket_total_sessions: 120,
             global_sessions: 300,
             max_endpoints: 64,
-            approval_timeout: Duration::from_secs(90),
+            // Five minutes: long enough for a human to notice Multitool
+            // Desktop after a notification or banner, short enough to stay
+            // under the advertised client timeout and fail closed.
+            approval_timeout: Duration::from_secs(5 * 60),
             approval_surface_grace: Duration::from_secs(2),
             approval_window: Duration::from_secs(15 * 60),
             approval_deny_cooldown: Duration::from_secs(60),

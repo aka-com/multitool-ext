@@ -194,6 +194,12 @@ pub trait CatalogRepository: CatalogReader {
         id: &Uuid,
         seed: Option<SecretValue>,
     ) -> Result<SecretMeta>;
+    async fn set_secret_origin(
+        &self,
+        workspace: &WorkspaceContext,
+        id: &Uuid,
+        origin: crate::types::SecretOrigin,
+    ) -> Result<SecretMeta>;
     async fn rename_secret(
         &self,
         workspace: &WorkspaceContext,
@@ -524,6 +530,15 @@ impl CatalogRepository for Store {
         seed: Option<SecretValue>,
     ) -> Result<SecretMeta> {
         Store::set_totp_factor(self, id, seed)
+    }
+
+    async fn set_secret_origin(
+        &self,
+        _workspace: &WorkspaceContext,
+        id: &Uuid,
+        origin: crate::types::SecretOrigin,
+    ) -> Result<SecretMeta> {
+        Store::set_secret_origin(self, id, origin)
     }
 
     async fn rename_secret(

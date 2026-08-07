@@ -70,6 +70,7 @@ impl RequestStatus {
 pub enum RequestResolution {
     ApprovedForWindow,
     ApprovedAll,
+    ApprovedOnce,
     Denied,
     TimedOut,
     PolicyChanged,
@@ -86,6 +87,7 @@ impl RequestResolution {
         match self {
             Self::ApprovedForWindow => "approved_for_window",
             Self::ApprovedAll => "approved_all",
+            Self::ApprovedOnce => "approved_once",
             Self::Denied => "denied",
             Self::TimedOut => "timed_out",
             Self::PolicyChanged => "policy_changed",
@@ -102,6 +104,7 @@ impl RequestResolution {
         match self {
             Self::ApprovedForWindow
             | Self::ApprovedAll
+            | Self::ApprovedOnce
             | Self::ConfirmationDisabled
             | Self::Waived
             | Self::InputProvided => RequestStatus::Approved,

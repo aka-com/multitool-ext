@@ -119,6 +119,10 @@ pub fn secret_dto(broker: &Broker, meta: &SecretMeta) -> SecretDto {
             crate::types::SecretKind::Secret => aka_api::SecretKindDto::Secret,
             crate::types::SecretKind::Password => aka_api::SecretKindDto::Password,
         },
+        origin: match meta.origin {
+            crate::types::SecretOrigin::User => aka_api::SecretOriginDto::User,
+            crate::types::SecretOrigin::Connection => aka_api::SecretOriginDto::Connection,
+        },
         site: meta.site.clone(),
         username: meta.username.clone(),
         totp: meta.has_totp(),
@@ -596,6 +600,7 @@ fn approval_decision(decision: ApprovalDecisionDto) -> crate::approvals::Approva
     match decision {
         ApprovalDecisionDto::ApproveWindow => crate::approvals::ApprovalDecision::ApproveWindow,
         ApprovalDecisionDto::ApproveAll => crate::approvals::ApprovalDecision::ApproveAll,
+        ApprovalDecisionDto::ApproveOnce => crate::approvals::ApprovalDecision::ApproveOnce,
         ApprovalDecisionDto::Deny => crate::approvals::ApprovalDecision::Deny,
     }
 }
@@ -1164,6 +1169,10 @@ pub struct SecretEditBody {
     pub new_username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_totp: Option<String>,
+    /// Moves the secret between the Your Secrets and Connection Secrets
+    /// lists; absent leaves the grouping alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_origin: Option<aka_api::SecretOriginDto>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -2008,6 +2017,12 @@ impl ManagementBackend for LocalBackend {
                     body.new_site,
                     body.new_username,
                     body.new_totp,
+                    body.new_origin.map(|origin| match origin {
+                        aka_api::SecretOriginDto::User => crate::types::SecretOrigin::User,
+                        aka_api::SecretOriginDto::Connection => {
+                            crate::types::SecretOrigin::Connection
+                        }
+                    }),
                 )
                 .await
                 .map(|_| ())

@@ -1945,13 +1945,16 @@ fn broker_tool_refusal(connection: &BrokerConnection, response: &BrokerResponse)
     if response.status == StatusCode::FORBIDDEN {
         return match reason {
             "approval_denied" => tool_error(&format!(
-                "The user refused this call to \"{}\". Do not retry it; \
-                 ask the user before trying a changed request.",
+                "The user refused this call to \"{}\" in Multitool Desktop. \
+                 Do not retry it; ask the user before trying a changed request. \
+                 The upstream service was not reached.",
                 connection.name
             )),
             "approval_unavailable" => tool_error(&format!(
-                "Confirmation is enabled for \"{}\", but no Multitool approval \
-                 window is attached. Ask the user to open Multitool.",
+                "Confirmation is enabled for \"{}\", but Multitool Desktop is not \
+                 attached as an approval surface. Ask the user to open Multitool \
+                 Desktop (and update it if an older copy is already running). \
+                 The upstream service was not reached.",
                 connection.name
             )),
             _ => tool_error(&format!(
@@ -1966,8 +1969,10 @@ fn broker_tool_refusal(connection: &BrokerConnection, response: &BrokerResponse)
     }
     if response.status == StatusCode::REQUEST_TIMEOUT || reason == "approval_timeout" {
         return tool_error(&format!(
-            "Nobody answered the confirmation for \"{}\" in time. \
-             Retrying will ask the user again.",
+            "Multitool asked a human to allow this call to \"{}\" and nobody \
+             answered before the deadline. This is not a dead connection — \
+             ask the user to open Multitool Desktop → Request Inbox and approve. \
+             Retrying will ask them again. The upstream service was not reached.",
             connection.name
         ));
     }

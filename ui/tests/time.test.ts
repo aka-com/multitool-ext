@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clockTime, relTime, timeLeft } from '../src/util';
+import { clockTime, relTime, relTimeAgo, timeLeft } from '../src/util';
 
 const NOW = Date.parse('2026-07-25T12:00:00Z');
 const at = (secondsFromNow: number): string =>
@@ -12,6 +12,14 @@ test('relTime reads backwards and says nothing useful about the future', () => {
   assert.equal(relTime(at(-300), NOW), '5m');
   // The clamp is why forward-looking deadlines need their own helper.
   assert.equal(relTime(at(90), NOW), 'just now');
+});
+
+test('relTimeAgo adds "ago" only to compact unit forms', () => {
+  assert.equal(relTimeAgo(at(-10), NOW), 'just now');
+  assert.equal(relTimeAgo(at(-300), NOW), '5m ago');
+  assert.equal(relTimeAgo(at(-2 * 3600), NOW), '2h ago');
+  // Calendar dates already read as absolute; no trailing "ago".
+  assert.equal(relTimeAgo(at(-3 * 24 * 3600), NOW), relTime(at(-3 * 24 * 3600), NOW));
 });
 
 test('timeLeft counts down to a deadline', () => {

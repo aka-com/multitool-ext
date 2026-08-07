@@ -76,6 +76,11 @@ export function activeRequestCount(
   return approvals.length + elicitations.length;
 }
 
+/** Approvals fail closed; unanswered upstream questions are simply ignored. */
+export function deadlineOutcomeVerb(request: ActiveRequest | undefined): 'refused' | 'ignored' {
+  return request?.kind === 'elicitation' ? 'ignored' : 'refused';
+}
+
 /** Terminal request history, newest resolution first. Active ids are excluded
  * defensively so independently refreshed active/history snapshots never show
  * the same lifecycle in both sections. */

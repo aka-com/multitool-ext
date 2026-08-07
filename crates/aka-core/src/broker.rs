@@ -1059,14 +1059,17 @@ impl Broker {
         new_name: Option<&str>,
         new_value: Option<SecretValue>,
     ) -> Result<SecretMeta> {
-        self.ui_edit_credential(id, new_name, new_value, None, None, None)
+        self.ui_edit_credential(id, new_name, new_value, None, None, None, None)
             .await
     }
 
     /// The full edit surface. Beyond rename + value replacement, passwords
     /// may update their sign-in profile (`new_site` replaces; `new_username`
     /// replaces, empty clearing it) and their TOTP factor (`new_totp` sets a
-    /// parsed-and-canonicalized seed, empty removes it).
+    /// parsed-and-canonicalized seed, empty removes it). Any credential may
+    /// move between the Your Secrets and Connection Secrets lists
+    /// (`new_origin`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn ui_edit_credential(
         &self,
         id: &Uuid,
@@ -1075,6 +1078,7 @@ impl Broker {
         new_site: Option<String>,
         new_username: Option<String>,
         new_totp: Option<String>,
+        new_origin: Option<crate::types::SecretOrigin>,
     ) -> Result<SecretMeta> {
         let meta = self.store.secret_by_id(&self.workspace, id)?;
         if new_value.is_some() && !matches!(meta.source, crate::types::SecretSource::Local) {
@@ -1117,6 +1121,7 @@ impl Broker {
                     new_site,
                     new_username,
                     new_totp: totp_edit,
+                    new_origin,
                 },
             )
             .await?;
@@ -1146,6 +1151,12 @@ impl Broker {
                 "2FA secret removed".into()
             } else {
                 "2FA secret set".into()
+            });
+        }
+        if result.origin_changed {
+            changes.push(match result.meta.origin {
+                crate::types::SecretOrigin::User => "moved to Your Secrets".into(),
+                crate::types::SecretOrigin::Connection => "moved to Connection Secrets".into(),
             });
         }
         if !changes.is_empty() {
@@ -2043,6 +2054,7 @@ impl Broker {
                             new_site: None,
                             new_username: None,
                             new_totp: None,
+                            new_origin: None,
                         },
                     )
                     .await?;
@@ -2189,6 +2201,7 @@ impl Broker {
                     new_site: None,
                     new_username: None,
                     new_totp: None,
+                    new_origin: None,
                 },
             )
             .await?;

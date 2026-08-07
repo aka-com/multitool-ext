@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multitool — tray: implemented vs mockup B (gap explorer)</title>
+<style>
+/* Tokens copied from ui/styles.css (light) + its data-theme="dark" block. */
+:root{
+  color-scheme: light;
+  --ink:#1d1d1f; --ink-2:#2c2c30; --ink-3:#3c3c42;
+  --muted:#66666f; --muted-2:#6d6d76; --faint:#707078;
+  --accent:#0a7cff; --accent-text:#0a7cff; --accent-ink:#0a63d0;
+  --accent-wash:rgba(10,124,255,.08); --accent-wash-2:rgba(10,124,255,.12);
+  --accent-border:rgba(10,124,255,.32);
+  --danger-ink:#d70015;
+  --amber-ink:#7a5410; --amber-strong:#b06a00;
+  --amber-wash:rgba(255,190,50,.16); --amber-border:rgba(200,140,20,.3);
+  --ok-ink:#1a8f3c; --ok-solid:#34c759;
+  --kind-db-ink:#2a6f9e; --kind-db-wash:rgba(50,130,180,.12);
+  --kind-api-ink:#a8541f; --kind-api-wash:rgba(190,100,40,.12);
+  --kind-mcp-ink:#4a4ec4; --kind-mcp-wash:rgba(88,92,220,.10);
+  --surface:rgba(246,246,249,.98);
+  --panel:#fbfbfd; --field-bg:#fff; --btn-bg:#fff; --btn-hover:#f2f2f5;
+  --card-bg:rgba(255,255,255,.72);
+  --chip-bg:rgba(0,0,0,.06); --chip-ink:#4c4c53;
+  --hover:rgba(0,0,0,.06); --wash:rgba(0,0,0,.025);
+  --seg-bg:rgba(0,0,0,.065); --seg-on-bg:#fff; --seg-on-ink:#111;
+  --backdrop:rgba(20,20,30,.28);
+  --switch-off:rgba(0,0,0,.22);
+  --line:rgba(0,0,0,.08); --line-soft:rgba(0,0,0,.06);
+  --line-mid:rgba(0,0,0,.10); --line-strong:rgba(0,0,0,.14);
+  --shadow-sm:0 1px 3px rgba(15,20,45,.05);
+  --shadow-menu:0 10px 28px rgba(15,20,45,.12);
+  --shadow-float:0 16px 40px rgba(15,20,45,.14),0 2px 10px rgba(15,20,45,.08);
+  --desktop:linear-gradient(135deg,#c8d4e8,#dcd4e4 55%,#e8d8cc);
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ink:#ececf0; --ink-2:#d8d8de; --ink-3:#c9c9d2;
+  --muted:#9a9aa4; --muted-2:#8e8e96; --faint:#8b8b95;
+  --accent-text:#58a6ff; --accent-ink:#7db8ff;
+  --accent-wash:rgba(88,166,255,.12); --accent-wash-2:rgba(88,166,255,.18);
+  --accent-border:rgba(88,166,255,.32);
+  --danger-ink:#ff6b61;
+  --amber-ink:#e9bb63; --amber-strong:#ffb04d;
+  --amber-wash:rgba(255,190,50,.13); --amber-border:rgba(255,190,80,.32);
+  --ok-ink:#4cd07d; --ok-solid:#30d158;
+  --kind-db-ink:#8ec4e8; --kind-db-wash:rgba(50,130,180,.18);
+  --kind-api-ink:#e8a077; --kind-api-wash:rgba(190,100,40,.18);
+  --kind-mcp-ink:#a3a6ff; --kind-mcp-wash:rgba(88,92,220,.20);
+  --surface:rgba(16,16,20,.98);
+  --panel:#1b1b20; --field-bg:#131317; --btn-bg:#26262d; --btn-hover:#30303a;
+  --card-bg:rgba(255,255,255,.045);
+  --chip-bg:rgba(255,255,255,.08); --chip-ink:#c9c9d2;
+  --hover:rgba(255,255,255,.07); --wash:rgba(255,255,255,.03);
+  --seg-bg:rgba(255,255,255,.09); --seg-on-bg:#3d3d46; --seg-on-ink:#fff;
+  --backdrop:rgba(0,0,0,.55);
+  --switch-off:rgba(255,255,255,.26);
+  --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.07);
+  --line-mid:rgba(255,255,255,.12); --line-strong:rgba(255,255,255,.16);
+  --shadow-sm:0 1px 3px rgba(0,0,0,.32);
+  --shadow-menu:0 10px 28px rgba(0,0,0,.48);
+  --shadow-float:0 16px 40px rgba(0,0,0,.55),0 2px 10px rgba(0,0,0,.35);
+  --desktop:linear-gradient(135deg,#2a3040,#3a3448 55%,#443a38);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:.9375rem;color:var(--ink);background:var(--desktop);
+  -webkit-font-smoothing:antialiased;min-height:100vh;padding-bottom:40px;
+}
+button{font-family:inherit;color:inherit;cursor:default}
+svg{display:block}
+
+/* ---------- page chrome ---------- */
+.page-head{
+  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+  padding:18px 22px 4px;
+}
+.page-head h1{font-size:1.0625rem;font-weight:700}
+.page-head p{font-size:.8125rem;color:var(--ink-2);max-width:56rem}
+.theme-flip{
+  margin-left:auto;border:1px solid var(--line-mid);background:var(--panel);color:var(--ink-2);
+  border-radius:999px;padding:6px 13px;font-size:.78125rem;font-weight:600;box-shadow:var(--shadow-sm);
+}
+.layout{
+  display:flex;gap:22px;align-items:flex-start;justify-content:center;
+  padding:14px 22px 0;flex-wrap:wrap;
+}
+
+/* ---------- gap rail ---------- */
+.rail{width:330px;flex:none;display:flex;flex-direction:column;gap:6px}
+.rail-note{font-size:.71875rem;color:var(--muted);padding:0 4px 2px}
+.gap{
+  text-align:left;border:1px solid var(--line-mid);border-radius:10px;
+  background:var(--panel);padding:9px 12px;box-shadow:var(--shadow-sm);
+}
+.gap:hover{background:var(--btn-hover)}
+.gap b{font-size:.8125rem;font-weight:650;display:flex;gap:7px;align-items:baseline}
+.gap b i{
+  font-style:normal;font-size:.6875rem;font-weight:700;color:var(--muted);
+  background:var(--chip-bg);border-radius:5px;padding:1px 5px;flex:none;
+}
+.gap span{display:block;font-size:.75rem;color:var(--muted);margin-top:2px;line-height:1.45}
+.gap.on{border-color:var(--accent-border);background:var(--accent-wash)}
+.gap.on b i{background:var(--accent-wash-2);color:var(--accent-ink)}
+.gap.done b i{background:var(--ok-solid);color:#fff}
+.gap.done b em{font-style:normal;font-size:.65625rem;font-weight:700;color:var(--ok-ink)}
+.gap-caption{
+  border:1px solid var(--accent-border);border-radius:10px;background:var(--panel);
+  padding:10px 12px;font-size:.78125rem;line-height:1.5;color:var(--ink-2);
+  box-shadow:var(--shadow-menu);display:none;
+}
+.gap-caption.show{display:block}
+.gap-caption b{font-weight:650}
+.rail-reset{
+  align-self:flex-start;border:1px solid var(--line-mid);border-radius:999px;
+  background:var(--btn-bg);padding:4px 12px;font-size:.71875rem;font-weight:600;color:var(--ink-2);
+}
+
+/* ---------- spotlight ---------- */
+.spot{
+  outline:2px solid var(--accent-text);outline-offset:2px;border-radius:8px;
+  animation:spot-in .25s ease;
+}
+@keyframes spot-in{from{outline-color:transparent}to{}}
+.callout{
+  position:absolute;z-index:60;max-width:210px;
+  background:var(--panel);border:1px solid var(--accent-border);border-radius:8px;
+  padding:6px 9px;font-size:.71875rem;line-height:1.4;color:var(--ink-2);
+  box-shadow:var(--shadow-menu);display:none;
+}
+.callout.show{display:block}
+
+/* ---------- shared tray shell ---------- */
+.col{flex:none;display:flex;flex-direction:column;gap:8px}
+.col-label{
+  display:flex;align-items:baseline;gap:8px;padding:0 4px;
+  font-size:.8125rem;font-weight:700;
+}
+.col-label small{font-size:.71875rem;font-weight:500;color:var(--muted)}
+.ruler{
+  display:none;align-items:center;gap:6px;color:var(--accent-ink);
+  font-size:.6875rem;font-weight:650;font-variant-numeric:tabular-nums;
+}
+.ruler::before,.ruler::after{content:"";height:1px;background:var(--accent-text);flex:1}
+body.show-rulers .ruler{display:flex}
+.tray{
+  position:relative;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--surface);border:1px solid var(--line);border-radius:13px;
+  box-shadow:var(--shadow-float);
+}
+.tray-impl{width:330px}
+.tray-mock{width:360px}
+.tray-scroll{border-top:1px solid var(--line);padding:4px 10px 8px;height:492px;overflow-y:auto;position:relative}
+.dd-head{display:flex;align-items:center;gap:7px;padding:9px 12px 8px;position:relative}
+.dd-head .dot{width:7px;height:7px;border-radius:50%;background:var(--ok-solid);box-shadow:0 0 4px rgba(48,201,78,.7);flex:none}
+.dd-head b{font-size:.84375rem;font-weight:650}
+.dd-head .hd-muted{font-size:.78125rem;color:var(--muted)}
+.dd-flex{flex:1}
+.icon-btn{
+  width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;flex:none;
+  border:none;border-radius:7px;background:transparent;color:var(--muted-2);position:relative;
+}
+.icon-btn:hover{background:var(--hover);color:var(--ink-2)}
+.icon-btn svg{width:15px;height:15px}
+.icon-btn.on{background:var(--accent-wash-2);color:var(--accent-ink)}
+.badge{
+  position:absolute;top:-2px;right:-3px;min-width:14px;height:14px;border-radius:7px;
+  background:var(--amber-strong);color:#fff;font-size:.59375rem;font-weight:700;
+  display:flex;align-items:center;justify-content:center;padding:0 3px;
+}
+.sect-head{padding:12px 4px 5px;font-size:.75rem;font-weight:650;color:var(--muted)}
+.rows{background:var(--card-bg);border:1px solid var(--line-soft);border-radius:10px;overflow:hidden}
+.rows > * + *{border-top:1px solid var(--line-soft)}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 11px;
+  border:1px solid var(--line-mid);border-radius:7px;background:var(--btn-bg);
+  font-size:.75rem;font-weight:600;color:var(--ink-2);
+}
+.btn:hover{background:var(--btn-hover)}
+.btn.primary{background:var(--accent);border-color:transparent;color:#fff}
+.btn.danger-btn{color:var(--danger-ink)}
+.spacer{flex:1}
+.seg{display:flex;gap:2px;background:var(--seg-bg);border-radius:7px;padding:2px}
+.seg button{border:none;background:transparent;border-radius:5px;padding:3px 9px;font-size:.71875rem;color:var(--ink-3)}
+.seg button.on{background:var(--seg-on-bg);box-shadow:var(--shadow-sm);font-weight:600;color:var(--seg-on-ink)}
+.switch{width:32px;height:19px;border-radius:999px;background:var(--ok-solid);position:relative;flex:none;border:none;padding:0}
+.switch.off{background:var(--switch-off)}
+.switch i{position:absolute;top:2px;right:2px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.switch.off i{right:auto;left:2px}
+.menu-item{
+  display:flex;align-items:center;gap:8px;border:none;background:transparent;width:100%;
+  text-align:left;padding:6px 9px;border-radius:6px;font-size:.8125rem;color:var(--ink-2);
+}
+.menu-item:hover{background:var(--hover)}
+.menu-item svg{flex:0 0 15px;width:15px;height:15px;color:var(--muted-2)}
+.menu-sub{margin-left:auto;color:var(--muted);font-size:.71875rem}
+.facts{display:grid;grid-template-columns:82px 1fr;gap:5px 10px;font-size:.75rem;line-height:1.4;
+  padding:9px 10px;background:var(--field-bg);border:1px solid var(--line-mid);border-radius:8px}
+.facts dt{color:var(--muted)}
+.facts dd{color:var(--ink);font-weight:500;min-width:0;overflow-wrap:anywhere}
+
+/* ---------- implemented tray ---------- */
+.req-banner{
+  display:flex;width:calc(100% - 8px);align-items:center;gap:9px;margin:8px 4px 2px;padding:9px 11px;
+  border:1px solid var(--amber-border);border-radius:9px;background:var(--amber-wash);
+  text-align:left;font:inherit;color:var(--ink);
+}
+.req-banner:hover{filter:brightness(.985)}
+.req-banner .r-ico{color:var(--amber-strong);flex:none}
+.req-banner .r-ico svg{width:15px;height:15px}
+.req-banner .r-tx{flex:1;min-width:0}
+.req-banner .r-tx b{font-size:.8125rem;font-weight:650;display:block}
+.req-banner .r-tx span{font-size:.71875rem;color:var(--muted);display:block}
+.req-banner .r-cta{color:var(--accent-text);font-size:.75rem;font-weight:650;flex:none}
+.cat-search{
+  width:calc(100% - 8px);margin:8px 4px 0;height:28px;padding:0 10px;
+  border:1px solid var(--line-mid);border-radius:8px;background:var(--field-bg);
+  font:inherit;font-size:.8125rem;color:var(--ink);
+}
+.cat-search::placeholder{color:var(--faint)}
+.tool-bar{
+  display:flex;align-items:center;gap:8px;padding:7px 9px;font:inherit;
+  border:none;background:transparent;width:100%;text-align:left;color:var(--ink);
+}
+.tool-bar:hover{background:var(--hover)}
+.tool-bar-ico{
+  width:24px;height:24px;border-radius:6px;flex:none;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.tool-bar-ico svg{width:13px;height:13px}
+.kind-api{background:var(--kind-api-wash);color:var(--kind-api-ink)}
+.kind-db{background:var(--kind-db-wash);color:var(--kind-db-ink)}
+.kind-mcp{background:var(--kind-mcp-wash);color:var(--kind-mcp-ink)}
+.tool-bar-tx{flex:1;min-width:0}
+.tool-bar-tx b{font-size:.8125rem;font-weight:600;display:block}
+.tool-bar-dest{font-size:.6875rem;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cc-live{font-size:.6875rem;color:var(--muted);flex:none}
+.cc-dot{width:7px;height:7px;border-radius:50%;background:var(--ok-solid);flex:none}
+.cc-pill{
+  font-size:.65625rem;font-weight:650;color:var(--muted);flex:none;
+  border:1px solid var(--line-mid);border-radius:999px;padding:1px 7px;
+}
+.cred{display:flex;flex-direction:column}
+.cred-head{display:flex;align-items:center;gap:9px;padding:7px 9px}
+.cred-head:hover{background:var(--hover)}
+.cred-mono{
+  width:26px;height:26px;border-radius:7px;flex:none;background:var(--chip-bg);color:var(--chip-ink);
+  display:inline-flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;
+}
+.cred-tx{flex:1;min-width:0;text-align:left;border:none;background:transparent;font:inherit;padding:0}
+.cred-tx b{font-size:.8125rem;font-weight:600;display:block}
+.cred-tx small{font-size:.6875rem;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wells{display:flex;align-items:center;gap:5px;flex:none}
+.well{
+  width:24px;height:24px;border:1px solid var(--line-mid);border-radius:7px;background:var(--btn-bg);
+  display:inline-flex;align-items:center;justify-content:center;color:var(--muted-2);padding:0;
+}
+.well:hover{background:var(--btn-hover);color:var(--ink-2)}
+.well svg{width:13px;height:13px}
+.well.pill{width:auto;padding:0 7px;gap:3px;font-size:.65625rem;font-weight:700}
+.src-1p{
+  position:relative;display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;color:var(--muted-2);flex:none;
+}
+.src-1p svg{width:16px;height:16px}
+.src-1p .lockdot{
+  position:absolute;right:-2px;top:-2px;width:7px;height:7px;border-radius:50%;
+  background:var(--amber-strong);border:1.5px solid var(--surface);
+}
+.cred-exp{display:none;padding:2px 10px 10px 44px;background:var(--wash)}
+.cred.open .cred-exp{display:block}
+.cred-exp .cdet{display:flex;gap:10px;font-size:.75rem;padding:3px 0}
+.cred-exp .cdet-lbl{color:var(--muted);width:74px;flex:none}
+.cred-exp .cdet-val{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.71875rem}
+
+/* impl activity view + request card */
+.impl-activity{display:none}
+.tray-impl.show-activity .impl-main{display:none}
+.tray-impl.show-activity .impl-activity{display:block}
+.req-card{
+  display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;text-align:left;
+  border:none;background:transparent;font:inherit;color:var(--ink);
+}
+.req-card:hover{background:var(--hover)}
+.req-card .rc-ico{color:var(--amber-strong);flex:none}
+.req-card .rc-ico svg{width:15px;height:15px}
+.req-card .rc-tx{flex:1;min-width:0}
+.req-card .rc-tx b{font-size:.8125rem;font-weight:600;display:block}
+.req-card .rc-tx span{font-size:.6875rem;color:var(--muted);display:block}
+.req-card .rc-act{color:var(--accent-text);font-size:.75rem;font-weight:650}
+.act-head{display:flex;align-items:center;gap:8px;padding:12px 4px 5px}
+.act-head h3{font-size:.75rem;font-weight:650;color:var(--muted)}
+.act-count{
+  min-width:16px;height:16px;border-radius:8px;background:var(--amber-strong);color:#fff;
+  font-size:.625rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 4px;
+}
+
+/* impl overlays: settings sheet, approval sheet, tool drawer */
+.overlay{
+  position:absolute;inset:0;z-index:40;display:none;align-items:flex-end;justify-content:center;
+  background:var(--backdrop);
+}
+.overlay.open{display:flex}
+.sheet{
+  width:100%;max-height:86%;overflow-y:auto;border-radius:12px 12px 0 0;
+  background:var(--panel);border:1px solid var(--line-mid);border-bottom:none;
+  box-shadow:var(--shadow-float);padding:12px 14px 14px;
+}
+.sheet h4{font-size:.84375rem;font-weight:700;margin-bottom:8px;line-height:1.35}
+.sheet-x{position:absolute;top:8px;right:10px}
+.sheet .st-row{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:.8125rem}
+.sheet .st-row label{flex:1;color:var(--ink-2)}
+.sheet .st-txt{flex:1;min-width:0}
+.sheet .st-sub{font-size:.6875rem;color:var(--muted);margin-top:1px;line-height:1.4}
+.nh{border:1px solid var(--line-mid);border-radius:9px;padding:9px 10px;margin:5px 0 3px;background:var(--wash)}
+.nh > b{font-size:.75rem;font-weight:650;display:block}
+.nh > span{font-size:.6875rem;color:var(--muted);display:block;margin-top:1px;line-height:1.4}
+.nh ul{list-style:none;margin:7px 0 0;display:flex;flex-direction:column;gap:4px}
+.nh li{display:flex;gap:7px;font-size:.71875rem;align-items:baseline}
+.nh li i{
+  font-style:normal;width:14px;height:14px;border-radius:7px;flex:none;text-align:center;
+  font-size:.625rem;font-weight:700;line-height:14px;background:var(--chip-bg);color:var(--muted);
+}
+.nh li.ok i{background:var(--ok-solid);color:#fff}
+.nh li b{font-weight:600}
+.nh li small{color:var(--muted);font-size:.6875rem;display:block}
+.nh-actions{display:flex;gap:5px;margin-top:8px}
+.btn.sm{height:22px;padding:0 8px;font-size:.6875rem}
+.sheet-actions{display:flex;gap:6px;margin-top:11px}
+.consequence{
+  display:flex;gap:7px;align-items:flex-start;margin-top:9px;padding:8px 10px;
+  border:1px solid var(--amber-border);border-radius:8px;background:var(--amber-wash);
+  font-size:.71875rem;color:var(--amber-ink);line-height:1.4;
+}
+.consequence svg{width:13px;height:13px;flex:none;margin-top:1px;color:var(--amber-strong)}
+.drawer{
+  position:absolute;inset:0;z-index:40;display:none;
+}
+.drawer.open{display:block}
+.drawer .scrim{position:absolute;inset:0;background:var(--backdrop);border:none;width:100%}
+.drawer-pane{
+  position:absolute;top:0;right:0;bottom:0;width:86%;overflow-y:auto;
+  background:var(--panel);border-left:1px solid var(--line-mid);box-shadow:var(--shadow-float);
+  padding:12px 14px;
+}
+.drawer-pane .dp-head{display:flex;align-items:center;gap:9px;margin-bottom:4px}
+.drawer-pane .dp-head b{font-size:.84375rem;flex:1}
+.drawer-pane .dp-sub{font-size:.71875rem;color:var(--muted);margin-bottom:10px}
+.drawer-pane .st-row{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:.8125rem;border-top:1px solid var(--line-soft)}
+.drawer-pane .st-row label{flex:1;color:var(--ink-2)}
+
+/* ---------- mockup-B tray ---------- */
+.req{
+  margin:8px 4px 2px;border:1px solid var(--amber-border);border-radius:9px;
+  background:var(--amber-wash);overflow:hidden;
+}
+.req-row{
+  width:100%;display:flex;align-items:center;gap:9px;padding:9px 11px;
+  border:0;background:transparent;text-align:left;font:inherit;color:var(--ink);
+}
+.req-row:hover{filter:brightness(.985)}
+.req-detail{display:none;padding:0 11px 10px}
+.req.open .req-detail{display:block}
+.req-actions{display:flex;gap:6px;margin-top:9px}
+.t-row{
+  width:100%;display:flex;align-items:center;gap:9px;padding:7px 8px;
+  border:0;background:transparent;text-align:left;font:inherit;color:var(--ink);
+}
+.t-row:hover{background:var(--hover)}
+.t-row.off .t-ico,.t-row.off .t-body{opacity:.45}
+.t-ico{flex:0 0 26px;width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center}
+.t-ico svg{width:14px;height:14px}
+.t-body{flex:1;min-width:0}
+.t-name{font-weight:600;font-size:.8125rem;display:block}
+.t-sub{font-size:.6875rem;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu{
+  position:absolute;z-index:80;right:8px;top:40px;min-width:222px;padding:4px;
+  display:none;flex-direction:column;gap:1px;
+  background:var(--panel);border:1px solid var(--line-mid);border-radius:9px;box-shadow:var(--shadow-menu);
+}
+.menu.open{display:flex}
+.menu-caption{padding:4px 9px 3px;font-size:.71875rem;color:var(--muted);user-select:none}
+.menu-rule{margin:3px 5px;border-top:1px solid var(--line)}
+.menu-seg-row{display:flex;align-items:center;gap:8px;padding:6px 9px}
+.menu-seg-row label{font-size:.8125rem;color:var(--ink-2);flex:1}
+
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:95;
+  background:var(--panel);border:1px solid var(--line-mid);border-radius:9px;box-shadow:var(--shadow-menu);
+  padding:8px 14px;font-size:.78125rem;font-weight:600;color:var(--ink-2);display:none;
+}
+.toast.show{display:block}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <div>
+    <h1>Tray — implemented vs mockup B</h1>
+    <p>Both panels are live. Click a gap on the left to stage and spotlight it in both trays,
+       or just poke at either panel — every control demonstrates its side's behavior.</p>
+  </div>
+  <button class="theme-flip" id="themeFlip">◐ Light / Dark</button>
+</div>
+
+<div class="layout">
+
+  <!-- ================= gap rail ================= -->
+  <div class="rail">
+    <div class="rail-note">Gaps, biggest first · click to demo</div>
+    <button class="gap" data-gap="g1"><b><i>1</i> Gear: button vs menu</b>
+      <span>Impl opens the Settings sheet directly. Mockup opens a popover: version, Activity Log, Connect Agents, Appearance, Settings, Quit.</span></button>
+    <button class="gap" data-gap="g2"><b><i>2</i> No route to Connect Agents</b>
+      <span>The tray has no path to Connect Agents at all — not in the panel, not in the icon's right-click menu.</span></button>
+    <button class="gap done" data-gap="g3"><b><i>✓</i> Request band: counts vs the ask <em>covered</em></b>
+      <span>A lone request is now named in the band and Review opens the decision sheet in one tap. A queue still tallies and routes to Activity — that hop earns its place with something to triage.</span></button>
+    <button class="gap" data-gap="g4"><b><i>4</i> No “Approve Once”</b>
+      <span>Impl offers Deny / Stop asking / Approve 15m. The single-shot approval doesn't exist.</span></button>
+    <button class="gap" data-gap="g5"><b><i>5</i> Connections: read-only vs switch</b>
+      <span>Impl rows show health only — toggling agent access takes the detail drawer. Mockup puts the switch on the row (and shows recency, not the target).</span></button>
+    <button class="gap" data-gap="g6"><b><i>6</i> 1Password: no locked state</b>
+      <span>Mockup marks a locked vault with an amber dot and unlocks on first copy. Impl shows the mark but no lock state or unlock flow.</span></button>
+    <button class="gap" data-gap="g7"><b><i>7</i> Row click: expand vs deep-link</b>
+      <span>Impl credential rows expand inline. Mockup rows deep-link into the main window.</span></button>
+    <button class="gap" data-gap="g8"><b><i>8</i> Panel width: 330 vs 360</b>
+      <span>tauri.conf.json sizes the panel at 330 px; the mockup draws 360 px.</span></button>
+    <button class="gap" data-gap="g9"><b><i>9</i> Header & cosmetics</b>
+      <span>Extra Activity toggle in the header; letter monograms vs padlock/kind chips; "Your Secrets" vs "Secrets".</span></button>
+    <div class="gap-caption" id="gapCaption"></div>
+    <button class="rail-reset" id="railReset">Reset panels</button>
+  </div>
+
+  <!-- ================= implemented tray ================= -->
+  <div class="col">
+    <div class="col-label">Implemented today <small>ui/app.tsx #dropdown</small></div>
+    <div class="ruler">330 px</div>
+    <div class="tray tray-impl" id="impl">
+      <div class="dd-head" data-g="g9">
+        <span class="dot"></span><b>Multitool</b><span class="hd-muted">Local</span>
+        <span class="dd-flex"></span>
+        <button class="icon-btn" id="implActivityBtn" title="Activity" data-g="g3 g9">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span class="badge" id="implBadge">1</span>
+        </button>
+        <button class="icon-btn" title="Open as a window" data-toast="Reopens as the main window (ui_set_mode)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        </button>
+        <button class="icon-btn" id="implGear" title="Settings" data-g="g1 g2">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div class="callout" id="implNoRoute" style="right:6px;top:38px">
+          No “Connect Agents” here — the gear goes straight to Settings, and the icon's
+          right-click menu is Open / Requests / Settings / Quit.
+        </div>
+      </div>
+
+      <div class="tray-scroll">
+        <!-- main (credentials) view -->
+        <div class="impl-main">
+          <button class="req-banner" id="implBanner" data-g="g3">
+            <span class="r-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 13c0 5-3.5 7.5-7.7 8.9a2 2 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4M12 16h.01"/></svg></span>
+            <span class="r-tx"><b>1 request needs attention</b><span title="Agent names are self-reported">Claude Code wants to sign in as the “deploy” role on AWS · refused in 82s</span></span>
+            <span class="r-cta">Review</span>
+          </button>
+
+          <input class="cat-search" type="search" placeholder="Search credentials…">
+
+          <div class="sect-head">Connections</div>
+          <div class="rows" data-g="g5">
+            <button class="tool-bar" data-tool="github">
+              <span class="tool-bar-ico kind-api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+              <span class="tool-bar-tx"><b>github</b><span class="tool-bar-dest">https://api.github.com</span></span>
+              <span class="cc-dot" title="Connected"></span>
+            </button>
+            <button class="tool-bar" data-tool="prod-db">
+              <span class="tool-bar-ico kind-db"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+              <span class="tool-bar-tx"><b>prod-db</b><span class="tool-bar-dest">app@db.internal.aka.com:5432/app_production</span></span>
+              <span class="cc-live">1 live</span>
+              <span class="cc-dot" title="Connected"></span>
+            </button>
+            <button class="tool-bar" data-tool="internal-api">
+              <span class="tool-bar-ico kind-api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+              <span class="tool-bar-tx"><b>internal-api</b><span class="tool-bar-dest">https://internal.aka.com</span></span>
+              <span class="cc-pill" title="Agents may not use this tool">Off</span>
+            </button>
+          </div>
+
+          <div class="sect-head">Passwords</div>
+          <div class="rows">
+            <div class="cred" id="implGoogleRow">
+              <div class="cred-head" data-g="g7">
+                <span class="cred-mono" data-g="g9">G</span>
+                <button class="cred-tx" data-expand="implGoogleRow">
+                  <b>google.com</b><small>social@aka.com</small>
+                </button>
+                <span class="wells">
+                  <button class="well" data-toast="Password copied" title="Copy password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></button>
+                </span>
+              </div>
+              <div class="cred-exp">
+                <div class="cdet"><span class="cdet-lbl">User name</span><span class="cdet-val">social@aka.com</span></div>
+                <div class="cdet"><span class="cdet-lbl">Password</span><span class="cdet-val">••••••••••••</span></div>
+              </div>
+            </div>
+            <div class="cred" id="implXRow">
+              <div class="cred-head">
+                <span class="cred-mono">X</span>
+                <button class="cred-tx" data-expand="implXRow">
+                  <b>x.com</b><small>raykyri@gmail.com</small>
+                </button>
+                <span class="wells">
+                  <button class="well" data-toast="Password copied" title="Copy password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></button>
+                  <button class="well pill" data-toast="2FA menu: Copy code (417 293 · 14s) / Change Code…">2FA <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:9px;height:9px"><path d="m6 9 6 6 6-6"/></svg></button>
+                </span>
+              </div>
+              <div class="cred-exp">
+                <div class="cdet"><span class="cdet-lbl">User name</span><span class="cdet-val">raykyri@gmail.com</span></div>
+                <div class="cdet"><span class="cdet-lbl">Password</span><span class="cdet-val">••••••••••••</span></div>
+              </div>
+            </div>
+            <div class="cred" id="implGithubRow">
+              <div class="cred-head">
+                <span class="cred-mono">G</span>
+                <button class="cred-tx" data-expand="implGithubRow">
+                  <b>github.com</b><small>raymond</small>
+                </button>
+                <span class="wells">
+                  <span class="src-1p" data-g="g6" title="Stored in 1Password — no locked/unlocked state in the UI"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M10.4 8.6 12.4 7v10"/></svg></span>
+                  <button class="well" data-toast="Password copied (no unlock handshake — the copy just runs)" title="Copy password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></button>
+                </span>
+              </div>
+              <div class="cred-exp">
+                <div class="cdet"><span class="cdet-lbl">User name</span><span class="cdet-val">raymond</span></div>
+                <div class="cdet"><span class="cdet-lbl">Password</span><span class="cdet-val">••••••••••••</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sect-head" data-g="g9">Your Secrets</div>
+          <div class="rows">
+            <div class="cred" id="implStripeRow">
+              <div class="cred-head">
+                <span class="cred-mono">S</span>
+                <button class="cred-tx" data-expand="implStripeRow">
+                  <b>STRIPE_API_KEY</b><small>Used by internal-api</small>
+                </button>
+                <span class="wells">
+                  <button class="well" data-toast="Secret copied" title="Copy secret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></button>
+                </span>
+              </div>
+              <div class="cred-exp">
+                <div class="cdet"><span class="cdet-lbl">Value</span><span class="cdet-val">sk_live_••••••••</span></div>
+              </div>
+            </div>
+            <div class="cred" id="implDbRow">
+              <div class="cred-head">
+                <span class="cred-mono">D</span>
+                <button class="cred-tx" data-expand="implDbRow">
+                  <b>DATABASE_PASSWORD</b><small>Used by prod-db</small>
+                </button>
+                <span class="wells">
+                  <button class="well" data-toast="Secret copied" title="Copy secret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></button>
+                </span>
+              </div>
+              <div class="cred-exp">
+                <div class="cdet"><span class="cdet-lbl">Value</span><span class="cdet-val">••••••••••••</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- activity view (hop 1) -->
+        <div class="impl-activity">
+          <div class="act-head"><h3>Needs attention</h3><span class="act-count">1</span></div>
+          <div class="rows">
+            <button class="req-card" id="implReqCard" data-g="g3">
+              <span class="rc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 13c0 5-3.5 7.5-7.7 8.9a2 2 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4M12 16h.01"/></svg></span>
+              <span class="rc-tx"><b>Sign in as the “deploy” role</b><span>Claude Code → AWS · us-east-1</span></span>
+              <span class="rc-act">Review</span>
+            </button>
+          </div>
+          <div class="act-head"><h3>Earlier</h3></div>
+          <div class="rows">
+            <div class="req-card" style="opacity:.6"><span class="rc-tx"><b style="font-weight:500">prod-db · SELECT on app_production</b><span>Claude Code · 22m ago</span></span></div>
+            <div class="req-card" style="opacity:.6"><span class="rc-tx"><b style="font-weight:500">github · GET /repos</b><span>Claude Code · 1h ago</span></span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- settings sheet (what the gear actually opens) -->
+      <div class="overlay" id="implSettings">
+        <div class="sheet" style="position:relative" data-g="g1">
+          <button class="icon-btn sheet-x" data-close="implSettings" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <h4>Settings</h4>
+          <div class="st-row"><span class="st-txt"><label>Appearance</label>
+            <span class="st-sub">Match this app to your preferred scheme.</span></span>
+            <div class="seg" data-theme-seg>
+              <button data-mode="light">Light</button>
+              <button data-mode="dark" class="on">Dark</button>
+            </div>
+          </div>
+          <div class="nh">
+            <b>Notification reliability</b>
+            <span>Turn on persistent, time sensitive notifications to always receive access requests.</span>
+            <ul>
+              <li class="ok"><i>✓</i><span><b>Notifications on</b><small>Allowed by macOS</small></span></li>
+              <li class="ok"><i>✓</i><span><b>Persistent alerts</b><small>Stay until dismissed</small></span></li>
+              <li><i>•</i><span><b>Time Sensitive</b><small>Off in Multitool</small></span></li>
+              <li><i>•</i><span><b>Allowed during Focus Mode</b><small>Choose Multitool under Allowed Apps for every Focus you use</small></span></li>
+            </ul>
+            <div class="nh-actions">
+              <button class="btn sm" data-toast="Opens macOS Notification Settings">Notification Settings</button>
+              <button class="btn sm" data-toast="Opens macOS Focus Settings">Focus Settings</button>
+              <button class="btn sm" data-toast="Preview notification sent" style="margin-left:auto">Send preview</button>
+            </div>
+          </div>
+          <div class="st-row"><span class="st-txt"><label>Show approval popup</label>
+            <span class="st-sub">Briefly show a Multitool popup without switching apps.</span></span>
+            <span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><span class="st-txt"><label>Re-alert before the deadline</label>
+            <span class="st-sub">Remind you 15 seconds before a request expires.</span></span>
+            <span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Play a sound on notification</label><span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Deliver notifications in Focus Mode</label><span class="switch off mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Launch Multitool at login</label><span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Lock automatically</label><span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Hide Dock icon when in menu bar</label><span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Lock when idle</label>
+            <div class="seg" data-seg-solo>
+              <button>Never</button><button>1 min</button><button class="on">5 min</button><button>15 min</button><button>1 hr</button>
+            </div>
+          </div>
+          <div class="st-row"><label>Lock when closed</label><span class="switch off mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Show sample tools</label><span class="switch off mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><label>Ask before trusting a new SSH host key</label><span class="switch mock-sw" role="switch" tabindex="0"><i></i></span></div>
+          <div class="st-row"><span class="st-txt"><label>Reset this computer's agent key</label>
+            <span class="st-sub">Stored in the macOS keychain. Disconnects every agent using the current key.</span></span>
+            <button class="btn sm danger-btn" data-toast="Rotate key… confirmation opens">Rotate key…</button></div>
+          <div class="st-row" style="border-top:1px solid var(--line-soft)"><label style="color:var(--muted);font-size:.71875rem">This is the whole sheet — note there's no version caption, Activity Log, Connect Agents, or Quit. The gear skipped the mockup's menu and landed here.</label></div>
+        </div>
+      </div>
+
+      <!-- approval sheet (hop 2) -->
+      <div class="overlay" id="implApproval">
+        <div class="sheet" style="position:relative">
+          <button class="icon-btn sheet-x" data-close="implApproval" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <h4>Allow “Claude Code” to use AWS?</h4>
+          <dl class="facts">
+            <dt>Agent</dt><dd>Claude Code</dd>
+            <dt>Tool</dt><dd>AWS</dd>
+            <dt>Wants to</dt><dd>Sign in as the “deploy” role</dd>
+            <dt>Credential</dt><dd>AWS_DEPLOY_ROLE</dd>
+            <dt>Requested</dt><dd>just now</dd>
+          </dl>
+          <div class="consequence">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+            <span>Grants a session that can deploy to production for 15 minutes.</span>
+          </div>
+          <div class="sheet-actions" data-g="g4">
+            <button class="btn danger-btn" data-verdict-impl="deny">Deny</button>
+            <span class="spacer"></span>
+            <button class="btn" data-verdict-impl="all" title="Allow this call and turn traffic confirmation off for this tool">Stop asking</button>
+            <button class="btn primary" data-verdict-impl="window">Approve 15m</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- tool detail drawer (the only way to toggle agent access) -->
+      <div class="drawer" id="implDrawer">
+        <button class="scrim" data-close="implDrawer" aria-label="Close"></button>
+        <div class="drawer-pane">
+          <div class="dp-head">
+            <span class="tool-bar-ico kind-api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+            <b id="implDrawerName">github</b>
+            <button class="icon-btn" data-close="implDrawer" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="dp-sub">HTTP API · <span id="implDrawerDest">https://api.github.com</span></div>
+          <div class="st-row" data-g="g5"><label>Agents may use this tool</label><button class="switch" id="implDrawerSwitch"><i></i></button></div>
+          <div class="st-row"><label>Confirm each request</label><button class="switch off"><i></i></button></div>
+          <div class="st-row"><label style="color:var(--muted);font-size:.71875rem">This drawer is the only place the tray can flip agent access — the row itself is read-only.</label></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= mockup-B tray ================= -->
+  <div class="col">
+    <div class="col-label">Mockup B target <small>mockup-menubar.html · one-line title</small></div>
+    <div class="ruler">360 px</div>
+    <div class="tray tray-mock" id="mock">
+      <div class="dd-head">
+        <span class="dot"></span><b>Multitool</b><span class="hd-muted">Local</span>
+        <span class="dd-flex"></span>
+        <button class="icon-btn" data-toast="Main window opens" title="Open Multitool">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/></svg>
+        </button>
+        <button class="icon-btn" id="mockGear" title="Settings" data-g="g1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+
+      <!-- the gear popover -->
+      <div class="menu" id="mockMenu">
+        <div class="menu-caption" data-g="g1">Multitool 0.4.2 (broker 0.4.2)</div>
+        <button class="menu-item" data-toast="Activity Log opens in the main window"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg> Activity Log</button>
+        <button class="menu-item" data-g="g2" data-toast="Connect Agents opens in the main window"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg> Connect Agents…</button>
+        <div class="menu-rule"></div>
+        <div class="menu-seg-row"><label>Appearance</label>
+          <div class="seg" data-theme-seg>
+            <button data-mode="light">Light</button>
+            <button data-mode="dark" class="on">Dark</button>
+          </div>
+        </div>
+        <div class="menu-rule"></div>
+        <button class="menu-item" data-toast="Settings opens in the main window"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Settings… <span class="menu-sub">⌘,</span></button>
+        <button class="menu-item" data-toast="Quit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><path d="M12 2v8"/></svg> Quit Multitool <span class="menu-sub">⌘Q</span></button>
+      </div>
+
+      <div class="tray-scroll">
+        <!-- request band: names the ask, expands inline -->
+        <div class="req" id="mockReq" data-g="g3">
+          <button class="req-row" id="mockReqRow">
+            <span class="r-ico" style="color:var(--amber-strong);display:inline-flex;flex:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:15px;height:15px"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
+            <span class="r-tx" style="flex:1;min-width:0"><b style="font-size:.8125rem;font-weight:650;display:block">1 request waiting on you</b><span style="font-size:.71875rem;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Claude Code wants to sign in to AWS as the deploy role</span></span>
+            <span class="r-cta" style="color:var(--accent-text);font-size:.75rem;font-weight:650;flex:none" id="mockReqCta">Review</span>
+          </button>
+          <div class="req-detail">
+            <dl class="facts">
+              <dt>Agent</dt><dd>Claude Code</dd>
+              <dt>Tool</dt><dd>AWS</dd>
+              <dt>Wants to</dt><dd>Sign in as the “deploy” role</dd>
+              <dt>Scope</dt><dd>us-east-1, expires after 15 minutes</dd>
+            </dl>
+            <div class="req-actions" data-g="g4">
+              <button class="btn danger-btn" data-verdict-mock="deny">Deny</button>
+              <span class="spacer"></span>
+              <button class="btn" data-verdict-mock="once">Approve Once</button>
+              <button class="btn primary" data-verdict-mock="hour">Approve 1 Hr</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sect-head">Connections</div>
+        <div data-g="g5">
+          <button class="t-row" data-conn-row>
+            <span class="t-ico kind-api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+            <span class="t-body"><span class="t-name">github</span><span class="t-sub">Connected · 4m ago</span></span>
+            <span class="switch" data-row-switch role="switch" aria-checked="true" tabindex="0"><i></i></span>
+          </button>
+          <button class="t-row" data-conn-row>
+            <span class="t-ico kind-db"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+            <span class="t-body"><span class="t-name">prod-db</span><span class="t-sub">Connected · 12m ago · 1 live</span></span>
+            <span class="switch" data-row-switch role="switch" aria-checked="true" tabindex="0"><i></i></span>
+          </button>
+          <button class="t-row off" data-conn-row>
+            <span class="t-ico kind-api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+            <span class="t-body"><span class="t-name">internal-api</span><span class="t-sub">Off · agents may not use this tool</span></span>
+            <span class="switch off" data-row-switch role="switch" aria-checked="false" tabindex="0"><i></i></span>
+          </button>
+        </div>
+
+        <div class="sect-head">Passwords</div>
+        <button class="t-row" data-toast="google.com opens in the main window" data-g="g7">
+          <span class="t-ico" style="background:var(--chip-bg);color:var(--muted-2)" data-g="g9"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+          <span class="t-body"><span class="t-name">google.com</span><span class="t-sub">social@aka.com</span></span>
+          <span class="well" data-toast="Password copied" title="Copy password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+        </button>
+        <button class="t-row" data-toast="x.com opens in the main window">
+          <span class="t-ico" style="background:var(--chip-bg);color:var(--muted-2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+          <span class="t-body"><span class="t-name">x.com</span><span class="t-sub">raykyri@gmail.com · 2FA</span></span>
+          <span class="well" data-toast="Password copied" title="Copy password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+        </button>
+        <button class="t-row" data-toast="github.com opens in the main window">
+          <span class="t-ico" style="background:var(--chip-bg);color:var(--muted-2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+          <span class="t-body"><span class="t-name">github.com</span><span class="t-sub">raymond</span></span>
+          <span class="src-1p" data-g="g6" title="Stored in 1Password (locked)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M10.4 8.6 12.4 7v10"/></svg><i class="lockdot"></i></span>
+          <span class="well op-copy" title="Copy password (unlocks 1Password)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+        </button>
+
+        <div class="sect-head" data-g="g9">Secrets</div>
+        <button class="t-row" data-toast="STRIPE_API_KEY opens in the main window">
+          <span class="t-ico" style="background:var(--accent-wash-2);color:var(--accent-ink)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></span>
+          <span class="t-body"><span class="t-name">STRIPE_API_KEY</span><span class="t-sub">Attached to internal-api</span></span>
+          <span class="well" data-toast="Secret copied" title="Copy secret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+        </button>
+        <button class="t-row" data-toast="DATABASE_PASSWORD opens in the main window">
+          <span class="t-ico kind-db"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+          <span class="t-body"><span class="t-name">DATABASE_PASSWORD</span><span class="t-sub">Attached to prod-db</span></span>
+          <span class="well" data-toast="Secret copied" title="Copy secret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+/* ---------- toast ---------- */
+const toast = $('#toast'); let tt = null;
+function showToast(msg){
+  toast.textContent = msg; toast.classList.add('show');
+  clearTimeout(tt); tt = setTimeout(()=>toast.classList.remove('show'), 2100);
+}
+
+/* ---------- theme ---------- */
+function setTheme(mode){
+  document.documentElement.dataset.theme = mode;
+  $$('[data-theme-seg]').forEach(seg =>
+    $$('button', seg).forEach(b => b.classList.toggle('on', b.dataset.mode === mode)));
+}
+$('#themeFlip').addEventListener('click', () =>
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+$$('[data-theme-seg] button').forEach(b =>
+  b.addEventListener('click', e => { e.stopPropagation(); setTheme(b.dataset.mode); }));
+/* inert-but-clickable settings controls */
+$$('.mock-sw').forEach(s => s.addEventListener('click', () => s.classList.toggle('off')));
+$$('[data-seg-solo] button').forEach(b => b.addEventListener('click', () => {
+  $$('button', b.parentElement).forEach(x => x.classList.toggle('on', x === b));
+}));
+
+/* ---------- generic data-toast ---------- */
+document.body.addEventListener('click', e => {
+  const t = e.target.closest('[data-toast]');
+  if (t && !e.target.closest('.op-copy') && !e.target.closest('[data-row-switch]')) {
+    showToast(t.dataset.toast);
+  }
+});
+
+/* ================= implemented tray behavior ================= */
+const impl = $('#impl');
+const implActivityBtn = $('#implActivityBtn');
+function implShowActivity(on){
+  impl.classList.toggle('show-activity', on);
+  implActivityBtn.classList.toggle('on', on);
+}
+implActivityBtn.addEventListener('click', () => implShowActivity(!impl.classList.contains('show-activity')));
+/* One waiting request: the banner names the ask and opens the decision in
+ * one tap. (With a queue it still tallies and routes to Activity.) */
+$('#implBanner').addEventListener('click', () => { $('#implApproval').classList.add('open'); showToast('One tap: the banner opens the decision sheet'); });
+$('#implReqCard').addEventListener('click', () => { $('#implApproval').classList.add('open'); showToast('Hop 2: the card opens the approval sheet'); });
+$('#implGear').addEventListener('click', () => { $('#implSettings').classList.add('open'); showToast('The gear goes straight to Settings — no menu'); });
+$$('[data-close]').forEach(b => b.addEventListener('click', e => {
+  e.stopPropagation(); $('#' + b.dataset.close).classList.remove('open');
+}));
+$$('[data-verdict-impl]').forEach(b => b.addEventListener('click', () => {
+  $('#implApproval').classList.remove('open');
+  implShowActivity(false);
+  $('#implBanner').style.display = 'none';
+  $('#implBadge').style.display = 'none';
+  showToast(b.dataset.verdictImpl === 'deny' ? 'Request denied'
+    : b.dataset.verdictImpl === 'all' ? 'Approved — this tool stops asking'
+    : 'Approved for 15m');
+}));
+/* impl connection rows: read-only, open the drawer */
+$$('.tool-bar', impl).forEach(row => row.addEventListener('click', () => {
+  $('#implDrawerName').textContent = row.dataset.tool;
+  $('#implDrawerDest').textContent = $('.tool-bar-dest', row).textContent;
+  const off = Boolean($('.cc-pill', row));
+  $('#implDrawerSwitch').classList.toggle('off', off);
+  $('#implDrawer').classList.add('open');
+}));
+$('#implDrawerSwitch').addEventListener('click', e => {
+  e.currentTarget.classList.toggle('off');
+  showToast('Toggled here, in the drawer — the row itself has no switch');
+});
+/* impl credential rows expand inline */
+$$('[data-expand]').forEach(b => b.addEventListener('click', () => {
+  const row = $('#' + b.dataset.expand);
+  const open = row.classList.toggle('open');
+  if (open) showToast('Expands in place — never deep-links to the main window');
+}));
+
+/* ================= mockup-B tray behavior ================= */
+const mockMenu = $('#mockMenu');
+$('#mockGear').addEventListener('click', e => { e.stopPropagation(); mockMenu.classList.toggle('open'); });
+document.body.addEventListener('click', e => {
+  if (!e.target.closest('#mockMenu') && !e.target.closest('#mockGear')
+    && !e.target.closest('.rail')) mockMenu.classList.remove('open');
+});
+const mockReq = $('#mockReq');
+$('#mockReqRow').addEventListener('click', () => {
+  mockReq.classList.toggle('open');
+  $('#mockReqCta').textContent = mockReq.classList.contains('open') ? 'Hide' : 'Review';
+  if (mockReq.classList.contains('open')) showToast('Zero hops: the band expands right here');
+});
+$$('[data-verdict-mock]').forEach(b => b.addEventListener('click', e => {
+  e.stopPropagation();
+  mockReq.style.display = 'none';
+  showToast(b.dataset.verdictMock === 'deny' ? 'Request denied'
+    : b.dataset.verdictMock === 'once' ? 'Approved once — asks again next time'
+    : 'Approved for 1 hour');
+}));
+/* mock connection switches toggle in place */
+$$('[data-row-switch]').forEach(s => s.addEventListener('click', e => {
+  e.stopPropagation();
+  s.classList.toggle('off');
+  s.closest('.t-row').classList.toggle('off', s.classList.contains('off'));
+  showToast(s.classList.contains('off') ? 'Agents may not use this tool' : 'Agents may use this tool');
+}));
+/* mock 1Password: locked until first copy */
+let opLocked = true;
+$$('.op-copy').forEach(b => b.addEventListener('click', e => {
+  e.stopPropagation();
+  if (opLocked){
+    showToast('Unlocking 1Password — Touch ID…');
+    setTimeout(() => {
+      opLocked = false;
+      $$('#mock .src-1p').forEach(s => {
+        s.title = 'Stored in 1Password';
+        $('.lockdot', s)?.remove();
+      });
+      showToast('Password copied — vault unlocked, amber dot gone');
+    }, 900);
+  } else showToast('Password copied');
+}));
+
+/* ================= gap rail ================= */
+const caption = $('#gapCaption');
+const CAPTIONS = {
+  g1: '<b>Left:</b> click the gear — it opens the Settings sheet, full stop. <b>Right:</b> the gear is a menu: version caption, Activity Log, Connect Agents…, Appearance, Settings ⌘, and Quit ⌘Q. (app.tsx:10759 vs the mockup popover)',
+  g2: '<b>Right:</b> Connect Agents… is one gear-click away. <b>Left:</b> there is no path — DROPDOWN_TABS is [secrets, activity], and the tray icon’s right-click menu is Open / Requests / Settings / Quit.',
+  g3: '<b>Covered.</b> A lone request is named in the band (agent + action + tool, in Multitool’s voice) and Review opens the decision sheet directly — compare with the right band’s inline expansion; the content is the same, the impl uses its sheet instead. Queues (2+) still tally and route to Activity.',
+  g4: 'Compare the action rows. <b>Left sheet:</b> Deny / Stop asking (permanent) / Approve 15m (window). <b>Right band:</b> Deny / Approve Once (single-shot) / Approve 1 Hr. The single-shot verdict has no equivalent in the implementation.',
+  g5: '<b>Left:</b> rows show a health dot or an "Off" pill — click one and flip access in the drawer that slides over. <b>Right:</b> the switch is on the row, the row dims when off, and the subtitle reads recency ("Connected · 4m ago") instead of the target URL.',
+  g6: 'Find github.com in both Passwords lists. <b>Right:</b> the 1Password mark carries an amber corner dot while the vault is locked — the first copy runs Touch ID, then the dot clears. <b>Left:</b> same mark, but no lock state and no unlock handshake.',
+  g7: 'Click google.com in both trays. <b>Left:</b> the row expands in place (username, masked value). <b>Right:</b> the row deep-links — "opens in the main window".',
+  g8: 'The rulers above each panel are to scale: the implemented NSPanel is 330 px wide (tauri.conf.json), the mockup draws 360 px. Every row loses 30 px of name/subtitle room.',
+  g9: 'Cosmetics: the left header carries a third button (Activity toggle with badge) where B has two; left rows use letter monograms, right uses padlock chips and tinted kind icons; the section label is "Your Secrets" vs "Secrets".',
+};
+function resetPanels(){
+  $$('.spot').forEach(el => el.classList.remove('spot'));
+  $('#implNoRoute').classList.remove('show');
+  body.classList.remove('show-rulers');
+  $$('.overlay, .drawer').forEach(el => el.classList.remove('open'));
+  implShowActivity(false);
+  mockMenu.classList.remove('open');
+  mockReq.classList.remove('open');
+  $('#mockReqCta').textContent = 'Review';
+  $$('.cred.open').forEach(el => el.classList.remove('open'));
+}
+const body = document.body;
+const STAGES = {
+  g1(){ $('#implSettings').classList.add('open'); mockMenu.classList.add('open'); },
+  g2(){ mockMenu.classList.add('open'); $('#implNoRoute').classList.add('show'); },
+  g3(){ $('#implApproval').classList.add('open'); mockReq.classList.add('open'); $('#mockReqCta').textContent = 'Hide'; },
+  g4(){ $('#implApproval').classList.add('open'); mockReq.classList.add('open'); $('#mockReqCta').textContent = 'Hide'; },
+  g5(){ $('#implDrawerName').textContent = 'github'; $('#implDrawerDest').textContent = 'https://api.github.com';
+        $('#implDrawerSwitch').classList.remove('off'); $('#implDrawer').classList.add('open'); },
+  g6(){},
+  g7(){ $('#implGoogleRow').classList.add('open'); },
+  g8(){ body.classList.add('show-rulers'); },
+  g9(){},
+};
+$$('.gap').forEach(g => g.addEventListener('click', () => {
+  const id = g.dataset.gap;
+  const wasOn = g.classList.contains('on');
+  $$('.gap').forEach(x => x.classList.remove('on'));
+  resetPanels();
+  if (wasOn){ caption.classList.remove('show'); return; }
+  g.classList.add('on');
+  caption.innerHTML = CAPTIONS[id];
+  caption.classList.add('show');
+  STAGES[id]?.();
+  $$(`[data-g~="${id}"]`).forEach(el => el.classList.add('spot'));
+}));
+/* deep-link: #g1…#g9 selects that gap on load */
+const initial = location.hash.replace('#','');
+if (CAPTIONS[initial]) $(`.gap[data-gap="${initial}"]`)?.click();
+
+$('#railReset').addEventListener('click', () => {
+  $$('.gap').forEach(x => x.classList.remove('on'));
+  caption.classList.remove('show');
+  resetPanels();
+  /* restore dismissed request surfaces */
+  $('#implBanner').style.display = '';
+  $('#implBadge').style.display = '';
+  mockReq.style.display = '';
+});
+</script>
+</body>
+</html>

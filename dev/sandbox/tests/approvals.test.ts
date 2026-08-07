@@ -247,7 +247,8 @@ test('a refusal is a refusal, and it cools down', async () => {
 });
 
 test('an unanswered prompt eventually times out', { skip: !process.env.AKA_SANDBOX_SLOW }, async (t) => {
-  // 90 seconds of wall clock, so it runs only under AKA_SANDBOX_SLOW=1.
+  // Full approval_timeout wall clock (default 300s), so it runs only under
+  // AKA_SANDBOX_SLOW=1.
   const connection = broker.conn(http);
   await broker.setConfirm(connection.id, true);
   const parked = broker.http(

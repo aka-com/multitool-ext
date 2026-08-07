@@ -298,7 +298,7 @@ test('degraded connection health renders as an amber issue', async () => {
 test('the post-add banner stays a compact success message', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const readyCard = app.match(
-    /function ConnectionReadyCard\(\): ReactNode \{([\s\S]*?)function ConnectionsView/,
+    /function ConnectionReadyCard\(\): ReactNode \{([\s\S]*?)\nfunction /,
   )?.[1];
 
   assert.ok(readyCard, 'connection success banner is present');
@@ -327,9 +327,10 @@ test('Credentials leaves agent-key management to Settings', async () => {
 
   assert.ok(secrets, 'Credentials view is present');
   assert.doesNotMatch(secrets, /identity|agent key|rotate-key|SharedKeyCard/);
-  assert.match(app, /case 'secrets': return \['secrets'\]/);
+  // Both inventory routes render the merged list, so both load both halves.
+  assert.match(app, /case 'connections':\s*\n\s*case 'secrets': return \['connections', 'secrets'\]/);
   assert.ok(settings, 'Settings sheet is present');
-  assert.match(settings, /This computer’s agent key/);
+  assert.match(settings, /Reset this computer's agent key/);
   assert.match(settings, /data-act="rotate-key-ask"/);
 });
 
@@ -341,6 +342,19 @@ test('selected master rows have no left accent border', async () => {
   assert.doesNotMatch(selected, /border-left|inset\s+\d+px\s+0/);
 });
 
+test('expanded remote broker setup keeps commands in readable rows', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const setup = styles.match(/\.broker-pane \.bp-setup-wrap\{([^}]*)\}/)?.[1];
+
+  assert.ok(setup, 'remote broker advanced layout is present');
+  assert.match(setup, /display: grid/);
+  assert.match(setup, /grid-template-columns: minmax\(0, 1fr\) auto/);
+  assert.match(
+    styles,
+    /\.broker-pane \.bp-setup-wrap > \.f-row,[\s\S]*?\.broker-pane \.bp-setup-wrap > \.bp-actions\{ grid-column: 1 \/ -1; \}/,
+  );
+});
+
 test('the tray detail drawer stays inside the content below its tabs', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
@@ -348,7 +362,7 @@ test('the tray detail drawer stays inside the content below its tabs', async () 
 
   assert.match(
     app,
-    /<div className="dropdown-content-container">[\s\S]*?<div className="content dd-content"><TabContent \/><\/div>/,
+    /<div className="dropdown-content-container">[\s\S]*?<div className=\{`content dd-content[\s\S]*?<TabContent \/>[\s\S]*?<\/div>/,
   );
   assert.ok(pane, 'the tray content container is present');
   assert.match(pane, /contain: paint/);
@@ -360,21 +374,133 @@ test('the tray detail drawer stays inside the content below its tabs', async () 
   );
 });
 
-test('the connection menu escapes the clipping detail pane through a portal', async () => {
+test('scroll elasticity stays inside content panes instead of moving window chrome', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const viewport = styles.match(/html, body\{([^}]*)\}/)?.[1];
+  const scrollPanes = styles.match(/:where\(\s*\.content,([\s\S]*?)\)\{([^}]*)\}/);
+
+  assert.ok(viewport, 'the document viewport styles are present');
+  assert.match(viewport, /overscroll-behavior: none/);
+  assert.match(styles, /#root\{[^}]*overscroll-behavior: none/);
+  assert.ok(scrollPanes, 'the intentional scroll-pane boundary is present');
+  assert.match(scrollPanes[0], /\.dd-global/);
+  assert.match(scrollPanes[0], /\.sheet/);
+  assert.match(scrollPanes[0], /\.conn-detail-pane/);
+  assert.match(scrollPanes[0], /\.cred-detail-pane/);
+  assert.match(scrollPanes[0], /\.palette-list/);
+  assert.match(scrollPanes[2], /overscroll-behavior: contain/);
+});
+
+test('the wide inventory scrolls its list without rubber-banding the inspector', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 
-  assert.match(app, /function ConnectionActionMenu\(\): ReactNode \{[\s\S]*?createPortal\(/);
-  assert.match(app, /<ConnectionActionMenu \/>/);
+  assert.match(app, /content\$\{splitHead \? ' inventory-content' : ''\}/);
+  assert.match(styles, /\.inventory-content \{[^}]*overflow-y: hidden/);
+  assert.match(styles, /\.inventory-content \.creds-list-col \{[^}]*overflow-y: auto/);
+  assert.match(
+    styles,
+    /\.inventory-content \.cred-detail-col \{[^}]*position: static;[^}]*height: 100%/,
+  );
+});
+
+test('titlebar controls stay trailing when a view has no inventory toolbar', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const controls = styles.match(/\.dw-titlebar-controls\{([^}]*)\}/)?.[1];
+
+  assert.ok(controls);
+  assert.match(controls, /margin-left: auto/);
+  // Tauri drag regions do not inherit. The title and flex containers repeat
+  // the marker so non-interactive painted areas are not dead zones.
+  assert.match(app, /className="dw-title" data-tauri-drag-region=""/);
+  assert.match(app, /className="dw-toolbar-mid" data-tauri-drag-region=""/);
+  assert.match(app, /className="dw-titlebar-controls" data-tauri-drag-region=""/);
+});
+
+test('the titlebar Back button shares the broker switcher height', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const backButton = styles.match(
+    /\.dw-titlebar-controls \.titlebar-back-btn\{([^}]*)\}/,
+  )?.[1];
+
+  assert.match(app, /className="broker-btn titlebar-back-btn"/);
+  assert.ok(backButton);
+  assert.match(backButton, /height: var\(--toolbar-ctl\)/);
+  assert.match(backButton, /min-height: var\(--toolbar-ctl\)/);
+});
+
+test('the titlebar Add button keeps its reduced height and narrower fill', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const addButton = styles.match(
+    /\.dw-titlebar \.dw-titlebar-controls \.add-tool-btn\{\s*width: calc\(var\(--toolbar-ctl\) - 3px\);([^}]*)\}/,
+  )?.[1];
+
+  assert.ok(addButton);
+  assert.match(addButton, /height: calc\(var\(--toolbar-ctl\) - 4px\)/);
+  assert.match(addButton, /min-height: calc\(var\(--toolbar-ctl\) - 4px\)/);
+  assert.match(addButton, /max-height: calc\(var\(--toolbar-ctl\) - 4px\)/);
+  // The fill sits on the bar's own centre line; no optical nudge.
+  assert.doesNotMatch(addButton, /transform: translateY/);
+});
+
+test('the titlebar search keeps its increased height without a vertical offset', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const search = styles.match(/\.dw-titlebar \.dw-toolbar-mid \.tb-search\{([^}]*)\}/)?.[1];
+
+  assert.ok(search);
+  assert.match(search, /height: calc\(var\(--toolbar-ctl\) \+ 4px\)/);
+  assert.match(search, /min-height: calc\(var\(--toolbar-ctl\) \+ 4px\)/);
+  assert.doesNotMatch(search, /transform:/);
+});
+
+test('the Agent Tools section keeps its long label quiet', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const context = styles.match(/\.agent-tools-context\{([^}]*)\}/)?.[1];
+
+  assert.ok(context);
+  // Quieter than --muted: the scope is context for the name, not a second label.
+  assert.match(context, /color: var\(--faint\)/);
+  assert.match(context, /font-weight: 400/);
+});
+
+test('password and secret add dialogs are vertically centered', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+
+  assert.match(app, /case 'add-secret':[\s\S]*?className="wide add-secret-sheet"/);
+  assert.match(
+    styles,
+    /\.sheet\.wide\.add-secret-sheet\{[^}]*top: 50%;[^}]*transform: translate\(-50%, -50%\)/,
+  );
+});
+
+test('the tool inspector spends no menu, and the row menu still portals out', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+
+  // The inspector's actions are rows under Manage and Danger zone; it has
+  // no ⋯ of its own, so nothing in it needs to escape the scrolling card.
   const detail = app.match(
     /function ConnectionDetail[\s\S]*?function FlatConnectionRow/,
   )?.[0];
   assert.ok(detail, 'connection detail is present');
   assert.doesNotMatch(detail, /<div className="tile-menu"/);
-  assert.match(styles, /\.conn-action-menu-wrap \{[\s\S]*?position: fixed;/);
+  assert.doesNotMatch(detail, /toggle-conn-menu/);
+  assert.match(detail, /data-act="edit-conn"/);
+  assert.match(detail, /data-act="del-conn-ask"/);
+  // Right-click still reaches the same actions from a row, through a portal
+  // so no scroll pane or rounded card can clip it.
+  assert.match(app, /function ConnectionContextMenu\(\): ReactNode \{[\s\S]*?createPortal\(/);
+  assert.match(app, /<ConnectionContextMenu \/>/);
   assert.match(
     styles,
-    /\.conn-action-menu-wrap \.tile-menu \{[\s\S]*?max-height: calc\(100vh - 16px\)/,
+    /\.conn-context-menu-wrap,[\s\S]*?\{[\s\S]*?position: fixed;/,
+  );
+  assert.match(
+    styles,
+    /\.conn-context-menu-wrap \.tile-menu,[\s\S]*?\{[\s\S]*?max-height: calc\(100vh - 16px\)/,
   );
 });
 
@@ -399,12 +525,26 @@ test('detail-pane endpoint menus and other scroll-contained menus portal out', a
   assert.match(styles, /\.anchored-menu-portal/);
 });
 
-test('the Activity Log sits above the normal sidebar footer', async () => {
+test('the window has no sidebar; its destinations hang off the app menu', async () => {
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
 
+  // The rail and everything that only existed to fill it are gone.
+  assert.doesNotMatch(styles, /\.dw-side|\.dw-nav|\.dw-brand/);
+  assert.doesNotMatch(app, /className="dw-side|className="dw-nav/);
+  // The menu carries the way back to the inventory as well as the way out,
+  // so a destination is never a one-way trip.
+  const menu = app.match(/function AppMenu\([\s\S]*?\n\}\n/)?.[0];
+  assert.ok(menu, 'the app menu is present');
+  for (const tab of ['secrets', 'activity', 'start']) {
+    assert.match(menu, new RegExp(`data-tab="${tab}"`));
+  }
+  // Every enabled command in the menu closes it before dispatching, including
+  // async work such as rechecking tools. Appearance is the one exception —
+  // its segmented control previews in place, so the menu has to survive it.
   assert.match(
-    styles,
-    /@media \(min-width: 721px\) \{[\s\S]*?\.dw-nav \.nav-item\[data-tab="activity"\]\s*\{\s*margin-top: auto; margin-bottom: 4px;/,
+    app,
+    /if \(state\.menuOpen && btn\.closest\('\.settings-menu'\)\s*&& act !== 'set-theme'\) \{\s*state\.menuOpen = false;\s*render\(\);\s*\}\s*switch \(act\)/,
   );
 });
 
@@ -422,13 +562,16 @@ test('the Activity Log shows live sessions independently of audit filters', asyn
 
 test('the waiting requests tick their second-level countdowns', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  // The one-second ticker keeps approval sheets and the sticky request banner
+  // honest; it no longer gates on the Activity tab alone.
   const secondTicker = app.match(
     /setInterval\(\(\) => \{\s*if \(state\.sheet\?\.kind === 'approval'([\s\S]*?)\}, 1000\);/,
-  )?.[1];
+  )?.[0];
 
   assert.ok(secondTicker, 'the one-second countdown interval is present');
-  assert.match(secondTicker, /state\.tab === 'activity'/);
   assert.match(secondTicker, /activeRequestCount\(state\.approvals, state\.elicitations\) > 0/);
+  assert.match(app, /function bannerCountdown/);
+  assert.match(app, /request-banner\$\{urgent \? ' is-urgent' : ''\}/);
 });
 
 test('the SSH endpoint field includes the configured ssh invocation', async () => {
@@ -501,7 +644,7 @@ test('the settings menu shows the build version above its first item', async () 
   // an action and steal a tab stop from the two that are.
   assert.match(
     app,
-    /<div className="settings-menu">\s*<div className="menu-version">Version \{APP_VERSION\}<\/div>\s*<button className="menu-item"/,
+    /<div className="settings-menu">\s*<div className="menu-version">Version \{APP_VERSION\}<\/div>\s*\{\/\*[\s\S]*?\*\/\}\s*<button className=\{`menu-item/,
   );
   assert.doesNotMatch(app, /<button[^>]*menu-version/);
 
@@ -513,14 +656,16 @@ test('the settings menu shows the build version above its first item', async () 
   assert.doesNotMatch(styles, /\.menu-version:hover/);
 });
 
-test('the settings menu overhangs the sidebar rather than matching its width', async () => {
+test('the app menu drops from the title bar and is sized by its content', async () => {
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
-  // The narrow-rail override earlier in the file also selects .settings-menu;
-  // this is the base rule, the one that sizes the popover in the wide layout.
   const menu = styles.match(/\.settings-menu\{\s*position: absolute;([^}]*)\}/)?.[1];
 
-  assert.ok(menu, 'settings menu styles are present');
-  assert.match(menu, /right: -70px/);
+  assert.ok(menu, 'app menu styles are present');
+  // Anchored to the trailing edge of the bar it hangs from, opening
+  // downward — there is no longer a rail for it to overhang.
+  assert.match(menu, /right: 0/);
+  assert.match(menu, /top: calc\(100% \+ 6px\)/);
+  assert.match(menu, /min-width: 232px/);
 });
 
 test('typography and narrow form columns follow the user text scale', async () => {
@@ -528,7 +673,6 @@ test('typography and narrow form columns follow the user text scale', async () =
 
   assert.doesNotMatch(styles, /font-size:\s*[^;}]*\bpx\b/);
   assert.match(styles, /--content-max:\s*47\.5rem/);
-  assert.match(styles, /\.dw-side\{[^}]*flex:\s*0 0 9\.75rem/);
   assert.match(styles, /\.f-2col\{[^}]*flex-wrap:\s*wrap/);
   assert.match(styles, /\.f-2col \.f-row\{[^}]*flex:\s*1 1 16ch/);
 });
@@ -630,7 +774,10 @@ test('dropdown approval and elicitation dialogs hold the native form lease', asy
   assert.match(protectedSheets, /sheet\?\.kind === 'approval'/);
   assert.match(protectedSheets, /sheet\?\.kind === 'elicitation'/);
   assert.match(app, /case 'elicit-open': \{\s*if \(!await holdDropdownFormOpen\(\)\)/);
-  assert.match(app, /case 'approval-open': \{\s*if \(!await holdDropdownFormOpen\(\)\)/);
+  // Approval sheets acquire the lease inside presentApprovalSheet so tray
+  // deep-links and auto-present share the same path as queue clicks.
+  assert.match(app, /async function presentApprovalSheet[\s\S]*?holdDropdownFormOpen/);
+  assert.match(app, /case 'approval-open': \{\s*await presentApprovalSheet\(id\);/);
 });
 
 test('elicitation forms preserve optional fields and validate required ones', async () => {
@@ -653,12 +800,31 @@ test('known-host lookup is reachable from the SSH form', async () => {
   assert.match(app, /data-act="pick-host-key"/);
 });
 
-test('approval sheets use structured credential and TOFU provenance context', async () => {
+test('the add palette renders announced catalog entries as inert Soon rows', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
 
+  // Disabled entries render grayed with a Soon badge instead of a verb…
+  assert.match(app, /className="palette-row soon"/);
+  assert.match(app, /className="palette-soon">Soon</);
+  // …are skipped by keyboard selection…
+  assert.match(app, /group\.entries\.filter\(\(e\) => !e\.disabled\)/);
+  // …and can never activate, even if an activation reaches the handler.
+  assert.match(app, /if \(entry\?\.disabled\) return;/);
+  // The grouping keeps announced rows visible below the addable ones.
+  assert.match(app, /rows\.filter\(\(entry\) => !entry\.disabled\)\n\s*\.concat\(rows\.filter\(\(entry\) => entry\.disabled\)\)/);
+});
+
+test('approval sheets use structured credential and TOFU provenance context', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const presentation = await readFile(
+    new URL('../src/approval-presentation.ts', import.meta.url),
+    'utf8',
+  );
+
   assert.match(app, /approval\.credential_names/);
-  assert.match(app, /approval\.method/);
-  assert.match(app, /approval\.path/);
+  assert.match(app, /approvalActionLabel\(approval\)/);
+  assert.match(presentation, /approval\.method/);
+  assert.match(presentation, /approval\.path/);
   assert.match(app, /approval\.host_key_fingerprint/);
   assert.match(app, /Matches \$\{matchingKnownHost\.algorithm\} in/);
   assert.match(app, /fingerprint does not match/);
@@ -669,18 +835,24 @@ test('approval sheets use structured credential and TOFU provenance context', as
   assert.match(app, /hostKeyDecision \? 'Trust and pin'/);
 });
 
-test('request attention policy exposes escalation, onboarding, and autostart controls', async () => {
+test('request attention policy exposes only the remaining notification controls', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
 
   assert.match(app, /data-act="toggle-notification-sound"/);
   assert.match(app, /data-act="toggle-notification-time-sensitive"/);
   assert.match(app, /data-act="set-notification-escalation"/);
+  assert.doesNotMatch(app, /data-act="set-notification-mode"/);
+  assert.doesNotMatch(app, /data-act="toggle-notification-context"/);
+  assert.doesNotMatch(app, /data-act="toggle-present-approvals-modal"/);
   assert.match(app, /data-act="request-notification-permission"/);
   assert.match(app, /data-act="toggle-autostart"/);
   assert.match(app, /invoke\('set_autostart'/);
-  assert.match(app, /notificationModeBtn\('off', 'Window only'\)/);
-  assert.match(app, /Window only still brings the waiting requests forward/);
-  assert.match(app, /Your system settings remain in control/);
+  assert.match(app, /Play a sound on notification/);
+  // Re-alert is a switch: off, or the fixed 15-second lead time.
+  assert.match(app, /const escalationOn = notifications\.escalationSecs !== 0/);
+  assert.match(app, /data-id=\{escalationOn \? 0 : 15\}/);
+  assert.doesNotMatch(app, /escalationBtn/);
+  assert.match(app, /Deliver notifications in Focus Mode/);
 });
 
 test('connection detail keeps only Ask before outside its Advanced disclosure', async () => {
@@ -695,8 +867,10 @@ test('connection detail keeps only Ask before outside its Advanced disclosure', 
   const confirmation = app.match(
     /function ConfirmationSection\([\s\S]*?\n\}\n\n\/\*\*/,
   )?.[0];
+  // Anchored on the function's own closing brace rather than whatever
+  // happens to follow it, so moving neighbours around does not break this.
   const advanced = app.match(
-    /function ConnectionAdvancedSection\([\s\S]*?\n\}\n\nfunction McpStatus/,
+    /function ConnectionAdvancedSection\([\s\S]*?\n\}\n/,
   )?.[0];
   const enable = app.match(
     /case 'response-credentials-on':([\s\S]*?)case 'response-credentials-off':/,
@@ -745,11 +919,14 @@ test('waiting requests and secret dependencies remain actionable', async () => {
   assert.match(app, /void runConnectionTest\(connectionId\)/);
 });
 
-test('untrusted prompt identity text is bidi-isolated and self-reported', async () => {
+test('approval questions are app-authored while prompt values stay bidi-isolated', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 
-  assert.match(app, /Agent reported as “\$\{agent\}”/);
+  assert.match(app, /Allow <span className="untrusted-identity" dir="auto">/);
+  assert.match(app, /approvalToolName\(approval\.connection\)/);
+  assert.match(app, /aria-expanded=\{open\} aria-controls="approval-raw-request"/);
   assert.match(app, /className="approval-summary untrusted-identity" dir="auto"/);
+  assert.doesNotMatch(app, /Refused automatically in \{timeLeft\(approval\.expires_at\)\}/);
   assert.match(styles, /\.untrusted-identity\{ unicode-bidi: isolate; \}/);
 });

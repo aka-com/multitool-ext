@@ -6,22 +6,36 @@
      app switcher. A soft drop shadow is baked into the surrounding margin
      (as Apple's own icons do) so the body reads as grounded rather than
      bare when macOS draws a selection/focus highlight around the frame. -->
+<!-- Artwork: Lucide "bot" (ISC) beside a round-bow key, both drawn at one
+     shared stroke weight on a silver gradient body. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <filter id="grid-shadow" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
     <feGaussianBlur in="SourceAlpha" stdDeviation="19"/>
     <feOffset dy="11"/>
     <feComponentTransfer><feFuncA type="linear" slope="0.26"/></feComponentTransfer>
   </filter>
+  <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#5a5a64"/>
+    <stop offset="1" stop-color="#2c2c33"/>
+  </linearGradient>
   <rect x="100" y="100" width="824" height="824" rx="195" filter="url(#grid-shadow)"/>
   <g transform="translate(57.379 57.379) scale(0.887931)">
-    <rect x="48" y="48" width="928" height="928" rx="220" fill="#26262c"/>
-    <rect x="96" y="96" width="832" height="832" rx="180" fill="#303038"/>
-    <!-- Lucide "key" (ISC), 24px grid scaled to fill the inner panel;
-         matches the tray icon's glyph. -->
-    <g transform="translate(158 158) scale(29.5)" fill="none" stroke="#f5b154" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/>
-      <path d="m21 2-9.6 9.6"/>
-      <circle cx="7.5" cy="15.5" r="5.5"/>
+    <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#body)"/>
+    <g transform="translate(48 48) scale(1.8125)">
+      <g transform="translate(46 118) scale(11.5)" fill="none" stroke="#f5f5f7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 8V4H8"/>
+        <rect x="4" y="8" width="16" height="12" rx="2"/>
+        <path d="M2 14h2"/>
+        <path d="M20 14h2"/>
+        <path d="M15 13v2"/>
+        <path d="M9 13v2"/>
+      </g>
+      <g transform="translate(392 168)" fill="none" stroke="#f5f5f7" stroke-width="27.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="0" r="42"/>
+        <path d="M0 42v176"/>
+        <path d="M0 152h-44"/>
+        <path d="M0 196h-56"/>
+      </g>
     </g>
   </g>
 </svg>

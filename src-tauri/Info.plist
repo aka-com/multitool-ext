@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Default macOS Notification Center "Alert Style" for Multitool.
+	  "alert" = Persistent (stays until dismissed); "banner" = Temporary.
+	  Applies when the system first registers this app's notification prefs;
+	  a user who already chose Temporary keeps that choice until they change it.
+	-->
+	<key>NSUserNotificationAlertStyle</key>
+	<string>alert</string>
+</dict>
+</plist>

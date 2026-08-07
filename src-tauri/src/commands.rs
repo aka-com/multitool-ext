@@ -724,6 +724,7 @@ pub async fn edit_secret(
     new_site: Option<String>,
     new_username: Option<String>,
     new_totp: Option<String>,
+    new_origin: Option<String>,
 ) -> FormResult<()> {
     let id = parse_id(&id).map_err(|detail| {
         FormError::global(
@@ -733,6 +734,19 @@ pub async fn edit_secret(
             Some(detail),
         )
     })?;
+    let new_origin = match new_origin.as_deref() {
+        None => None,
+        Some("user") => Some(aka_api::SecretOriginDto::User),
+        Some("connection") => Some(aka_api::SecretOriginDto::Connection),
+        Some(other) => {
+            return Err(FormError::global(
+                "system",
+                "invalid_secret_origin",
+                "Couldn’t edit this credential",
+                Some(format!("unknown secret group {other:?}")),
+            ));
+        }
+    };
     state
         .brokers
         .backend()
@@ -744,6 +758,7 @@ pub async fn edit_secret(
                 new_site,
                 new_username,
                 new_totp,
+                new_origin,
             },
         )
         .await
@@ -2454,12 +2469,14 @@ pub async fn set_confirm_ssh_host_keys(
 /// This desktop's native request-notification preferences. They live beside
 /// the local/remote shell choice, never on the managed broker.
 #[tauri::command]
-pub fn get_notification_settings(
+pub async fn get_notification_settings(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> crate::attention::NotificationSettingsView {
+) -> CmdResult<crate::attention::NotificationSettingsView> {
     let settings = state.brokers.notification_settings();
-    app.try_state::<crate::attention::RequestAttention>()
+    crate::attention::refresh_notification_system_settings(&app).await;
+    Ok(app
+        .try_state::<crate::attention::RequestAttention>()
         .map(|attention| attention.settings_view())
         .unwrap_or(crate::attention::NotificationSettingsView {
             mode: settings.mode,
@@ -2467,11 +2484,14 @@ pub fn get_notification_settings(
             play_sound: settings.play_sound,
             time_sensitive: settings.time_sensitive,
             escalation_secs: settings.escalation_secs,
+            present_approvals_as_modal: settings.present_approvals_as_modal,
+            show_approval_hud: settings.show_approval_hud,
             available: false,
             unavailable_reason: Some("notification coordinator is unavailable".into()),
             can_open_system_settings: cfg!(target_os = "macos"),
             can_request_permission: false,
-        })
+            system: crate::attention::NotificationSystemSettings::default(),
+        }))
 }
 
 #[tauri::command]
@@ -2491,10 +2511,13 @@ pub fn set_notification_settings(
             play_sound: saved.play_sound,
             time_sensitive: saved.time_sensitive,
             escalation_secs: saved.escalation_secs,
+            present_approvals_as_modal: saved.present_approvals_as_modal,
+            show_approval_hud: saved.show_approval_hud,
             available: false,
             unavailable_reason: Some("notification coordinator is unavailable".into()),
             can_open_system_settings: cfg!(target_os = "macos"),
             can_request_permission: false,
+            system: crate::attention::NotificationSystemSettings::default(),
         }
     };
     let _ = app.emit(EVT_NOTIFICATION_SETTINGS, view.clone());
@@ -2506,6 +2529,18 @@ pub async fn request_notification_permission(
     app: AppHandle,
 ) -> CmdResult<crate::attention::NotificationSettingsView> {
     crate::attention::request_notification_permission(&app).await
+}
+
+/// Deliver one sample native request notification using the user's current
+/// notification options (context, sound, time-sensitive). Settings-only.
+///
+/// Returns the current notification settings view so Settings can apply any
+/// sticky delivery-health change without waiting on a separate event.
+#[tauri::command]
+pub fn preview_request_notification(
+    app: AppHandle,
+) -> CmdResult<crate::attention::NotificationSettingsView> {
+    crate::attention::preview_request_notification(&app)
 }
 
 #[tauri::command]
@@ -2529,21 +2564,224 @@ pub fn set_autostart(app: AppHandle, on: bool) -> CmdResult<bool> {
     manager.is_enabled().map_err(|error| error.to_string())
 }
 
-/// Open the operating system's notification settings. This is a fixed,
-/// user-invoked destination rather than the general URL launcher, whose
-/// scheme allowlist deliberately excludes system-preference links.
+/// Open the operating system's notification settings, selecting this app's
+/// own row. This is a fixed, user-invoked destination rather than the general
+/// URL launcher, whose scheme allowlist deliberately excludes
+/// system-preference links.
+///
+/// The `?id=<bundle-id>` query selects the app in the Notifications list on
+/// macOS 13 and later. Older systems ignore the query and land on the pane
+/// itself, which is the same place the link used to go — so the deep link
+/// costs nothing where it is not understood.
 #[tauri::command]
-pub fn open_notification_settings() -> CmdResult<()> {
+pub fn open_notification_settings(app: AppHandle) -> CmdResult<()> {
     #[cfg(target_os = "macos")]
     {
+        let target = format!(
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={}",
+            app.config().identifier
+        );
         return std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+            .arg(&target)
             .spawn()
             .map(|_| ())
             .map_err(|error| format!("could not open notification settings: {error}"));
     }
     #[cfg(not(target_os = "macos"))]
-    Err("opening notification settings is not supported on this platform".into())
+    {
+        let _ = app;
+        Err("opening notification settings is not supported on this platform".into())
+    }
+}
+
+/// Open the per-Focus app allow-list. Unlike Notifications there is no
+/// per-app destination to deep-link to: a Focus allow-list belongs to the
+/// Focus, not to the app, and macOS exposes no query to preselect an entry.
+/// Focus membership is likewise deliberately not inferred from private
+/// preference files — macOS owns it and offers no supported API to inspect or
+/// change this app's own entry.
+#[tauri::command]
+pub fn open_focus_settings() -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        return std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.Focus-Settings.extension")
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("open")
+                    .args(["-b", "com.apple.systempreferences"])
+                    .spawn()
+            })
+            .map(|_| ())
+            .map_err(|error| format!("could not open Focus settings: {error}"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("opening Focus settings is not supported on this platform".into())
+}
+
+/// Open System Settings to the Screen Recording privacy pane so the user can
+/// grant Multitool capture access after a failed QR-from-screen attempt.
+#[tauri::command]
+pub fn open_screen_recording_settings() -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // Prefer the modern Privacy & Security deep link; fall back to the
+        // older Security preference pane if the first open fails to spawn.
+        let modern =
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture";
+        let legacy =
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+        return std::process::Command::new("open")
+            .arg(modern)
+            .spawn()
+            .or_else(|_| std::process::Command::new("open").arg(legacy).spawn())
+            .map(|_| ())
+            .map_err(|error| format!("could not open Screen Recording settings: {error}"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("opening Screen Recording settings is not supported on this platform".into())
+}
+
+/// Outcome of an interactive screen-region capture used to enroll a 2FA QR.
+///
+/// The webview never talks to `screencapture` itself: hide/restore, TCC
+/// classification, and temp-file cleanup stay on this side of the IPC.
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ScreenRegionCapture {
+    /// PNG bytes of the selected region (standard base64, not URL-safe).
+    Captured { png_base64: String },
+    /// The user dismissed the system selection UI (Esc / cancel).
+    Cancelled,
+    /// macOS Screen Recording TCC denied the bitmap (classic
+    /// "could not create image from rect").
+    PermissionDenied,
+    /// Capture failed for another reason.
+    Failed { message: String },
+}
+
+/// Interactive region capture for 2FA QR enrollment.
+///
+/// Hides the main window so Multitool does not cover the enrollment page,
+/// runs the system selection UI (`screencapture -i -s`), restores the window,
+/// and returns PNG bytes or a classified failure. Requires Screen Recording
+/// permission for Multitool (not a codesign entitlement).
+#[tauri::command]
+pub async fn capture_screen_region(app: AppHandle) -> CmdResult<ScreenRegionCapture> {
+    tokio::task::spawn_blocking(move || capture_screen_region_blocking(app))
+        .await
+        .map_err(|error| format!("screen capture task failed: {error}"))
+}
+
+fn capture_screen_region_blocking(app: AppHandle) -> ScreenRegionCapture {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        return ScreenRegionCapture::Failed {
+            message: "screen capture is only available on macOS".into(),
+        };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::time::Duration;
+
+        let main = app.get_webview_window(crate::windows::MAIN);
+        let was_visible = main.as_ref().is_some_and(|window| window.is_visible().unwrap_or(false));
+        if let Some(window) = &main {
+            let _ = window.hide();
+        }
+        // Let the hide settle so Multitool is not in the snip.
+        std::thread::sleep(Duration::from_millis(180));
+
+        let path = std::env::temp_dir().join(format!(
+            "multitool-qr-capture-{}-{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let output = std::process::Command::new("/usr/sbin/screencapture")
+            // -i interactive, -s selection-only (no window mode), -x silent,
+            // -t png so the webview decoder always gets a known format.
+            .args(["-i", "-s", "-x", "-tpng"])
+            .arg(&path)
+            .output();
+
+        if was_visible {
+            if let Some(window) = &main {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+
+        let result = match output {
+            Err(error) => ScreenRegionCapture::Failed {
+                message: format!("could not start screen capture: {error}"),
+            },
+            Ok(output) => classify_screencapture_result(&path, &output),
+        };
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+}
+
+/// Map `screencapture`'s exit status, stderr, and output file into a
+/// frontend-facing outcome. Keep the string checks narrow: cancel, TCC
+/// denial, and hard failure all share non-zero exits on current macOS.
+#[cfg(target_os = "macos")]
+fn classify_screencapture_result(
+    path: &std::path::Path,
+    output: &std::process::Output,
+) -> ScreenRegionCapture {
+    use base64::Engine as _;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_l = stderr.to_ascii_lowercase();
+    let permission_denied = stderr_l.contains("could not create image from rect")
+        || stderr_l.contains("could not create image from display")
+        || stderr_l.contains("could not create image from window");
+
+    let bytes = std::fs::read(path).ok();
+    let has_png = bytes
+        .as_ref()
+        .is_some_and(|b| b.len() >= 8 && b.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    if output.status.success() && has_png {
+        let png = bytes.expect("has_png implies Some");
+        return ScreenRegionCapture::Captured {
+            png_base64: base64::engine::general_purpose::STANDARD.encode(png),
+        };
+    }
+
+    if permission_denied {
+        return ScreenRegionCapture::PermissionDenied;
+    }
+
+    // Empty file with no permission message is still usually a TCC miss
+    // after a completed selection; treat it as permission rather than cancel.
+    if bytes.as_ref().is_some_and(|b| b.is_empty()) {
+        return ScreenRegionCapture::PermissionDenied;
+    }
+
+    if !output.status.success() && bytes.is_none() {
+        // Esc / cancel: no file written.
+        return ScreenRegionCapture::Cancelled;
+    }
+
+    if !output.status.success() {
+        return ScreenRegionCapture::Cancelled;
+    }
+
+    let detail = stderr.trim();
+    ScreenRegionCapture::Failed {
+        message: if detail.is_empty() {
+            "couldn’t capture the screen".into()
+        } else {
+            detail.to_string()
+        },
+    }
 }
 
 /// Register every command with the Tauri builder.
@@ -2623,7 +2861,11 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Syn
         get_notification_settings,
         set_notification_settings,
         request_notification_permission,
+        preview_request_notification,
         open_notification_settings,
+        open_focus_settings,
+        open_screen_recording_settings,
+        capture_screen_region,
         get_autostart,
         set_autostart,
         crate::applock::get_lock_state,
@@ -2635,11 +2877,16 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Syn
         crate::applock::retry_embedded_unlock,
         crate::applock::stop_embedded_unlock,
         crate::windows::ui_set_mode,
+        crate::windows::ui_open_credential,
+        crate::windows::ui_quit,
         crate::windows::ui_hide_main,
         crate::windows::ui_hide_dropdown,
         crate::windows::ui_set_dropdown_form_active,
         crate::windows::ui_set_request_inbox_visible,
         crate::windows::ui_take_open_requests,
+        crate::windows::ui_get_attention_hud,
+        crate::windows::ui_hide_attention_hud,
+        crate::windows::ui_review_attention_hud,
     ]
 }
 

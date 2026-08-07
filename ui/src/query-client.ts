@@ -5,19 +5,33 @@ import { brokerScopeKey } from './broker-scope';
 import type { BrokerScope } from './broker-scope';
 import type { CommandArgs, CommandName, CommandResult } from './types';
 
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      networkMode: 'always',
-      retry: false,
-      staleTime: Number.POSITIVE_INFINITY,
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        networkMode: 'always',
+        retry: false,
+        staleTime: Number.POSITIVE_INFINITY,
+      },
+      mutations: {
+        networkMode: 'always',
+        retry: false,
+      },
     },
-    mutations: {
-      networkMode: 'always',
-      retry: false,
-    },
-  },
-});
+  });
+}
+
+// Vite HMR re-executes this module on change. Broker list data lives in the
+// QueryClient cache — recreate it and secrets/tools vanish until a full
+// refresh. Keep the same client across hot updates.
+type QueryHotData = { queryClient?: QueryClient; cacheRevision?: number };
+const queryHot = import.meta.hot?.data as QueryHotData | undefined;
+
+export const queryClient: QueryClient = queryHot?.queryClient ?? createQueryClient();
+
+if (import.meta.hot) {
+  import.meta.hot.data.queryClient = queryClient;
+}
 
 /** Keep local and remote broker responses in distinct cache namespaces. */
 export function brokerQueryKey<K extends CommandName>(
@@ -87,7 +101,7 @@ export function removeBrokerQueries(broker: BrokerScope): void {
   });
 }
 
-let cacheRevision = 0;
+let cacheRevision = queryHot?.cacheRevision ?? 0;
 
 const QUERY_BACKED_COMMANDS = new Set<CommandName>([
   'list_secrets',
@@ -109,6 +123,7 @@ function subscribeToQueryCache(listener: () => void): () => void {
       || !QUERY_BACKED_COMMANDS.has(command as CommandName)
     ) return;
     cacheRevision += 1;
+    if (import.meta.hot) import.meta.hot.data.cacheRevision = cacheRevision;
     listener();
   });
 }

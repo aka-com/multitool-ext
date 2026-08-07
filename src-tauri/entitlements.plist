@@ -6,11 +6,12 @@
     The base entitlements. `scripts/build.sh` copies this file to
     `entitlements.signed.plist` and adds the `keychain-access-groups` entry
     that the release build actually signs with (plus
-    `com.apple.application-identifier` when a provisioning profile is being
-    embedded); those need the signing team's ID, which is not in the
-    repository. `tauri dev` and any build that does not go through build.sh
-    use this file as-is, get no keychain group, and fall back to the login
-    keychain — see `aka_core::keychain`.
+    `com.apple.application-identifier` and any profile-authorized optional
+    capabilities when a provisioning profile is being embedded); those need
+    machine-local signing information that is not in the repository. `tauri
+    dev` and any build that does not go through build.sh use this file as-is,
+    get no keychain group, and fall back to the login keychain — see
+    `aka_core::keychain`.
   -->
 </dict>
 </plist>

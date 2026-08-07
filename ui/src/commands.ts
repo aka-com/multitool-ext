@@ -154,10 +154,16 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
   get_notification_settings: native('native notifications belong to this app'),
   set_notification_settings: native('native notifications belong to this app'),
   request_notification_permission: native('native notifications belong to this app'),
+  preview_request_notification: native('native notifications belong to this app'),
   open_notification_settings: native('opens System Settings'),
+  open_focus_settings: native('opens System Settings'),
+  open_screen_recording_settings: native('opens System Settings'),
   get_autostart: native('a login item is a property of this Mac'),
   set_autostart: native('a login item is a property of this Mac'),
   open_url: native('opens the system browser'),
+  // Interactive snip for 2FA QR codes: hides Multitool, runs the OS region
+  // picker, and returns PNG bytes. Browsers have no equivalent capture path.
+  capture_screen_region: native('captures a region of this Mac’s screen'),
 
   // The app lock gates this shell's own windows. A browser tab has no
   // equivalent, and the broker session's own expiry is the web answer.
@@ -178,11 +184,16 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
   // Window chrome.
   set_menu_bar_hides_dock: native('a macOS window behaviour'),
   ui_set_mode: native('window chrome'),
+  ui_open_credential: native('window chrome'),
+  ui_quit: native('window chrome'),
   ui_hide_main: native('window chrome'),
   ui_hide_dropdown: native('window chrome'),
   ui_set_dropdown_form_active: native('window chrome'),
   ui_set_request_inbox_visible: native('window chrome'),
   ui_take_open_requests: native('window chrome'),
+  ui_get_attention_hud: native('window chrome'),
+  ui_hide_attention_hud: native('window chrome'),
+  ui_review_attention_hud: native('window chrome'),
 
   /* ------------------------------ the broker -------------------------- */
 
@@ -197,6 +208,7 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
       newSite: 'new_site',
       newUsername: 'new_username',
       newTotp: 'new_totp',
+      newOrigin: 'new_origin',
     }),
   }),
   delete_secret: broker('DELETE', '/v1/manage/secrets/:id'),

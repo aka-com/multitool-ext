@@ -1,11 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Source for tray.png. macOS renders the PNG as a template image, so only
-  this shape's alpha channel is significant. Keep transparent padding around
-  the key so the status item remains legible in both menu-bar appearances.
+  this shape's alpha channel is significant. Same artwork as icon.svg (the
+  Lucide bot beside a round-bow key, one shared stroke weight) minus the
+  tile. Scaled up (~1.3x) so the status item reads at menu-bar size next to
+  neighbouring glyphs; a thin transparent margin remains.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-  <path d="m21 2-9.6 9.6" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-  <circle cx="7.5" cy="15.5" r="5.5" fill="none" stroke="#000" stroke-width="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(256 256) scale(1.32) translate(-256 -256)">
+    <g transform="translate(4.5 0)">
+      <g transform="translate(46 118) scale(11.5)" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 8V4H8"/>
+        <rect x="4" y="8" width="16" height="12" rx="2"/>
+        <path d="M2 14h2"/>
+        <path d="M20 14h2"/>
+        <path d="M15 13v2"/>
+        <path d="M9 13v2"/>
+      </g>
+      <g transform="translate(392 168)" fill="none" stroke="#000" stroke-width="27.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="0" r="42"/>
+        <path d="M0 42v176"/>
+        <path d="M0 152h-44"/>
+        <path d="M0 196h-56"/>
+      </g>
+    </g>
+  </g>
 </svg>

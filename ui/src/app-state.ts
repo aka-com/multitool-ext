@@ -23,6 +23,7 @@ import type {
   OnePasswordVault,
   RequestRecord,
   SecretKind,
+  SecretOrigin,
   SecretSummary,
   SessionSummary,
   Settings,
@@ -38,11 +39,20 @@ import { UiStore } from './ui-store';
 
 export const TABS = ['secrets', 'connections', 'start', 'activity'] as const;
 export type Tab = typeof TABS[number];
-export const DROPDOWN_TABS = ['secrets', 'connections', 'activity'] as const satisfies readonly Tab[];
+/** The tray has no tab switcher: Tools ride above Credentials in one view,
+ * and Activity sits behind the header toggle. 'connections' is a
+ * window-only tab. */
+export const DROPDOWN_TABS = ['secrets', 'activity'] as const satisfies readonly Tab[];
+
+/** Settings is the one sheet that both app chromes can open independently. */
+export type SettingsSurface = 'desktop' | 'menubar';
 
 /** The Credentials page's sidebar-tile filter scopes. The tile presentation
  * (labels, icons, order) lives with the view in app.tsx. */
-export type SecretCategory = 'all' | 'passwords' | 'secrets' | 'codes' | 'onepassword';
+// 'connections' scopes the unified inventory to tools; the rest scope the
+// credentials inside it.
+export type SecretCategory =
+  'all' | 'connections' | 'passwords' | 'secrets' | 'codes' | 'onepassword';
 
 export interface SheetState {
   kind: 'add-secret' | 'edit-secret' | 'add-conn' | 'edit-conn' | 'settings'
@@ -104,6 +114,10 @@ export interface ConnectionDraft {
   passwordGenerationFormat?: 'strong' | 'no-special' | 'easy-to-type';
   /** The add-credential sheet's type segment. */
   secretKind?: SecretKind;
+  /** The edit-secret sheet's group choice (Secrets / Connection
+   * Secrets). Distinct from `origin` below, which belongs to connection
+   * drafts. */
+  secretOrigin?: SecretOrigin;
   /** Password fields (kind 'password'). */
   site?: string;
   username?: string;
@@ -114,6 +128,12 @@ export interface ConnectionDraft {
   totpFromQrImage?: boolean;
   /** Whether a chosen QR-code image is still being decoded. */
   totpQrImageScanning?: boolean;
+  /** Where the last 2FA image came from (file picker vs screen capture). */
+  totpQrSource?: 'file' | 'screen';
+  /** Object URL of the last captured/chosen image, for the failure preview. */
+  totpQrPreviewUrl?: string;
+  /** Show “Open Settings” after a Screen Recording permission denial. */
+  totpCaptureNeedsSettings?: boolean;
   /** The edit sheet's explicit "remove 2FA" choice. */
   removeTotp?: boolean;
   importWarnings?: string[];
@@ -333,6 +353,9 @@ export interface AppState {
   /** ⋯ menu on the Connect section label (renew / rotate / revoke address). */
   epOptsMenuOpen: string | null;
   sshSockets: Record<string, string>;
+  /** Per-chrome visibility keeps an open desktop Settings sheet from also
+   * appearing in the menu-bar window, and vice versa. */
+  settingsSheetOpen: Record<SettingsSurface, boolean>;
   sheet: SheetState | null;
   draft: ConnectionDraft;
   sheetErrors: Record<string, string>;
@@ -362,6 +385,9 @@ export interface AppState {
   totpVisible: string | null;
   /** Menu-bar tray: credential row expanded to its inline copy actions. */
   dropdownSecretOpen: string | null;
+  /** Menu-bar tray: which credential's 2FA well menu (copy code / change)
+   * is open — C1 icon-well cluster. */
+  dropdownTotpMenu: string | null;
   /** The desktop inspector's in-place identity edit (username or website):
    * which credential and field, and the text as typed. Committed on blur or
    * Enter, dropped on Escape. */
@@ -395,6 +421,10 @@ export interface AppState {
   selectedConn: string | null;
   connDetailOpen: boolean;
   copied: string | null;
+  /** Secret id whose value is mid-fetch for a hygienic copy (remote broker
+   * or 1Password). The mask shows "Copying…" until the pasteboard write
+   * finishes. */
+  copying: string | null;
   connectionReady: ConnectionReadyState | null;
   connTests: Record<string, ConnectionTestState>;
   draftTest: ConnectionTestState | null;
@@ -431,14 +461,23 @@ export const DEFAULT_LOCK_STATE: LockState = {
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
-  mode: 'when_hidden',
-  showContext: false,
+  mode: 'always',
+  showContext: true,
   playSound: true,
   timeSensitive: false,
-  escalationSecs: 30,
+  escalationSecs: 15,
+  presentApprovalsAsModal: true,
+  showApprovalHud: false,
   available: true,
   canOpenSystemSettings: false,
   canRequestPermission: false,
+  system: {
+    alerts: 'unknown',
+    sounds: 'unknown',
+    notificationCenter: 'unknown',
+    timeSensitive: 'unknown',
+    alertStyle: 'unknown',
+  },
 };
 
 export const defaultLoadStatus = (): Record<LoadKey, LoadStatus> => ({
@@ -500,6 +539,7 @@ function createInitialState(): AppState {
     epMenuOpen: null,
     epOptsMenuOpen: null,
     sshSockets: {},
+    settingsSheetOpen: { desktop: false, menubar: false },
     sheet: null,
     draft: {},
     sheetErrors: {},
@@ -520,6 +560,7 @@ function createInitialState(): AppState {
     secretDetailOpen: false,
     totpVisible: null,
     dropdownSecretOpen: null,
+    dropdownTotpMenu: null,
     detailEdit: null,
     catalogActionMenuOpen: null,
     vaultsPanelOpen: false,
@@ -541,6 +582,7 @@ function createInitialState(): AppState {
     selectedConn: null,
     connDetailOpen: false,
     copied: null,
+    copying: null,
     connectionReady: null,
     connTests: {},
     draftTest: null,
@@ -558,8 +600,22 @@ function createInitialState(): AppState {
   };
 }
 
-export const uiStore = new UiStore(createInitialState());
+// Vite HMR re-executes this module and would otherwise mint an empty store —
+// tools and secrets then read as empty until a full boot. Keep the live store
+// (and the query-backed property bindings) across hot updates.
+type AppStateHotData = {
+  uiStore?: UiStore<AppState>;
+  queryFieldsBound?: boolean;
+};
+const appStateHot = import.meta.hot?.data as AppStateHotData | undefined;
+
+export const uiStore: UiStore<AppState> =
+  appStateHot?.uiStore ?? new UiStore(createInitialState());
 export const state = uiStore.state;
+
+if (import.meta.hot) {
+  import.meta.hot.data.uiStore = uiStore;
+}
 
 const EMPTY_SECRETS: SecretSummary[] = [];
 const EMPTY_CONNECTIONS: ConnectionSummary[] = [];
@@ -574,7 +630,8 @@ function bindQueryBackedField<K extends keyof AppState>(
   write: (value: AppState[K]) => void,
 ): void {
   Object.defineProperty(state, field, {
-    configurable: false,
+    // configurable so a rare full rebind during HMR does not throw.
+    configurable: true,
     enumerable: true,
     get: read,
     set: write,
@@ -584,46 +641,51 @@ function bindQueryBackedField<K extends keyof AppState>(
 // Broker-owned resources live canonically in TanStack Query. Keeping these
 // accessors on the existing state facade lets the action layer migrate
 // incrementally without maintaining a second copy of each server response.
-bindQueryBackedField(
-  'secrets',
-  () => getBrokerQueryData(state.broker, 'list_secrets') ?? EMPTY_SECRETS,
-  (value) => setBrokerQueryData(state.broker, 'list_secrets', value),
-);
-bindQueryBackedField(
-  'connections',
-  () => getBrokerQueryData(state.broker, 'list_connections') ?? EMPTY_CONNECTIONS,
-  (value) => setBrokerQueryData(state.broker, 'list_connections', value),
-);
-bindQueryBackedField(
-  'identity',
-  () => getBrokerQueryData(state.broker, 'get_identity') ?? null,
-  (value) => {
-    if (value === null) removeBrokerQueryData(state.broker, 'get_identity');
-    else setBrokerQueryData(state.broker, 'get_identity', value);
-  },
-);
-bindQueryBackedField(
-  'sessions',
-  () => getBrokerQueryData(state.broker, 'list_sessions') ?? EMPTY_SESSIONS,
-  (value) => setBrokerQueryData(state.broker, 'list_sessions', value),
-);
-bindQueryBackedField(
-  'elicitations',
-  () => getBrokerQueryData(state.broker, 'list_elicitations') ?? EMPTY_ELICITATIONS,
-  (value) => setBrokerQueryData(state.broker, 'list_elicitations', value),
-);
-bindQueryBackedField(
-  'approvals',
-  () => getBrokerQueryData(state.broker, 'list_approvals') ?? EMPTY_APPROVALS,
-  (value) => setBrokerQueryData(state.broker, 'list_approvals', value),
-);
-bindQueryBackedField(
-  'requests',
-  () => getBrokerQueryData(state.broker, 'list_requests') ?? EMPTY_REQUESTS,
-  (value) => setBrokerQueryData(state.broker, 'list_requests', value),
-);
-bindQueryBackedField(
-  'settings',
-  () => getBrokerQueryData(state.broker, 'get_settings') ?? DEFAULT_SETTINGS,
-  (value) => setBrokerQueryData(state.broker, 'get_settings', value),
-);
+// Skip re-binding when the same store survived HMR — the getters already
+// close over the preserved queryClient.
+if (!appStateHot?.queryFieldsBound) {
+  bindQueryBackedField(
+    'secrets',
+    () => getBrokerQueryData(state.broker, 'list_secrets') ?? EMPTY_SECRETS,
+    (value) => setBrokerQueryData(state.broker, 'list_secrets', value),
+  );
+  bindQueryBackedField(
+    'connections',
+    () => getBrokerQueryData(state.broker, 'list_connections') ?? EMPTY_CONNECTIONS,
+    (value) => setBrokerQueryData(state.broker, 'list_connections', value),
+  );
+  bindQueryBackedField(
+    'identity',
+    () => getBrokerQueryData(state.broker, 'get_identity') ?? null,
+    (value) => {
+      if (value === null) removeBrokerQueryData(state.broker, 'get_identity');
+      else setBrokerQueryData(state.broker, 'get_identity', value);
+    },
+  );
+  bindQueryBackedField(
+    'sessions',
+    () => getBrokerQueryData(state.broker, 'list_sessions') ?? EMPTY_SESSIONS,
+    (value) => setBrokerQueryData(state.broker, 'list_sessions', value),
+  );
+  bindQueryBackedField(
+    'elicitations',
+    () => getBrokerQueryData(state.broker, 'list_elicitations') ?? EMPTY_ELICITATIONS,
+    (value) => setBrokerQueryData(state.broker, 'list_elicitations', value),
+  );
+  bindQueryBackedField(
+    'approvals',
+    () => getBrokerQueryData(state.broker, 'list_approvals') ?? EMPTY_APPROVALS,
+    (value) => setBrokerQueryData(state.broker, 'list_approvals', value),
+  );
+  bindQueryBackedField(
+    'requests',
+    () => getBrokerQueryData(state.broker, 'list_requests') ?? EMPTY_REQUESTS,
+    (value) => setBrokerQueryData(state.broker, 'list_requests', value),
+  );
+  bindQueryBackedField(
+    'settings',
+    () => getBrokerQueryData(state.broker, 'get_settings') ?? DEFAULT_SETTINGS,
+    (value) => setBrokerQueryData(state.broker, 'get_settings', value),
+  );
+  if (import.meta.hot) import.meta.hot.data.queryFieldsBound = true;
+}

@@ -145,6 +145,8 @@ pub struct CredentialEdit {
     pub new_username: Option<Option<String>>,
     /// `None` leaves TOTP alone; `Some(None)` removes it.
     pub new_totp: Option<Option<SecretValue>>,
+    /// `None` leaves the Your Secrets / Connection Secrets grouping alone.
+    pub new_origin: Option<crate::types::SecretOrigin>,
 }
 
 pub struct CredentialEditResult {
@@ -154,6 +156,7 @@ pub struct CredentialEditResult {
     pub value_replaced: bool,
     pub profile_changed: bool,
     pub totp_changed: bool,
+    pub origin_changed: bool,
 }
 
 pub struct ConnectionUpdate {
@@ -402,6 +405,13 @@ impl DomainRepository for LocalDomainRepository {
                 .set_totp_factor(workspace, &edit.id, totp)
                 .await?;
         }
+        let origin_changed = edit.new_origin.is_some_and(|origin| origin != meta.origin);
+        if let Some(origin) = edit.new_origin {
+            meta = self
+                .catalog
+                .set_secret_origin(workspace, &edit.id, origin)
+                .await?;
+        }
 
         let result = CredentialEditResult {
             meta,
@@ -410,11 +420,13 @@ impl DomainRepository for LocalDomainRepository {
             value_replaced,
             profile_changed,
             totp_changed,
+            origin_changed,
         };
         if !result.value_replaced
             && result.renamed_from.is_none()
             && !result.profile_changed
             && !result.totp_changed
+            && !result.origin_changed
         {
             return Ok(DomainCommit::without_event(result));
         }
@@ -826,6 +838,7 @@ mod tests {
                     new_site: None,
                     new_username: None,
                     new_totp: None,
+                    new_origin: None,
                 },
             )
             .await

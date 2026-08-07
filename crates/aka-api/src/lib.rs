@@ -278,6 +278,11 @@ pub struct SecretDto {
     /// What the credential is; records from before typing are secrets.
     #[serde(default)]
     pub kind: SecretKindDto,
+    /// Which list the credential is shown in: the user's own secrets or the
+    /// credentials created alongside a connection. Older brokers omit it,
+    /// which reads as the user's own.
+    #[serde(default)]
+    pub origin: SecretOriginDto,
     /// Password metadata: the canonical host the password signs in to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
@@ -294,6 +299,16 @@ pub enum SecretKindDto {
     #[default]
     Secret,
     Password,
+}
+
+/// Where a secret is grouped in the UI: the user's own list, or the
+/// credentials created as part of adding a connection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretOriginDto {
+    #[default]
+    User,
+    Connection,
 }
 
 /// `GET /v1/manage/secrets/{id}/totp`: one code, computed broker-side. The
@@ -973,6 +988,8 @@ pub enum ApprovalDecisionDto {
     ApproveWindow,
     /// Allow this and turn the connection's confirmation off.
     ApproveAll,
+    /// Allow just this call; the next one asks again.
+    ApproveOnce,
     Deny,
 }
 

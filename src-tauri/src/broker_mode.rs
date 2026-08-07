@@ -119,8 +119,8 @@ pub(crate) struct ShellConfig {
 #[serde(rename_all = "snake_case")]
 pub enum NotificationMode {
     Off,
-    #[default]
     WhenHidden,
+    #[default]
     Always,
 }
 
@@ -130,8 +130,10 @@ pub enum NotificationMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationSettings {
+    /// Retained in the config schema for compatibility; normalized to Always.
     #[serde(default)]
     pub mode: NotificationMode,
+    /// Retained in the config schema for compatibility; normalized to true.
     #[serde(default)]
     pub show_context: bool,
     /// Play the platform's default sound for request notifications.
@@ -146,6 +148,14 @@ pub struct NotificationSettings {
     /// the near-deadline in-app fallback remains active.
     #[serde(default = "default_notification_escalation_secs")]
     pub escalation_secs: u64,
+    /// Retained in the config schema for compatibility; normalized to true so
+    /// newly parked traffic opens its decision sheet whenever it is safe.
+    #[serde(default = "default_present_approvals_as_modal")]
+    pub present_approvals_as_modal: bool,
+    /// Show a short, non-activating app-owned popup for newly waiting work.
+    /// It is deliberately opt-in because it is not filtered by Focus.
+    #[serde(default)]
+    pub show_approval_hud: bool,
 }
 
 const fn default_notification_sound() -> bool {
@@ -153,38 +163,55 @@ const fn default_notification_sound() -> bool {
 }
 
 const fn default_notification_escalation_secs() -> u64 {
-    30
+    15
+}
+
+const fn default_present_approvals_as_modal() -> bool {
+    true
 }
 
 impl Default for NotificationSettings {
     fn default() -> Self {
         Self {
             mode: NotificationMode::default(),
-            show_context: false,
+            show_context: true,
             play_sound: default_notification_sound(),
             time_sensitive: false,
             escalation_secs: default_notification_escalation_secs(),
+            present_approvals_as_modal: default_present_approvals_as_modal(),
+            show_approval_hud: false,
         }
     }
 }
 
 impl NotificationSettings {
+    /// These are product policy rather than user preferences: Multitool is
+    /// normally in the background, notifications should identify the waiting
+    /// parties, and an open app should present a new approval immediately.
+    fn with_fixed_delivery_policy(mut self) -> Self {
+        self.mode = NotificationMode::Always;
+        self.show_context = true;
+        self.present_approvals_as_modal = true;
+        self
+    }
+
     fn validate(self) -> Result<Self, String> {
-        if matches!(self.escalation_secs, 0 | 15 | 30 | 60) {
-            Ok(self)
+        if matches!(self.escalation_secs, 0 | 15) {
+            Ok(self.with_fixed_delivery_policy())
         } else {
-            Err("notification escalation must be off, 15, 30, or 60 seconds".into())
+            Err("notification escalation must be off or 15 seconds".into())
         }
     }
 
-    /// Preserve privacy and delivery choices when a hand-edited, corrupt, or
-    /// newer shell config carries a delay this version does not understand.
-    /// Disabling escalation is safer than silently re-enabling every default.
-    fn with_safe_persisted_escalation(mut self) -> Self {
-        if self.validate().is_err() {
-            self.escalation_secs = 0;
-        }
-        self
+    /// Migrate the former 30/60-second choices to the sole reminder interval.
+    /// Unknown hand-edited values stay conservative and disable re-alerting.
+    fn with_safe_persisted_policy(mut self) -> Self {
+        self.escalation_secs = match self.escalation_secs {
+            0 | 15 => self.escalation_secs,
+            30 | 60 => 15,
+            _ => 0,
+        };
+        self.with_fixed_delivery_policy()
     }
 }
 
@@ -293,7 +320,7 @@ pub fn saved_mode(data_dir: &Path) -> SavedMode {
 pub fn saved_notification_settings(data_dir: &Path) -> NotificationSettings {
     load_config(data_dir)
         .notifications
-        .with_safe_persisted_escalation()
+        .with_safe_persisted_policy()
 }
 
 /// Lock settings are read at startup, before the windows exist, so the
@@ -451,7 +478,7 @@ impl BrokerState {
         let _write = self.shell_write.lock().unwrap();
         load_config(&self.data_dir)
             .notifications
-            .with_safe_persisted_escalation()
+            .with_safe_persisted_policy()
     }
 
     pub fn set_notification_settings(
@@ -958,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn older_shell_config_defaults_to_private_background_notifications() {
+    fn older_shell_config_defaults_to_fixed_notification_policy() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             config_path(dir.path()),
@@ -971,8 +998,8 @@ mod tests {
         assert_eq!(
             config.notifications,
             NotificationSettings {
-                mode: NotificationMode::WhenHidden,
-                show_context: false,
+                mode: NotificationMode::Always,
+                show_context: true,
                 ..NotificationSettings::default()
             }
         );
@@ -994,7 +1021,9 @@ mod tests {
             show_context: true,
             play_sound: false,
             time_sensitive: true,
-            escalation_secs: 60,
+            escalation_secs: 15,
+            present_approvals_as_modal: true,
+            show_approval_hud: true,
         };
         save_config(dir.path(), &config).unwrap();
 
@@ -1012,12 +1041,12 @@ mod tests {
         };
         assert_eq!(
             invalid.validate().unwrap_err(),
-            "notification escalation must be off, 15, 30, or 60 seconds"
+            "notification escalation must be off or 15 seconds"
         );
     }
 
     #[test]
-    fn unknown_saved_delay_preserves_notification_privacy_choices() {
+    fn saved_settings_enforce_fixed_delivery_policy() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             config_path(dir.path()),
@@ -1034,10 +1063,39 @@ mod tests {
         .unwrap();
 
         let settings = saved_notification_settings(dir.path());
-        assert_eq!(settings.mode, NotificationMode::Off);
+        assert_eq!(settings.mode, NotificationMode::Always);
         assert!(settings.show_context);
+        assert!(settings.present_approvals_as_modal);
         assert!(!settings.play_sound);
         assert!(settings.time_sensitive);
         assert_eq!(settings.escalation_secs, 0);
+    }
+
+    #[test]
+    fn legacy_reminder_delays_migrate_to_fifteen_seconds() {
+        for escalation_secs in [30, 60] {
+            let settings = NotificationSettings {
+                escalation_secs,
+                ..NotificationSettings::default()
+            }
+            .with_safe_persisted_policy();
+            assert_eq!(settings.escalation_secs, 15);
+        }
+    }
+
+    #[test]
+    fn saves_cannot_override_fixed_delivery_policy() {
+        let settings = NotificationSettings {
+            mode: NotificationMode::Off,
+            show_context: false,
+            escalation_secs: 15,
+            present_approvals_as_modal: false,
+            ..NotificationSettings::default()
+        }
+        .validate()
+        .unwrap();
+        assert_eq!(settings.mode, NotificationMode::Always);
+        assert!(settings.show_context);
+        assert!(settings.present_approvals_as_modal);
     }
 }

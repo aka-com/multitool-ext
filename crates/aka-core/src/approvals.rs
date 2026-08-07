@@ -280,6 +280,9 @@ pub enum ApprovalDecision {
     /// Let this through and stop asking. The caller persists the switch
     /// going off; the registry only releases the waiters.
     ApproveAll,
+    /// Let this one through and nothing else: no window opens, so the
+    /// next call on the connection asks again.
+    ApproveOnce,
     /// Refuse this, and whatever follows it during the cooldown.
     Deny,
 }
@@ -318,20 +321,33 @@ impl Verdict {
 
     /// Prose for planes that answer in their own protocol (Postgres error
     /// fields, MCP tool errors) rather than the JSON envelope.
+    ///
+    /// These strings are written for agents: name the human action that is
+    /// required and that the upstream was not reached, so a timeout is not
+    /// mistaken for a dead connector.
     pub fn detail(self) -> &'static str {
         match self {
             Verdict::Allowed => "approved",
-            Verdict::Denied => "the user refused this call in Multitool",
-            Verdict::Revoked => {
-                "the connection or its access policy changed while confirmation was waiting"
+            Verdict::Denied => {
+                "the user refused this call in Multitool Desktop; do not retry — ask the user \
+                 before trying again (the upstream was not reached)"
             }
-            Verdict::TimedOut => "the confirmation request was not answered in time",
+            Verdict::Revoked => {
+                "the connection or its access policy changed while confirmation was waiting; \
+                 the upstream was not reached"
+            }
+            Verdict::TimedOut => {
+                "Multitool asked a human to allow this call and nobody answered before the \
+                 deadline; open Multitool Desktop → Request Inbox to approve next time \
+                 (the upstream was not reached)"
+            }
             Verdict::Unavailable => {
                 // An attached app that predates request surfaces is an
                 // observer here, not a surface: name the update path or the
                 // refusal reads as the app being ignored.
-                "traffic confirmation is unavailable; attach Multitool (updating it if one is \
-                 already attached), or retry when capacity is available"
+                "traffic confirmation is on, but no Multitool Desktop approval surface is \
+                 attached to answer; open Multitool Desktop (update it if one is already \
+                 running) or retry when capacity is available (the upstream was not reached)"
             }
         }
     }
@@ -750,6 +766,10 @@ impl Approvals {
                     // The switch is going off; nothing to remember here.
                     state.grants.remove(&key);
                 }
+                ApprovalDecision::ApproveOnce => {
+                    // Only the parked waiters are released. No grant and no
+                    // cooldown: the very next call raises its own prompt.
+                }
                 ApprovalDecision::Deny => {
                     state
                         .cooldowns
@@ -767,6 +787,7 @@ impl Approvals {
         let resolution = match decision {
             ApprovalDecision::ApproveWindow => RequestResolution::ApprovedForWindow,
             ApprovalDecision::ApproveAll => RequestResolution::ApprovedAll,
+            ApprovalDecision::ApproveOnce => RequestResolution::ApprovedOnce,
             ApprovalDecision::Deny => RequestResolution::Denied,
         };
         self.inner.history.resolve(id, resolution);
@@ -1384,6 +1405,27 @@ mod tests {
         let history = approvals.requests();
         assert_eq!(history[0].status, RequestStatus::Approved);
         assert_eq!(history[0].resolution, Some(RequestResolution::ApprovedAll));
+    }
+
+    #[tokio::test]
+    async fn approve_once_answers_only_the_prompted_call() {
+        let (approvals, events, _dir) = auto(ApprovalDecision::ApproveOnce);
+        let conn = connection();
+
+        assert_eq!(approvals.gate(request(&conn)).await, Verdict::Allowed);
+        assert_eq!(approvals.window_remaining(&conn.id), None);
+        let history = approvals.requests();
+        assert_eq!(history[0].status, RequestStatus::Approved);
+        assert_eq!(history[0].resolution, Some(RequestResolution::ApprovedOnce));
+
+        // No window opened and no cooldown started: the next call is its
+        // own question.
+        assert_eq!(approvals.gate(request(&conn)).await, Verdict::Allowed);
+        assert_eq!(
+            events.seen.load(Ordering::SeqCst),
+            2,
+            "each call after an approve-once raises its own prompt"
+        );
     }
 
     #[tokio::test]

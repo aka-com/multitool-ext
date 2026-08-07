@@ -30,11 +30,20 @@ import type {
   OnePasswordVault,
   RequestRecord,
   SecretKind,
+  SecretOrigin,
   SecretSummary,
   SessionSummary,
+  ScreenRegionCapture,
   Settings,
   Unlisten,
 } from './types';
+
+/** Next `capture_screen_region` result. Tests call `setMockScreenCapture`. */
+let mockScreenCapture: ScreenRegionCapture = { status: 'cancelled' };
+
+export function setMockScreenCapture(result: ScreenRegionCapture): void {
+  mockScreenCapture = result;
+}
 
 type MockListener = (event: EventPayload<unknown>) => void;
 const listeners: Record<string, MockListener[]> = {};
@@ -130,6 +139,7 @@ interface MockSecret {
   updated_at: string;
   source?: SecretSummary['source'];
   kind?: SecretKind;
+  origin?: SecretOrigin;
   site?: string | null;
   username?: string | null;
   /** The stored 2FA seed; the DTO only ever says whether one exists. */
@@ -266,6 +276,7 @@ interface MockArgs {
   newSite?: string | null;
   newUsername?: string | null;
   newTotp?: string | null;
+  newOrigin?: SecretOrigin | null;
   method?: 'desktop_app' | 'service_account' | 'connect';
   account?: string | null;
   connectUrl?: string | null;
@@ -328,14 +339,16 @@ const db: MockDatabase = {
     mkSecret('SERVICE_USER', 'svc-agent-ci'),
     mkSecret('SERVICE_PASSWORD', 'basic-pw-demo-8841'),
     mkSecret('DEPLOY_SSH_KEY', '-----BEGIN OPENSSH PRIVATE KEY-----demo'),
-    mkSecret('NOTION_MCP_TOKEN', 'ntn_demo_2f81c4a9b3e7'),
+    // Minted by connection setup (an MCP sign-in and the cloud add forms),
+    // so the desktop list's Connection Secrets group has fixture rows.
+    mkConnectionSecret('NOTION_MCP_TOKEN', 'ntn_demo_2f81c4a9b3e7'),
     // Cloud identity, named the way the add form generates it, so the
     // credential rows read as they will in a real vault.
-    mkSecret('MULTITOOL_AWS_PROD_AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE'),
-    mkSecret('MULTITOOL_AWS_PROD_AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI-demo-secret-key'),
-    mkSecret('MULTITOOL_GCP_PROD_GCP_SERVICE_ACCOUNT_JSON',
+    mkConnectionSecret('MULTITOOL_AWS_PROD_AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE'),
+    mkConnectionSecret('MULTITOOL_AWS_PROD_AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI-demo-secret-key'),
+    mkConnectionSecret('MULTITOOL_GCP_PROD_GCP_SERVICE_ACCOUNT_JSON',
       '{"type":"service_account","project_id":"aka-prod","client_email":"agent@aka-prod.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----demo"}'),
-    mkSecret('MULTITOOL_AZURE_PROD_AZURE_CLIENT_SECRET', 'azure-client-secret-demo'),
+    mkConnectionSecret('MULTITOOL_AZURE_PROD_AZURE_CLIENT_SECRET', 'azure-client-secret-demo'),
   ],
   onepasswordIntegrations: [],
   connections: [],
@@ -360,6 +373,10 @@ const db: MockDatabase = {
 };
 function mkSecret(name: string, value: string, source?: SecretSummary['source']): MockSecret {
   return { id: uid(), name, _value: value, created_at: now(), updated_at: now(), source };
+}
+/** A credential minted by connection setup: lands in Connection Secrets. */
+function mkConnectionSecret(name: string, value: string): MockSecret {
+  return { ...mkSecret(name, value), origin: 'connection' };
 }
 function mkPassword(
   site: string,
@@ -468,6 +485,7 @@ function secretDto(secret: MockSecret): SecretSummary {
     updated_at: secret.updated_at,
     source: secret.source ?? { kind: 'local' },
     kind: secret.kind ?? 'secret',
+    origin: secret.origin ?? 'user',
     site: secret.site ?? null,
     username: secret.username ?? null,
     totp: Boolean(secret._totp),
@@ -1009,15 +1027,24 @@ let mockBroker: import('./types').BrokerProfile = {
 // not snap back to the chooser on the next profile read.
 let mockPicked = false;
 let mockNotificationSettings: NotificationSettings = {
-  mode: 'when_hidden',
-  showContext: false,
+  mode: 'always',
+  showContext: true,
   playSound: true,
   timeSensitive: false,
-  escalationSecs: 30,
+  escalationSecs: 15,
+  presentApprovalsAsModal: true,
+  showApprovalHud: false,
   available: false,
   unavailableReason: 'Development build: native notifications are disabled',
   canOpenSystemSettings: false,
   canRequestPermission: false,
+  system: {
+    alerts: 'unknown',
+    sounds: 'unknown',
+    notificationCenter: 'unknown',
+    timeSensitive: 'unknown',
+    alertStyle: 'unknown',
+  },
 };
 let mockAutostart = false;
 // Outside Tauri there is no LocalAuthentication, so the mock stands in for
@@ -1266,13 +1293,34 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
     case 'get_settings': return { ...db.settings };
     case 'get_notification_settings': return { ...mockNotificationSettings };
     case 'set_notification_settings':
+      if (args.settings.escalationSecs !== 0 && args.settings.escalationSecs !== 15) {
+        throw 'notification escalation must be off or 15 seconds';
+      }
       mockNotificationSettings = {
         ...mockNotificationSettings,
         ...args.settings,
+        mode: 'always',
+        showContext: true,
+        presentApprovalsAsModal: true,
       };
       emit('aka://notification-settings-changed', { ...mockNotificationSettings });
       return { ...mockNotificationSettings };
     case 'open_notification_settings': return;
+    case 'open_focus_settings': return;
+    case 'open_screen_recording_settings': return;
+    case 'capture_screen_region': return mockScreenCapture;
+    case 'preview_request_notification':
+      // Frontend-only mode has no OS banner surface; the real shell does.
+      // Mark unavailable the same way a sticky delivery failure would so
+      // Settings can show the warning on the first attempt.
+      mockNotificationSettings = {
+        ...mockNotificationSettings,
+        available: false,
+        unavailableReason: 'Development build: native notifications are disabled',
+        canRequestPermission: false,
+      };
+      emit('aka://notification-settings-changed', { ...mockNotificationSettings });
+      throw 'Development build: native notifications are disabled';
     case 'request_notification_permission':
       mockNotificationSettings = {
         ...mockNotificationSettings,
@@ -1385,6 +1433,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       if (newSite !== undefined) s.site = newSite;
       if (args.newUsername != null) s.username = args.newUsername.trim() || null;
       if (newTotp !== undefined) s._totp = newTotp || null;
+      if (args.newOrigin != null) s.origin = args.newOrigin;
       s.updated_at = now(); audit('secretUpdated', `Secret updated: ${s.name}`); return;
     }
     case 'delete_secret': {
@@ -1438,7 +1487,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
         if (db.secrets.some((s) => s.name === pending.name)) {
           throw formError('conflict', 'secret_name_taken', 'newSecretName', 'That credential name is already in use');
         }
-        db.secrets.push(mkSecret(pending.name, pending.value));
+        db.secrets.push(mkConnectionSecret(pending.name, pending.value));
       }
       if (i.new_secret_name && (i.new_secret_value || (i.ssh_import_id && i.identity_file))) {
         if (db.secrets.some((s) => s.name === i.new_secret_name)) {
@@ -1458,7 +1507,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
               'that passphrase did not decrypt the private key');
           }
         }
-        const secret = mkSecret(i.new_secret_name, i.new_secret_value || '-----BEGIN OPENSSH PRIVATE KEY-----mock');
+        const secret = mkConnectionSecret(i.new_secret_name, i.new_secret_value || '-----BEGIN OPENSSH PRIVATE KEY-----mock');
         db.secrets.push(secret);
         i.secret_id = secret.id;
       }
@@ -1701,7 +1750,7 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       // Stand in for the whole browser dance.
       await new Promise((resolve) => setTimeout(resolve, 900));
       const secretName = `${input.name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_OAUTH_TOKEN`;
-      db.secrets.push(mkSecret(secretName, 'oauth-token-set-demo'));
+      db.secrets.push(mkConnectionSecret(secretName, 'oauth-token-set-demo'));
       db.connections.push({
         id: `conn-${Math.random().toString(36).slice(2, 8)}`,
         name: input.name,
@@ -2014,7 +2063,9 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
         approval.id,
         args.decision === 'deny' ? 'denied' : 'approved',
         args.decision === 'deny' ? 'denied'
-          : args.decision === 'approve_all' ? 'approved_all' : 'approved_for_window',
+          : args.decision === 'approve_all' ? 'approved_all'
+          : args.decision === 'approve_once' ? 'approved_once'
+          : 'approved_for_window',
       );
       const entry = args.decision === 'deny'
         ? audit('denied', `Refused by the user: ${approval.agent} → ${approval.connection}`,
@@ -2056,8 +2107,11 @@ async function mockInvoke(cmd: CommandName, args: MockArgs): Promise<unknown> {
       emit('aka://settings-changed', {});
       return;
     case 'ui_set_mode': case 'ui_hide_main': case 'ui_hide_dropdown':
-    case 'ui_set_dropdown_form_active': case 'ui_set_request_inbox_visible': return;
-    case 'ui_take_open_requests': return false;
+    case 'ui_set_dropdown_form_active': case 'ui_set_request_inbox_visible':
+    case 'ui_hide_attention_hud': case 'ui_review_attention_hud':
+    case 'ui_quit': case 'ui_open_credential': return;
+    case 'ui_take_open_requests': return { open: false };
+    case 'ui_get_attention_hud': return { count: 2, urgent: false };
     default: throw new Error(`mock: unknown command ${cmd}`);
   }
 }

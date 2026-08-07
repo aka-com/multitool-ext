@@ -30,8 +30,8 @@
       {
         "label": "dropdown",
         "title": "Multitool",
-        "width": 430,
-        "height": 600,
+        "width": 350,
+        "height": 500,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -41,6 +41,22 @@
         "skipTaskbar": true,
         "focus": false,
         "url": "index.html#dropdown"
+      },
+      {
+        "label": "attention",
+        "title": "Multitool request",
+        "width": 360,
+        "height": 126,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "dragDropEnabled": false,
+        "skipTaskbar": true,
+        "focus": false,
+        "shadow": false,
+        "url": "index.html#attention"
       }
     ],
     "trayIcon": {
@@ -66,7 +82,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
     },
     "resources": {
       "icons/icon.png": "icons/icon.png"

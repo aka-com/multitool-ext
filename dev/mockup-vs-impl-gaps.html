@@ -1,0 +1,1151 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multitool — implementation gaps vs the Finder-inspector mockup</title>
+<style>
+/* Tokens copied verbatim from ui/styles.css so both themes preview the real palette. */
+:root{
+  color-scheme: light;
+  --ink:#1d1d1f; --ink-2:#2c2c30; --ink-3:#3c3c42;
+  --muted:#66666f; --muted-2:#6d6d76; --muted-ink:#5a5a63; --faint:#707078;
+  --accent:#0a7cff; --accent-text:#0a7cff; --accent-ink:#0a63d0;
+  --accent-wash:rgba(10,124,255,.08); --accent-wash-2:rgba(10,124,255,.12); --accent-border:rgba(10,124,255,.32);
+  --danger:#ff3b30; --danger-ink:#d70015; --danger-text:#7a1208;
+  --danger-wash:rgba(255,59,48,.08); --danger-border:rgba(255,59,48,.38);
+  --amber-ink:#7a5410; --amber-strong:#b06a00; --amber-wash:rgba(255,190,50,.16); --amber-border:rgba(200,140,20,.3);
+  --ok-ink:#1a8f3c; --ok-solid:#34c759; --ok-wash:rgba(52,199,89,.09); --ok-border:rgba(52,199,89,.28);
+  --brand-hn-bg:rgba(255,102,0,.14); --brand-hn-ink:#c85200;
+  --brand-so-bg:rgba(244,128,36,.14); --brand-so-ink:#b95f07;
+  --kind-mcp-ink:#4a4ec4; --kind-mcp-wash:rgba(88,92,220,.10);
+  --kind-db-ink:#2a6f9e; --kind-db-wash:rgba(50,130,180,.12);
+  --kind-ssh-ink:#0e9b78; --kind-ssh-wash:rgba(47,208,160,.14);
+  --kind-api-ink:#a8541f; --kind-api-wash:rgba(190,100,40,.12);
+  --surface:rgba(246,246,249,.98); --panel:#fbfbfd; --field-bg:#fff; --btn-bg:#fff; --btn-hover:#f2f2f5;
+  --card-bg:rgba(255,255,255,.72); --chip-bg:rgba(0,0,0,.06); --chip-ink:#4c4c53;
+  --hover:rgba(0,0,0,.06); --wash:rgba(0,0,0,.025); --wash-2:rgba(0,0,0,.04);
+  --seg-bg:rgba(0,0,0,.065); --seg-on-bg:#fff; --seg-on-ink:#111;
+  --backdrop:rgba(20,20,30,.28); --switch-off:rgba(0,0,0,.22);
+  --line:rgba(0,0,0,.08); --line-soft:rgba(0,0,0,.06); --line-mid:rgba(0,0,0,.10);
+  --line-strong:rgba(0,0,0,.14); --line-field:rgba(0,0,0,.16);
+  --shadow-sm:0 1px 3px rgba(15,20,45,.05);
+  --shadow-menu:0 10px 28px rgba(15,20,45,.12);
+  --shadow-sheet:0 14px 34px rgba(15,20,45,.16);
+  --shadow-float:0 16px 40px rgba(15,20,45,.14),0 2px 10px rgba(15,20,45,.08);
+  --shadow-toast:0 8px 22px rgba(15,20,45,.18);
+  --desktop:linear-gradient(135deg,#c8d4e8,#dcd4e4 55%,#e8d8cc);
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ink:#ececf0; --ink-2:#d8d8de; --ink-3:#c9c9d2;
+  --muted:#9a9aa4; --muted-2:#8e8e96; --muted-ink:#a8a8b0; --faint:#8b8b95;
+  --accent-text:#58a6ff; --accent-ink:#7db8ff;
+  --accent-wash:rgba(88,166,255,.12); --accent-wash-2:rgba(88,166,255,.18); --accent-border:rgba(88,166,255,.32);
+  --danger-ink:#ff6b61; --danger-text:#ffb3ab;
+  --danger-wash:rgba(255,90,80,.14); --danger-border:rgba(255,110,100,.48);
+  --amber-ink:#e9bb63; --amber-strong:#ffb04d; --amber-wash:rgba(255,190,50,.13); --amber-border:rgba(255,190,80,.32);
+  --ok-ink:#4cd07d; --ok-solid:#30d158; --ok-wash:rgba(76,208,125,.10); --ok-border:rgba(76,208,125,.30);
+  --brand-hn-bg:rgba(255,102,0,.20); --brand-hn-ink:#ff8a3d;
+  --brand-so-bg:rgba(244,128,36,.18); --brand-so-ink:#f9a05c;
+  --kind-mcp-ink:#a3a6ff; --kind-mcp-wash:rgba(88,92,220,.20);
+  --kind-db-ink:#8ec4e8; --kind-db-wash:rgba(50,130,180,.18);
+  --kind-ssh-ink:#4fe0b8; --kind-ssh-wash:rgba(47,208,160,.16);
+  --kind-api-ink:#e8a077; --kind-api-wash:rgba(190,100,40,.18);
+  --surface:rgba(16,16,20,.98); --panel:#1b1b20; --field-bg:#131317; --btn-bg:#26262d; --btn-hover:#30303a;
+  --card-bg:rgba(255,255,255,.045); --chip-bg:rgba(255,255,255,.08); --chip-ink:#c9c9d2;
+  --hover:rgba(255,255,255,.07); --wash:rgba(255,255,255,.03); --wash-2:rgba(255,255,255,.05);
+  --seg-bg:rgba(255,255,255,.09); --seg-on-bg:#3d3d46; --seg-on-ink:#fff;
+  --backdrop:rgba(0,0,0,.55); --switch-off:rgba(255,255,255,.26);
+  --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.07); --line-mid:rgba(255,255,255,.12);
+  --line-strong:rgba(255,255,255,.16); --line-field:rgba(255,255,255,.18);
+  --shadow-sm:0 1px 3px rgba(0,0,0,.32);
+  --shadow-menu:0 10px 28px rgba(0,0,0,.48);
+  --shadow-sheet:0 14px 34px rgba(0,0,0,.55);
+  --shadow-float:0 16px 40px rgba(0,0,0,.55),0 2px 10px rgba(0,0,0,.35);
+  --shadow-toast:0 8px 22px rgba(0,0,0,.55);
+  --desktop:linear-gradient(135deg,#2a3040,#3a3448 55%,#443a38);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:.9375rem;color:var(--ink);background:var(--desktop);
+  -webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;align-items:center;gap:18px;padding:28px 20px 60px;
+}
+button{font-family:inherit;color:inherit}
+code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:calc(1em - .0625rem)}
+
+.top-note{
+  max-width:1120px;width:100%;font-size:.8125rem;color:var(--ink-2);
+  background:var(--panel);border:1px solid var(--line-mid);border-radius:10px;
+  padding:12px 16px;box-shadow:var(--shadow-sm);line-height:1.6;
+}
+.top-note b{font-weight:650}
+.legend{display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap;font-size:.75rem;color:var(--muted)}
+.lg-miss,.lg-diff{display:inline-flex;align-items:center;gap:6px}
+.lg-miss i{width:14px;height:14px;border-radius:4px;border:2px dashed var(--amber-strong)}
+.lg-diff i{width:14px;height:14px;border-radius:4px;border:2px dashed var(--accent-text)}
+.hl-toggle{display:inline-flex;align-items:center;gap:6px;margin-left:auto;font-size:.75rem;font-weight:600;color:var(--ink-2);cursor:default}
+
+.theme-flip{
+  position:fixed;right:18px;bottom:16px;z-index:99;
+  border:1px solid var(--line-mid);background:var(--panel);color:var(--ink-2);
+  border-radius:999px;padding:7px 14px;font-size:.78125rem;font-weight:600;box-shadow:var(--shadow-menu);cursor:default;
+}
+
+/* ---- gap sections ---- */
+.gap{width:min(1120px,100%);background:var(--surface);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-float);overflow:hidden}
+.gap-head{padding:14px 18px 12px;border-bottom:1px solid var(--line)}
+.gap-head h2{font-size:.9375rem;letter-spacing:-.01em}
+.gap-head h2 em{font-style:normal;color:var(--muted);font-weight:600;font-size:.8125rem;margin-right:8px}
+.gap-head p{font-size:.78125rem;color:var(--muted);margin-top:3px;line-height:1.5;max-width:72ch}
+.gap-head p code{color:var(--ink-2)}
+.cmp{display:grid;grid-template-columns:1fr 1fr}
+@media (max-width:880px){.cmp{grid-template-columns:1fr}}
+.side{padding:14px 18px 18px;min-width:0}
+.side + .side{border-left:1px solid var(--line)}
+@media (max-width:880px){.side + .side{border-left:0;border-top:1px solid var(--line)}}
+.side-tag{display:inline-flex;align-items:center;gap:6px;font-size:.6875rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:12px;padding:3px 9px;border-radius:999px}
+.side-tag.impl{background:var(--chip-bg);color:var(--chip-ink)}
+.side-tag.mock{background:var(--accent-wash-2);color:var(--accent-ink)}
+.stage{position:relative}
+
+/* highlight machinery */
+body.hl .miss{outline:2px dashed var(--amber-strong);outline-offset:2px;border-radius:6px}
+body.hl .diff{outline:2px dashed var(--accent-text);outline-offset:2px;border-radius:6px}
+
+/* ---- shared component recipes (lifted from the design mockup / app) ---- */
+.mini-window{background:var(--panel);border:1px solid var(--line-mid);border-radius:10px;overflow:hidden;box-shadow:var(--shadow-sm)}
+.mini-toolbar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--wash)}
+.lights{display:flex;gap:6px;margin-right:4px}
+.lights i{width:10px;height:10px;border-radius:50%}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.tb-flex{flex:1}
+.tb-btn{
+  height:26px;min-width:30px;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:0 8px;border:none;border-radius:7px;background:transparent;color:var(--muted-2);cursor:default;
+  font-size:.78125rem;font-weight:500;position:relative;
+}
+.tb-btn:hover{background:var(--hover);color:var(--ink-2)}
+.tb-btn.on{background:var(--accent-wash-2);color:var(--accent-ink)}
+.tb-btn svg{width:15px;height:15px}
+.tb-pill{
+  display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;
+  font-size:.78125rem;font-weight:500;color:var(--ink-2);
+  background:transparent;border:1px solid var(--line);border-radius:8px;cursor:default;
+}
+.tb-pill:hover{background:var(--hover)}
+.dot{width:7px;height:7px;border-radius:50%;background:#30c94e;box-shadow:0 0 4px rgba(48,201,78,.7);flex:none}
+.dot.pending{background:#f5a623;box-shadow:0 0 4px rgba(245,166,35,.6)}
+.caret{color:var(--muted-2);display:inline-flex}
+.gear-badge{position:absolute;right:1px;top:1px;width:8px;height:8px;border-radius:50%;background:var(--amber-strong);border:2px solid var(--panel)}
+
+.menu{
+  position:absolute;z-index:40;min-width:214px;padding:4px;display:none;flex-direction:column;gap:1px;
+  background:var(--panel);border:1px solid var(--line-mid);border-radius:9px;box-shadow:var(--shadow-menu);
+}
+.menu.open{display:flex}
+.menu-item{
+  display:flex;align-items:center;gap:8px;border:none;background:transparent;cursor:default;
+  text-align:left;padding:6px 9px;border-radius:6px;font-size:.84375rem;color:var(--ink-2);white-space:nowrap;
+}
+.menu-item:hover{background:var(--hover)}
+.menu-item .glyph{flex:0 0 16px;text-align:center;color:var(--muted-2);display:inline-flex;justify-content:center}
+.menu-item .glyph svg{width:13px;height:13px}
+.menu-item .mi-check{flex:0 0 13px;color:var(--accent-text);font-size:.8rem}
+.menu-rule{margin:3px 5px;border-top:1px solid var(--line)}
+.menu-caption{padding:4px 9px 3px;font-size:.71875rem;color:var(--muted);user-select:none}
+.menu-sub{margin-left:auto;color:var(--muted);font-size:.75rem;padding-left:18px}
+.menu-badge{margin-left:auto;background:var(--amber-wash);color:var(--amber-strong);border:1px solid var(--amber-border);border-radius:999px;font-size:.6875rem;font-weight:700;padding:1px 7px}
+.menu-seg-row{display:flex;align-items:center;gap:8px;padding:6px 9px}
+.menu-seg-row label{font-size:.84375rem;color:var(--ink-2);flex:1}
+.mseg{display:flex;gap:2px;background:var(--seg-bg);border-radius:7px;padding:2px}
+.mseg button{border:none;background:transparent;border-radius:5px;padding:3px 9px;font-size:.75rem;color:var(--ink-3);cursor:default}
+.mseg button.on{background:var(--seg-on-bg);box-shadow:var(--shadow-sm);font-weight:600;color:var(--seg-on-ink)}
+
+.g-head{padding:12px 0 6px;font-size:.8125rem;font-weight:650;color:var(--muted)}
+.g-head:first-child{padding-top:0}
+.g-box{background:var(--card-bg);border:1px solid var(--line-soft);border-radius:10px;box-shadow:var(--shadow-sm);overflow:hidden}
+.g-row{
+  width:100%;display:flex;align-items:center;gap:11px;padding:9px 13px;
+  border:0;background:transparent;text-align:left;font:inherit;cursor:default;color:var(--ink);
+}
+.g-row + .g-row{border-top:1px solid var(--line-soft)}
+.g-row:hover{background:var(--hover)}
+.g-row.dimmed .g-ico,.g-row.dimmed .g-body{opacity:.45}
+.g-ico{flex:0 0 28px;width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:.8125rem}
+.g-ico svg{width:15px;height:15px}
+.g-body{flex:1;min-width:0}
+.g-name{font-weight:600;font-size:.84375rem;display:block}
+.g-sub{font-size:.71875rem;color:var(--muted);margin-top:2px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:.71875rem;font-weight:600;background:var(--ok-wash);border:1px solid var(--ok-border);color:var(--ok-ink);flex:none}
+.pill i{width:6px;height:6px;border-radius:50%;background:var(--ok-solid)}
+.pill.off{background:var(--chip-bg);border-color:var(--line-mid);color:var(--muted)}
+.pill.off i{background:var(--muted-2);box-shadow:none}
+.chip{flex:none;padding:2px 8px;border-radius:9px;font-size:.71875rem;font-weight:600;background:var(--chip-bg);color:var(--chip-ink)}
+.val{font-size:.75rem;color:var(--ink-3);letter-spacing:.08em;flex:none}
+.value{font-size:.78125rem;color:var(--ink-2);overflow-wrap:anywhere;display:block;margin-top:2px}
+.soon{padding:2px 8px;border-radius:9px;font-size:.6875rem;font-weight:650;background:var(--chip-bg);color:var(--muted);flex:none}
+
+.form-row{display:flex;align-items:center;gap:10px;padding:9px 12px}
+.form-row + .form-row{border-top:1px solid var(--line-soft)}
+.form-row .tx{flex:1;min-width:0}
+.form-row .tx b{font-size:.8125rem;font-weight:600;display:block}
+.form-row .tx p{font-size:.71875rem;color:var(--muted);margin-top:2px;line-height:1.45}
+.mini-btn{
+  display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;flex:none;
+  background:var(--btn-bg);border:1px solid var(--line-mid);border-radius:7px;
+  font-size:.71875rem;font-weight:600;color:var(--ink-2);cursor:default;
+}
+.mini-btn:hover{background:var(--btn-hover)}
+.mini-btn svg{width:12px;height:12px;flex:none}
+.mini-btn.ok{color:var(--ok-ink);border-color:var(--ok-border)}
+.icon-mini{width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:none;background:transparent;border-radius:6px;color:var(--muted-2);flex:none;cursor:default}
+.icon-mini:hover{background:var(--hover);color:var(--ink-2)}
+.icon-mini svg{width:14px;height:14px}
+/* remote-fetch spinner: lives inside the same 24×24 .icon-mini box as the eye
+   icon it temporarily replaces, so the button never changes size. */
+.icon-mini .spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line-strong);border-top-color:var(--accent-text);animation:spin .7s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.switch{width:36px;height:22px;border-radius:999px;background:var(--ok-solid);position:relative;flex:none;transition:background .15s ease;border:0;cursor:default}
+.switch.off{background:var(--switch-off)}
+.switch i{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.switch.off i{right:auto;left:2px}
+.kv{display:grid;grid-template-columns:86px 1fr;gap:5px 10px;font-size:.71875rem;padding:10px 12px}
+.kv dt{color:var(--muted)}
+.kv dd{min-width:0;overflow-wrap:anywhere;color:var(--ink-2)}
+.d-head{display:flex;align-items:center;gap:12px;padding-bottom:12px}
+.d-head .g-ico{flex-basis:36px;width:36px;height:36px;border-radius:9px}
+.d-head .tx{flex:1;min-width:0}
+.d-head .tx b{display:block;font-size:.9375rem;letter-spacing:-.01em}
+.d-head .tx span{font-size:.75rem;color:var(--muted)}
+.totp-code{font-size:.9375rem;letter-spacing:.14em;font-variant-numeric:tabular-nums}
+.totp-bar{height:3px;border-radius:2px;background:var(--chip-bg);overflow:hidden;margin-top:6px}
+.totp-bar i{display:block;height:100%;background:var(--accent);width:60%;transition:width 1s linear}
+.totp-countdown{font-size:.71875rem;color:var(--muted);font-variant-numeric:tabular-nums;flex:none}
+
+/* banner */
+.banner{
+  width:100%;display:flex;align-items:center;gap:10px;
+  padding:8px 14px;border:0;border-radius:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:var(--amber-wash);cursor:default;text-align:left;font:inherit;color:var(--ink);
+}
+.banner .b-ico{color:var(--amber-strong);display:inline-flex;flex:none}
+.banner .b-ico svg{width:16px;height:16px}
+.banner .b-tx{flex:1;min-width:0}
+.banner .b-tx b{font-size:.84375rem;font-weight:650;display:block}
+.banner .b-tx span{font-size:.71875rem;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.banner .b-cta{color:var(--accent-text);font-size:.75rem;font-weight:650;flex:none}
+
+/* approval dialog cards */
+.alert-card{background:var(--panel);border:1px solid var(--line-mid);border-radius:13px;box-shadow:var(--shadow-sheet);padding:18px 20px 16px;text-align:center}
+.alert-ico{
+  display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:8px;
+  border-radius:11px;color:var(--amber-strong);background:var(--amber-wash);border:1px solid var(--amber-border);
+}
+.alert-ico svg{width:20px;height:20px}
+.alert-card h3{font-size:.9375rem;margin-bottom:2px}
+.alert-card .lead{font-size:.78125rem;color:var(--muted);line-height:1.5}
+.facts{
+  display:grid;grid-template-columns:92px minmax(0,1fr);gap:7px 14px;
+  margin:12px auto 0;padding:11px 13px;text-align:left;
+  background:var(--field-bg);border:1px solid var(--line-field);border-radius:9px;
+  font-size:.8125rem;line-height:1.4;
+}
+.facts dt{color:var(--muted)}
+.facts dd{min-width:0;overflow-wrap:anywhere;color:var(--ink);font-weight:500}
+.consequence{
+  display:flex;align-items:flex-start;gap:8px;margin:10px auto 0;padding:8px 11px;text-align:left;
+  border-radius:8px;font-size:.75rem;line-height:1.5;color:var(--ink-2);
+  background:var(--amber-wash);border:1px solid var(--amber-border);
+}
+.consequence svg{flex:none;width:14px;height:14px;margin-top:2px;color:var(--amber-strong)}
+.raw-toggle{
+  display:inline-flex;align-items:center;gap:5px;margin-top:10px;
+  border:none;background:transparent;cursor:default;
+  font-size:.75rem;font-weight:600;color:var(--muted);
+}
+.raw-toggle:hover{color:var(--ink-2)}
+.raw-block{
+  display:none;margin:8px auto 0;padding:9px 11px;text-align:left;
+  background:var(--field-bg);border:1px solid var(--line);border-radius:8px;
+  font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.6875rem;color:var(--muted);
+  line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;
+}
+.raw-block.show{display:block}
+.sheet-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.btn{
+  display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;
+  border:1px solid var(--line-mid);border-radius:8px;background:var(--btn-bg);
+  font-size:.8125rem;font-weight:600;color:var(--ink-2);cursor:default;
+}
+.btn:hover{background:var(--btn-hover)}
+.btn.primary{background:var(--accent);border-color:transparent;color:#fff}
+.btn.primary:hover{filter:brightness(.96)}
+.btn.danger-btn{color:var(--danger-ink)}
+.spacer{flex:1}
+
+/* mini inspector split for gap 1 */
+.split{display:flex;min-height:180px}
+.split .list-col{flex:1;padding:10px 12px;min-width:0}
+.split .insp-col{flex:0 0 44%;border-left:1px solid var(--line);background:var(--wash);padding:12px}
+.insp-empty{height:100%;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;color:var(--muted);font-size:.75rem;text-align:center;padding:14px}
+.insp-empty svg{width:22px;height:22px;opacity:.5}
+
+/* activity mini-log */
+.act-box{margin-top:10px}
+.act-row{display:flex;align-items:baseline;gap:10px;padding:6px 2px;font-size:.78125rem}
+.act-row + .act-row{border-top:1px solid var(--line-soft)}
+.act-when{flex:0 0 56px;color:var(--muted);font-size:.71875rem;font-variant-numeric:tabular-nums}
+.act-txt{flex:1;color:var(--ink-2);min-width:0}
+.act-empty{padding:10px 2px;font-size:.75rem;color:var(--muted);font-style:italic}
+
+.footnote{width:min(1120px,100%);font-size:.78125rem;color:var(--muted);line-height:1.6;background:var(--panel);border:1px solid var(--line-mid);border-radius:10px;padding:12px 16px}
+.footnote b{color:var(--ink-2)}
+
+.toast{
+  position:fixed;left:50%;bottom:56px;transform:translateX(-50%);z-index:95;
+  background:var(--panel);border:1px solid var(--line-mid);border-radius:9px;box-shadow:var(--shadow-toast);
+  padding:8px 14px;font-size:.78125rem;font-weight:600;color:var(--ink-2);display:none;
+}
+.toast.show{display:block}
+</style>
+</head>
+<body class="hl">
+
+<div class="top-note">
+  <b>Implementation gaps — the shipped desktop window vs the Finder-inspector mockup.</b>
+  Each card below shows one difference, implemented behavior on the left and the mockup's design on the right,
+  both interactive. Amber dashes mark things the implementation is <b>missing</b>; blue dashes mark things it
+  does <b>differently</b>. Everything is built from the real <code>ui/styles.css</code> tokens.
+  <div class="legend">
+    <span class="lg-miss"><i></i> missing from implementation</span>
+    <span class="lg-diff"><i></i> implemented differently</span>
+    <label class="hl-toggle"><input type="checkbox" id="hlToggle" checked> Highlight</label>
+  </div>
+</div>
+
+<!-- ============ 1. inspector toggle ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 1</em>No inspector show/hide toggle</h2>
+    <p>The mockup's toolbar ⓘ button collapses the inspector to give the list full width. The implementation
+       (<code>app.tsx:4981</code>) has no toggle — the pane is always present, showing a placeholder when nothing is selected.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="stage">
+        <div class="mini-window">
+          <div class="mini-toolbar"><div class="lights"><i></i><i></i><i></i></div><div class="tb-flex"></div>
+            <span class="diff" style="font-size:.71875rem;color:var(--muted);padding:2px 6px">no ⓘ control</span>
+          </div>
+          <div class="split">
+            <div class="list-col">
+              <div class="g-box">
+                <button class="g-row" data-selrow="i"><span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">G</span>
+                  <span class="g-body"><span class="g-name">github</span><span class="g-sub">https://api.github.com</span></span>
+                  <span class="pill"><i></i>Connected</span></button>
+              </div>
+            </div>
+            <div class="insp-col diff" id="implInsp">
+              <div class="insp-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/></svg>
+                <b style="color:var(--ink-2)">No tool selected</b>
+                <span>Pick a tool to see how agents reach it.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:.71875rem;color:var(--muted);margin-top:8px">Pane is permanent; it only becomes a slide-over when the window is narrow.</p>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="stage">
+        <div class="mini-window">
+          <div class="mini-toolbar"><div class="lights"><i></i><i></i><i></i></div><div class="tb-flex"></div>
+            <button class="tb-btn on miss" id="mockInfoBtn" title="Show inspector"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button>
+          </div>
+          <div class="split">
+            <div class="list-col">
+              <div class="g-box">
+                <button class="g-row sel" style="background:var(--accent-wash-2)"><span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">G</span>
+                  <span class="g-body"><span class="g-name">github</span><span class="g-sub">https://api.github.com</span></span>
+                  <span class="pill"><i></i>Connected</span></button>
+              </div>
+            </div>
+            <div class="insp-col" id="mockInsp">
+              <div class="d-head" style="padding-bottom:6px">
+                <span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">G</span>
+                <div class="tx"><b>github</b><span>HTTP API · Connected</span></div>
+              </div>
+              <dl class="kv" style="padding:6px 0 0"><dt>Host</dt><dd>api.github.com</dd><dt>Last used</dt><dd>4m ago</dd></dl>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:.71875rem;color:var(--muted);margin-top:8px">Click ⓘ to show/hide the inspector.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. add menu ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 2</em>＋ menu has no "Cloud identity…" shortcut</h2>
+    <p>Cloud identities are only reachable by digging through the Add-tool catalog (<code>app.tsx:6243</code>);
+       the proposal gives them a first-class entry right under "Add tool…". Click each ＋ to compare.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="stage" style="min-height:190px">
+        <button class="tb-pill" data-menufor="implAdd">＋ Add <span class="caret">▾</span></button>
+        <div class="menu" id="implAdd" style="top:36px;left:0">
+          <button class="menu-item"><span class="glyph">🔒︎</span> Add password</button>
+          <button class="menu-item"><span class="glyph">⚿</span> Add secret</button>
+          <div class="menu-rule"></div>
+          <button class="menu-item"><span class="glyph">⛭</span> Add tool</button>
+        </div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="stage" style="min-height:190px">
+        <button class="tb-pill" data-menufor="mockAdd">＋ Add <span class="caret">▾</span></button>
+        <div class="menu" id="mockAdd" style="top:36px;left:0">
+          <button class="menu-item"><span class="glyph">🔒︎</span> Add password…</button>
+          <button class="menu-item"><span class="glyph">⚿</span> Add secret…</button>
+          <div class="menu-rule"></div>
+          <button class="menu-item"><span class="glyph">⛭</span> Add tool…</button>
+          <button class="menu-item miss"><span class="glyph">☁︎</span> Add cloud identity…</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. gear menu ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 3</em>Gear menu: no broker identity, no ⌘, hint</h2>
+    <p>The implemented caption is plain <code>Version 0.2.0</code> (<code>app.tsx:4863</code>). The proposal appends the broker's
+       identity — <code>(Broker 0.2.0)</code> — while connected to a remote broker, so app↔broker version skew is visible
+       exactly when it can happen. Settings also loses its ⌘, shortcut hint. Click each gear; flip Local/Hosted on the right.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="stage" style="min-height:280px">
+        <button class="tb-btn" data-menufor="implGear" style="border:1px solid var(--line)">⚙<span class="gear-badge"></span></button>
+        <div class="menu" id="implGear" style="top:34px;left:0">
+          <div class="menu-caption diff">Version 0.2.0</div>
+          <button class="menu-item"><span class="glyph">▤</span> Inventory</button>
+          <button class="menu-item"><span class="glyph">◷</span> Activity Log <span class="menu-badge">5</span></button>
+          <button class="menu-item"><span class="glyph">⚡︎</span> Connect agents</button>
+          <div class="menu-rule"></div>
+          <button class="menu-item"><span class="glyph">↺</span> Recheck all tools</button>
+          <button class="menu-item"><span class="glyph">▾</span> Minimize to menu bar</button>
+          <div class="menu-rule"></div>
+          <button class="menu-item diff"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> Settings</button>
+        </div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="stage" style="min-height:280px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <button class="tb-btn" data-menufor="mockGear" style="border:1px solid var(--line)">⚙<span class="gear-badge"></span></button>
+          <div class="mseg" id="mockBrokerSeg">
+            <button data-b="local">Local</button>
+            <button data-b="hosted" class="on">Hosted</button>
+          </div>
+        </div>
+        <div class="menu" id="mockGear" style="top:34px;left:0">
+          <div class="menu-caption">Version 0.2.0 <span class="miss" id="mockBrokerVer">(Broker 0.2.0)</span></div>
+          <button class="menu-item"><span class="glyph">◷</span> Activity Log</button>
+          <button class="menu-item"><span class="glyph">⚡︎</span> Connect Agents…</button>
+          <div class="menu-rule"></div>
+          <div class="menu-seg-row"><label>Appearance</label>
+            <div class="mseg" id="mockSeg">
+              <button data-mode="light">Light</button>
+              <button data-mode="dark" class="on">Dark</button>
+            </div></div>
+          <div class="menu-rule"></div>
+          <button class="menu-item"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> Settings… <span class="menu-sub miss">⌘,</span></button>
+        </div>
+        <p style="font-size:.71875rem;color:var(--muted);margin-top:44px">The Local/Hosted segment simulates the broker connection: the <b>(Broker 0.2.0)</b> identity appears only while a remote broker is connected. The Appearance segment works — it themes this page. (Appearance living in Settings is deliberate in the app; not counted as a gap.)</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. off dimming ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 4</em>Disabled tools aren't dimmed in the list</h2>
+    <p>The implementation only swaps the trailing pill to "Off" (<code>app.tsx:3409</code>). Proposal: when agent access is off,
+       put an <code>off</code> class on the row wrap and fade the icon and text to 45% — the pill keeps full contrast so the state
+       stays legible, but a mixed list sorts itself at a glance. One class on <code>FlatConnectionRow</code> plus one CSS rule.
+       Flip the switches.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="g-box">
+        <div class="g-row">
+          <span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">G</span>
+          <span class="g-body"><span class="g-name">github</span><span class="g-sub">https://api.github.com</span></span>
+          <span class="pill"><i></i>Connected</span>
+        </div>
+        <div class="g-row diff" id="implOffRow">
+          <span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+          <span class="g-body"><span class="g-name">internal-api</span><span class="g-sub">https://internal.aka.com</span></span>
+          <span class="pill" id="implOffPill"><i></i>Connected</span>
+          <button class="switch" id="implOffSw" role="switch" aria-checked="true"><i></i></button>
+        </div>
+        <div class="g-row">
+          <span class="g-ico" style="background:var(--kind-ssh-wash);color:var(--kind-ssh-ink)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 17 6-5-6-5"/><path d="M12 19h8"/></svg></span>
+          <span class="g-body"><span class="g-name">prod-ssh</span><span class="g-sub">deploy@prod.example.com</span></span>
+          <span class="pill off"><i></i>Off</span>
+        </div>
+      </div>
+      <p style="font-size:.71875rem;color:var(--muted);margin-top:8px">Only the pill changes — off rows keep full contrast, so the list doesn't sort itself.</p>
+    </div>
+    <div class="side"><span class="side-tag mock">Proposal</span>
+      <div class="g-box">
+        <div class="g-row">
+          <span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">G</span>
+          <span class="g-body"><span class="g-name">github</span><span class="g-sub">https://api.github.com</span></span>
+          <span class="pill"><i></i>Connected</span>
+        </div>
+        <div class="g-row" id="mockOffRow">
+          <span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg></span>
+          <span class="g-body"><span class="g-name">internal-api</span><span class="g-sub">https://internal.aka.com</span></span>
+          <span class="pill" id="mockOffPill"><i></i>Connected</span>
+          <button class="switch" id="mockOffSw" role="switch" aria-checked="true"><i></i></button>
+        </div>
+        <div class="g-row dimmed miss">
+          <span class="g-ico" style="background:var(--kind-ssh-wash);color:var(--kind-ssh-ink)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 17 6-5-6-5"/><path d="M12 19h8"/></svg></span>
+          <span class="g-body"><span class="g-name">prod-ssh</span><span class="g-sub">deploy@prod.example.com</span></span>
+          <span class="pill off"><i></i>Off</span>
+        </div>
+      </div>
+      <p style="font-size:.71875rem;color:var(--muted);margin-top:8px">Pill changes <b>and</b> icon + text fade to 45%; the pill stays full-contrast. Connected rows pop, off rows recede.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. secret rows ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 5</em>Secret rows: monogram chips, no masked value</h2>
+    <p>Implemented credential rows use a plain monogram initial and no trailing value (<code>app.tsx:1467</code>);
+       the mockup uses per-kind tinted icons and a quiet <code>••••••••</code> so secrets read as values, not documents.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="g-head">Your Secrets</div>
+      <div class="g-box">
+        <div class="g-row"><span class="g-ico diff" style="background:var(--chip-bg);color:var(--muted-2)">G</span>
+          <span class="g-body"><span class="g-name">GITHUB_API_KEY</span><span class="g-sub">Used by github</span></span></div>
+        <div class="g-row"><span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">D</span>
+          <span class="g-body"><span class="g-name">DEPLOY_SSH_KEY</span><span class="g-sub">Used by prod-ssh</span></span></div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="g-head">Secrets</div>
+      <div class="g-box">
+        <div class="g-row"><span class="g-ico" style="background:var(--kind-api-wash);color:var(--kind-api-ink)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg></span>
+          <span class="g-body"><span class="g-name">GITHUB_API_KEY</span><span class="g-sub">Used by github</span></span>
+          <span class="val miss">••••••••</span></div>
+        <div class="g-row"><span class="g-ico" style="background:var(--kind-ssh-wash);color:var(--kind-ssh-ink)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 17 6-5-6-5"/><path d="M12 19h8"/></svg></span>
+          <span class="g-body"><span class="g-name">DEPLOY_SSH_KEY</span><span class="g-sub">Used by prod-ssh</span></span>
+          <span class="val miss">••••••••</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. approval dialog ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gaps 6–9</em>Approval dialog: no Scope fact, generic subtitle, no Approve Once</h2>
+    <p>Implemented facts stop at Agent / Tool / Wants to / Credentials / Requested (<code>app.tsx:5898</code>); expiry only leaks
+       through the button label, and the subtitle is a generic template ("…use AWS for this session"). Proposal: when the broker
+       supplies a detailed consequence (<code>app.tsx:5939</code>), use it <b>as the subtitle</b> — "Approving lets this agent act as
+       the deploy role in your AWS account until the session expires." — falling back to the generic sentence only when it doesn't.
+       Verdicts also gain a single-request Approve Once. Both dialogs are live: try the raw-request disclosure and the buttons.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="alert-card">
+        <div class="alert-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></div>
+        <h3>Allow “claude-code” to use aws-prod?</h3>
+        <p class="lead diff" style="display:inline-block">Approving lets this agent use AWS for this session.</p>
+        <dl class="facts">
+          <dt>Agent</dt><dd>claude-code</dd>
+          <dt>Tool</dt><dd>aws-prod</dd>
+          <dt>Wants to</dt><dd>Sign in as the “deploy” role</dd>
+          <dt>Credentials</dt><dd>AWS_ACCESS_KEY_ID +1</dd>
+          <dt>Requested</dt><dd>2m ago</dd>
+        </dl>
+        <p style="font-size:.6875rem;color:var(--muted);margin-top:8px;font-style:italic">— the detailed consequence renders only as a separate box, and only when the broker sends one —</p>
+        <button class="raw-toggle" data-rawfor="implRaw"><span>▸</span>&nbsp;Show raw request</button>
+        <div class="raw-block" id="implRaw">sts:AssumeRole
+{"RoleArn": "arn:aws:iam::4821…:role/deploy", "DurationSeconds": 900}</div>
+        <div class="sheet-actions">
+          <button class="btn danger-btn" data-toastmsg="🚫 Refused">Deny</button>
+          <span class="spacer"></span>
+          <button class="btn diff" data-toastmsg="Approved until turned off">Stop asking</button>
+          <button class="btn primary diff" data-toastmsg="✅ Approved for 15m">Approve 15m</button>
+        </div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="alert-card">
+        <div class="alert-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></div>
+        <h3>Allow “Claude Code” to use AWS?</h3>
+        <p class="lead miss" style="display:inline-block">Approving lets this agent act as the deploy role in your AWS account until the session expires.</p>
+        <dl class="facts">
+          <dt>Agent</dt><dd>Claude Code</dd>
+          <dt>Tool</dt><dd>AWS</dd>
+          <dt>Wants to</dt><dd>Sign in as the “deploy” role</dd>
+          <dt class="miss">Scope</dt><dd class="miss">us-east-1, expires after 15 minutes</dd>
+          <dt>Requested</dt><dd>2 minutes ago</dd>
+        </dl>
+        <button class="raw-toggle" data-rawfor="mockRaw"><span>▸</span>&nbsp;Show raw request</button>
+        <div class="raw-block" id="mockRaw">sts:AssumeRole
+{"RoleArn": "arn:aws:iam::4821…:role/deploy", "DurationSeconds": 900}</div>
+        <div class="sheet-actions">
+          <button class="btn danger-btn" data-toastmsg="Request denied">Deny</button>
+          <button class="btn" data-toastmsg="Approved until turned off">Stop asking</button>
+          <span class="spacer"></span>
+          <button class="btn miss" data-toastmsg="Approved once">Approve Once</button>
+          <button class="btn primary" data-toastmsg="Approved for 15 minutes">Approve for 15 minutes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. password inspector ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 10</em>Password inspector: no "Open site ↗", bare agent-access toggle</h2>
+    <p>No way to jump to the site from a password (<code>app.tsx:1583</code>), and the agent-access switch ships without the
+       one line that explains the security model (<code>app.tsx:1658</code>). Also proposed on the right: this password is stored
+       remotely, so Reveal swaps the eye for an in-place spinner while the broker fetches the value — the 24px button box never
+       changes size, so nothing in the row shifts.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="d-head">
+        <span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">G</span>
+        <div class="tx"><b>google.com</b><span>Password</span></div>
+      </div>
+      <div class="g-head" style="padding-top:0">Sign-in</div>
+      <div class="g-box">
+        <div class="form-row"><div class="tx"><b>User name</b><span class="value">social@aka.com</span></div>
+          <button class="mini-btn" data-copybtn>⧉</button></div>
+        <div class="form-row"><div class="tx"><b>Password</b><span class="value" data-pw="impl" data-secret="demo-pw-google">••••••••</span></div>
+          <button class="icon-mini" data-eyefor="impl" title="Reveal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button class="mini-btn" data-copybtn>⧉</button></div>
+      </div>
+      <div class="g-head">Agent access</div>
+      <div class="g-box"><div class="form-row diff">
+        <div class="tx"><b>Allow agents to sign in with this</b></div>
+        <button class="switch off" data-sw><i></i></button>
+      </div></div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="d-head">
+        <span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+        <div class="tx"><b>google.com</b><span>Password</span></div>
+        <button class="mini-btn miss" data-toastmsg="Would open google.com">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>
+          Open site</button>
+      </div>
+      <div class="g-head" style="padding-top:0">Sign-in</div>
+      <div class="g-box">
+        <div class="form-row"><div class="tx"><b>Username</b><span class="value">social@aka.com</span></div>
+          <button class="mini-btn" data-copybtn>⧉</button></div>
+        <div class="form-row"><div class="tx"><b>Password</b><span class="value" data-pw="mock" data-secret="demo-pw-google" data-remote>••••••••</span></div>
+          <button class="icon-mini" data-eyefor="mock" title="Reveal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button class="mini-btn" data-copybtn>⧉</button></div>
+      </div>
+      <div class="g-head">Agent access</div>
+      <div class="g-box"><div class="form-row">
+        <div class="tx"><b>Allow agents to sign in with this</b><p class="miss" style="display:inline-block">Agents get a session, never the password itself.</p></div>
+        <button class="switch off" data-sw><i></i></button>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8. totp ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 11</em>TOTP: gated behind "Show code", numeric countdown instead of a bar</h2>
+    <p>The implemented code hides behind a button and counts down as text (<code>app.tsx:1267</code>);
+       the mockup keeps a live code with a draining progress bar. Both timers below are real.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="g-head" style="padding-top:0">Two-factor code</div>
+      <div class="g-box"><div class="form-row diff" id="implTotpRow">
+        <div class="tx"><b>2FA/TOTP code</b><span class="value" id="implTotpVal" style="display:none"><span class="totp-code" id="implTotpCode">482 913</span></span></div>
+        <span class="totp-countdown" id="implTotpLeft" style="display:none">21s</span>
+        <button class="mini-btn" id="implTotpShow">Show code</button>
+        <button class="mini-btn" data-copybtn style="display:none" id="implTotpCopy">⧉</button>
+      </div></div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="g-head" style="padding-top:0">Sign-in</div>
+      <div class="g-box"><div class="form-row">
+        <div class="tx"><b>One-time code</b>
+          <span class="value"><span class="totp-code" id="mockTotpCode">482 913</span></span>
+          <div class="totp-bar miss"><i id="mockTotpBar"></i></div></div>
+        <button class="mini-btn" data-copybtn>⧉</button>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 9. secret details ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 12</em>Secret details: no "Created", terse "Used by" empty state</h2>
+    <p>Only a "Modified" row survives (<code>app.tsx:1683</code>), and an unused secret just says "Not in use".
+       Proposal, in the app's own Details-card layout: add a <b>Created</b> row beside Modified, and give the empty
+       "Used by" state guidance copy that says what to do about it. Both value rows below are live — reveal and copy work.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="d-head">
+        <span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">S</span>
+        <div class="tx"><b>STREAM_TOKEN</b><span>Secret</span></div>
+      </div>
+      <div class="g-head" style="padding-top:0">Value</div>
+      <div class="g-box"><div class="form-row">
+        <div class="tx"><span class="value" style="margin-top:0" data-pw="implSec" data-secret="st_live_4f8kQm2demo7Yx">••••••••</span></div>
+        <button class="icon-mini" data-eyefor="implSec" title="Reveal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        <button class="mini-btn" data-copybtn>⧉ Copy</button>
+      </div></div>
+      <div class="g-head">Details</div>
+      <div class="g-box">
+        <div class="form-row"><div class="tx"><b>Used by</b><span class="value diff" style="display:inline-block">Not in use</span></div></div>
+        <div class="form-row diff"><div class="tx"><b>Modified</b><span class="value">just now</span></div></div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Proposal</span>
+      <div class="d-head">
+        <span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">S</span>
+        <div class="tx"><b>STREAM_TOKEN</b><span>Secret</span></div>
+      </div>
+      <div class="g-head" style="padding-top:0">Value</div>
+      <div class="g-box"><div class="form-row">
+        <div class="tx"><span class="value" style="margin-top:0" data-pw="mockSec" data-secret="st_live_4f8kQm2demo7Yx">••••••••</span></div>
+        <button class="icon-mini" data-eyefor="mockSec" title="Reveal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        <button class="mini-btn" data-copybtn>⧉ Copy</button>
+      </div></div>
+      <div class="g-head">Details</div>
+      <div class="g-box">
+        <div class="form-row"><div class="tx"><b>Used by</b>
+          <p class="miss" style="display:inline-block">Not used by any tool. Attach it when adding a tool, or agents can request it by name.</p></div></div>
+        <div class="form-row"><div class="tx"><b class="miss" style="display:inline-block">Created</b><span class="value miss" style="display:inline-block">May 20, 2026</span></div></div>
+        <div class="form-row"><div class="tx"><b>Modified</b><span class="value">just now</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 10. connection details ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 13</em>Connection Details omit Created / Last used</h2>
+    <p>The implemented kv grid is config-only — Host, Region, role (<code>app.tsx:3153</code>). Proposal: keep that grid
+       (<code>connectionFactRows</code>) and append two recency facts, <b>Created</b> and <b>Last used</b> — recency is how
+       you spot a tool an agent quietly stopped using, or one it started hammering.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="g-head" style="padding-top:0">Details</div>
+      <div class="g-box"><dl class="kv">
+        <dt>Host</dt><dd>aws:us-east-1</dd>
+        <dt>Region</dt><dd>us-east-1</dd>
+        <dt>Signs in as</dt><dd>deploy</dd>
+      </dl></div>
+    </div>
+    <div class="side"><span class="side-tag mock">Proposal</span>
+      <div class="g-head" style="padding-top:0">Details</div>
+      <div class="g-box"><dl class="kv">
+        <dt>Host</dt><dd>aws:us-east-1</dd>
+        <dt>Region</dt><dd>us-east-1</dd>
+        <dt>Signs in as</dt><dd>deploy</dd>
+        <dt class="miss">Created</dt><dd class="miss">Jun 3, 2026</dd>
+        <dt class="miss">Last used</dt><dd class="miss" title="Aug 8, 2026 9:39 PM">2m ago</dd>
+      </dl></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 11. broker switch ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 14</em>Broker switch: full-pane takeover, and no broker events in the activity log</h2>
+    <p>"Connect remote…" opens a whole setup pane (<code>app.tsx:4647</code>) where the mockup switches inline with
+       pending-dot feedback — and nothing logs broker starts/switches (<code>mock-bridge.ts:59-83</code> has no such event).
+       Proposal: add <code>brokerStarted</code> and <code>brokerSwitched</code> activity kinds, logged at startup and on
+       every Local↔Hosted transition, so the log answers "which broker was carrying traffic at 9:41?".
+       Click each pill; on the proposal side, switch brokers back and forth and watch the dot and log.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="stage" style="min-height:150px">
+        <button class="tb-pill" data-menufor="implBroker"><span class="dot"></span> Local <span class="caret">▾</span></button>
+        <div class="menu" id="implBroker" style="top:36px;left:0">
+          <button class="menu-item"><span class="mi-check">✓</span><span class="dot"></span> Local</button>
+          <button class="menu-item diff" data-toastmsg="Opens a full-pane remote-broker setup takeover"><span class="glyph">☁︎</span> Connect remote…</button>
+        </div>
+        <div class="act-box">
+          <div class="g-head" style="padding-top:64px">Activity</div>
+          <div class="g-box" style="padding:2px 12px">
+            <div class="act-row"><span class="act-when">5m ago</span><span class="act-txt">Request approved: claude-code used github</span></div>
+            <div class="act-empty diff" style="display:inline-block">…no broker started / switched events exist</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="stage" style="min-height:150px">
+        <button class="tb-pill" data-menufor="mockBroker"><span class="dot" id="mockBrokerDot"></span> <span id="mockBrokerLabel">Local</span> <span class="caret">▾</span></button>
+        <div class="menu" id="mockBroker" style="top:36px;left:0">
+          <button class="menu-item" id="mockGoLocal"><span class="mi-check" id="ckLocal">✓</span><span class="dot"></span> Local <span class="menu-sub">this Mac</span></button>
+          <button class="menu-item miss" id="mockGoHosted"><span class="mi-check" id="ckHosted"></span><span class="glyph">☁︎</span> Hosted <span class="menu-sub">aka.com</span></button>
+        </div>
+        <div class="act-box">
+          <div class="g-head" style="padding-top:64px">Activity</div>
+          <div class="g-box" style="padding:2px 12px" id="mockActBox">
+            <div class="act-row miss"><span class="act-when">08:55</span><span class="act-txt">Broker started (local, v0.2.0)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 12. catalog soon ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 15</em>Catalog has no "coming soon" affordance <span style="font-weight:600;color:var(--ok-ink)">— now implemented</span></h2>
+    <p>The <code>disabled</code> field in the catalog schema (<code>catalog.ts:138</code>) is now honored by the Add-tool
+       palette: a disabled entry renders grayed with a "Soon" badge, sorts below addable rows in its section, and can't be
+       selected or activated. Marking an integration announced-but-unavailable is now just <code>disabled: true</code> on its
+       catalog entry.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="g-head" style="padding-top:0">Productivity</div>
+      <div class="g-box">
+        <div class="g-row"><span class="g-ico" style="background:var(--kind-mcp-wash);color:var(--kind-mcp-ink)">N</span>
+          <span class="g-body"><span class="g-name">Notion</span><span class="g-sub">Pages and databases</span></span>
+          <button class="mini-btn diff" data-toastmsg="Notion setup would open">Add</button></div>
+        <div class="g-row"><span class="g-ico" style="background:var(--kind-mcp-wash);color:var(--kind-mcp-ink)">L</span>
+          <span class="g-body"><span class="g-name">Linear</span><span class="g-sub">Issues and projects</span></span>
+          <button class="mini-btn diff" data-toastmsg="Linear setup would open">Add</button></div>
+      </div>
+    </div>
+    <div class="side"><span class="side-tag mock">Mockup</span>
+      <div class="g-head" style="padding-top:0">MCP apps</div>
+      <div class="g-box">
+        <div class="g-row"><span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">N</span>
+          <span class="g-body"><span class="g-name">Notion</span><span class="g-sub">Pages and databases</span></span>
+          <span class="soon miss">Soon</span></div>
+        <div class="g-row"><span class="g-ico" style="background:var(--chip-bg);color:var(--muted-2)">L</span>
+          <span class="g-body"><span class="g-name">Linear</span><span class="g-sub">Issues and projects</span></span>
+          <span class="soon miss">Soon</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 13. banner ============ -->
+<section class="gap">
+  <div class="gap-head">
+    <h2><em>Gap 16</em>Banner says how many, not what</h2>
+    <p>The implemented subtitle is a counts-and-deadline summary, and Review opens the bulk inbox (<code>app.tsx:1082</code>).
+       Proposal: the subtitle names the <b>oldest ask</b> — agent, tool, action, age — and Review steps through the waiting
+       requests <b>one at a time</b>, each in its own dialog with its own verdict, instead of a combined list. Try it: click
+       Review on the right and answer all five.</p>
+  </div>
+  <div class="cmp">
+    <div class="side"><span class="side-tag impl">Implemented</span>
+      <div class="mini-window">
+        <div class="mini-toolbar"><div class="lights"><i></i><i></i><i></i></div><div class="tb-flex"></div></div>
+        <button class="banner" data-toastmsg="Opens the request inbox" style="border-top:0">
+          <span class="b-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
+          <span class="b-tx"><b>5 requests need attention</b><span class="diff" style="display:inline-block">3 approvals, 2 questions · refused in 82s</span></span>
+          <span class="b-cta">Review</span>
+        </button>
+        <div style="height:140px"></div>
+      </div>
+      <p style="font-size:.71875rem;color:var(--muted);margin-top:8px">Counts only; Review lands on the combined inbox.</p>
+    </div>
+    <div class="side"><span class="side-tag mock">Proposal</span>
+      <div class="mini-window">
+        <div class="mini-toolbar"><div class="lights"><i></i><i></i><i></i></div><div class="tb-flex"></div></div>
+        <button class="banner" id="g16Banner" style="border-top:0">
+          <span class="b-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
+          <span class="b-tx"><b id="g16Title">5 requests waiting on you</b><span class="miss" style="display:inline-block" id="g16Sub"></span></span>
+          <span class="b-cta miss">Review →</span>
+        </button>
+        <div style="padding:12px;min-height:140px">
+          <div id="g16Dlg" class="miss" style="display:none">
+            <div class="g-head" style="padding-top:0" id="g16Step">Request 1 of 5</div>
+            <div class="g-box" style="padding:11px 13px">
+              <b id="g16Ask" style="font-size:.84375rem;display:block"></b>
+              <span class="g-sub" id="g16Meta"></span>
+              <div class="sheet-actions" id="g16Actions" style="margin-top:12px"></div>
+            </div>
+          </div>
+          <div id="g16Done" style="display:none;text-align:center;color:var(--muted);font-size:.78125rem;padding:24px 0">Nothing waiting on you.</div>
+        </div>
+      </div>
+      <p style="font-size:.71875rem;color:var(--muted);margin-top:8px">The subtitle is the oldest ask; each verdict advances to the next request.</p>
+    </div>
+  </div>
+</section>
+
+<div class="footnote">
+  <b>Not shown (judged deliberate divergences, not gaps):</b> the Add-tool command palette replacing the catalog sheet ·
+  Activity Log and Connect Agents as persistent views instead of sheets · relative activity timestamps ·
+  the stdio CLI connect snippet · granular notification settings · Appearance living in Settings ·
+  six category tiles ("MCPs, APIs, Cloud IAMs", 2FA Codes, Connected Vaults) · the "Try a sample tool" spotlight ·
+  masked-by-default endpoint addresses · Advanced disclosure holding policy controls.
+</div>
+
+<button class="theme-flip" id="themeFlip">◐ Light / Dark</button>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- toast ---------- */
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg){
+  toastEl.textContent = msg; toastEl.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove('show'), 1600);
+}
+document.body.addEventListener('click', e => {
+  const t = e.target.closest('[data-toastmsg]');
+  if (t) showToast(t.dataset.toastmsg);
+});
+
+/* ---------- highlight toggle ---------- */
+document.getElementById('hlToggle').addEventListener('change', e => {
+  document.body.classList.toggle('hl', e.target.checked);
+});
+
+/* ---------- theme ---------- */
+function setTheme(mode){
+  document.documentElement.dataset.theme = mode;
+  document.querySelectorAll('#mockSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+}
+document.getElementById('themeFlip').addEventListener('click', () => {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
+document.getElementById('mockSeg').addEventListener('click', e => {
+  const b = e.target.closest('[data-mode]'); if (b) setTheme(b.dataset.mode);
+});
+
+/* ---------- generic dropdown menus ---------- */
+document.querySelectorAll('[data-menufor]').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const m = document.getElementById(btn.dataset.menufor);
+    const wasOpen = m.classList.contains('open');
+    document.querySelectorAll('.menu.open').forEach(x => x.classList.remove('open'));
+    if (!wasOpen) m.classList.add('open');
+  });
+});
+document.body.addEventListener('click', e => {
+  if (!e.target.closest('.menu') && !e.target.closest('#mockBrokerSeg'))
+    document.querySelectorAll('.menu.open').forEach(x => x.classList.remove('open'));
+});
+
+/* ---------- gap 3: broker identity in the gear caption ---------- */
+document.getElementById('mockBrokerSeg').addEventListener('click', e => {
+  const b = e.target.closest('[data-b]'); if (!b) return;
+  document.querySelectorAll('#mockBrokerSeg button').forEach(x => x.classList.toggle('on', x === b));
+  document.getElementById('mockBrokerVer').style.display = b.dataset.b === 'hosted' ? '' : 'none';
+  document.getElementById('mockGear').classList.add('open');
+});
+
+/* ---------- gap 1: inspector toggle ---------- */
+document.getElementById('mockInfoBtn').addEventListener('click', () => {
+  const insp = document.getElementById('mockInsp');
+  const on = insp.style.display !== 'none';
+  insp.style.display = on ? 'none' : '';
+  document.getElementById('mockInfoBtn').classList.toggle('on', !on);
+});
+
+/* ---------- gap 4: off dimming ---------- */
+function wireOffRow(swId, pillId, rowId, dims){
+  const sw = document.getElementById(swId), pill = document.getElementById(pillId), row = document.getElementById(rowId);
+  sw.addEventListener('click', () => {
+    const nowOff = !sw.classList.contains('off');
+    sw.classList.toggle('off', nowOff);
+    sw.setAttribute('aria-checked', String(!nowOff));
+    pill.classList.toggle('off', nowOff);
+    pill.innerHTML = nowOff ? '<i></i>Off' : '<i></i>Connected';
+    if (dims) row.classList.toggle('dimmed', nowOff);
+  });
+}
+wireOffRow('implOffSw','implOffPill','implOffRow', false);
+wireOffRow('mockOffSw','mockOffPill','mockOffRow', true);
+
+/* ---------- raw request disclosures ---------- */
+document.querySelectorAll('[data-rawfor]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const block = document.getElementById(btn.dataset.rawfor);
+    const open = block.classList.toggle('show');
+    btn.innerHTML = (open ? '<span>▾</span>&nbsp;Hide raw request' : '<span>▸</span>&nbsp;Show raw request');
+  });
+});
+
+/* ---------- copy button feedback ---------- */
+document.body.addEventListener('click', e => {
+  const b = e.target.closest('[data-copybtn]'); if (!b) return;
+  const old = b.innerHTML;
+  b.innerHTML = '✓ Copied'; b.classList.add('ok');
+  setTimeout(() => { b.innerHTML = old; b.classList.remove('ok'); }, 900);
+});
+
+/* ---------- password reveal eyes ---------- */
+/* Secrets marked data-remote live on a remote broker/vault: revealing swaps the
+   eye for an in-place spinner while the value is fetched. Hiding is instant. */
+document.querySelectorAll('[data-eyefor]').forEach(btn => {
+  const eyeHtml = btn.innerHTML;
+  btn.addEventListener('click', () => {
+    if (btn.dataset.busy) return;
+    const span = document.querySelector(`[data-pw="${btn.dataset.eyefor}"]`);
+    const hidden = span.textContent.startsWith('•');
+    if (!hidden){ span.textContent = '••••••••'; return; }
+    if ('remote' in span.dataset){
+      btn.dataset.busy = '1';
+      btn.innerHTML = '<span class="spin"></span>';
+      setTimeout(() => {
+        delete btn.dataset.busy;
+        btn.innerHTML = eyeHtml;
+        span.textContent = span.dataset.secret;
+      }, 900);
+    } else {
+      span.textContent = span.dataset.secret;
+    }
+  });
+});
+
+/* ---------- gap 8: totp timers ---------- */
+function fmtCode(n){ return String(n).replace(/(\d{3})(\d{3})/, '$1 $2'); }
+function nextCode(){ return fmtCode(100000 + Math.floor(Math.random()*900000)); }
+let totpLeft = 21;
+const implCode = document.getElementById('implTotpCode'),
+      implLeft = document.getElementById('implTotpLeft'),
+      mockCode = document.getElementById('mockTotpCode'),
+      mockBar  = document.getElementById('mockTotpBar');
+setInterval(() => {
+  totpLeft -= 1;
+  if (totpLeft <= 0){
+    totpLeft = 30;
+    const c = nextCode();
+    implCode.textContent = c; mockCode.textContent = c;
+  }
+  implLeft.textContent = totpLeft + 's';
+  mockBar.style.width = (totpLeft/30*100) + '%';
+}, 1000);
+document.getElementById('implTotpShow').addEventListener('click', () => {
+  document.getElementById('implTotpVal').style.display = '';
+  implLeft.style.display = '';
+  document.getElementById('implTotpCopy').style.display = '';
+  document.getElementById('implTotpShow').style.display = 'none';
+});
+
+/* ---------- gap 16: review requests one at a time ---------- */
+const G16 = [
+  {kind:'approval', ask:'Claude Code wants to sign in to AWS as the deploy role', tool:'aws-prod', when:'2 min ago'},
+  {kind:'approval', ask:'claude-code wants to create an issue on github', tool:'github', when:'4 min ago'},
+  {kind:'approval', ask:'Cursor wants to query app_production on prod-db', tool:'prod-db', when:'6 min ago'},
+  {kind:'question', ask:'claude-code asks which environment the deploy should target', tool:'prod-ssh', when:'9 min ago'},
+  {kind:'question', ask:'Codex asks for a database branch name to create', tool:'prod-db', when:'12 min ago'},
+];
+let g16i = 0, g16Open = false;
+function g16Render(){
+  const total = G16.length, left = total - g16i;
+  const bn = document.getElementById('g16Banner'),
+        dlg = document.getElementById('g16Dlg'),
+        done = document.getElementById('g16Done');
+  if (!left){
+    bn.style.display = 'none'; dlg.style.display = 'none'; done.style.display = '';
+    return;
+  }
+  const cur = G16[g16i];
+  document.getElementById('g16Title').textContent =
+    `${left} request${left === 1 ? '' : 's'} waiting on you`;
+  document.getElementById('g16Sub').textContent =
+    `${cur.ask} · ${cur.when}` + (left > 1 ? ` · ${left - 1} more behind it` : '');
+  dlg.style.display = g16Open ? '' : 'none';
+  if (!g16Open) return;
+  document.getElementById('g16Step').textContent = `Request ${g16i + 1} of ${total}`;
+  document.getElementById('g16Ask').textContent = cur.ask;
+  document.getElementById('g16Meta').textContent = `${cur.tool} · requested ${cur.when}`;
+  document.getElementById('g16Actions').innerHTML = cur.kind === 'approval'
+    ? `<button class="btn danger-btn" data-g16="Denied">Deny</button>
+       <span class="spacer"></span>
+       <button class="btn" data-g16="Approved once">Approve Once</button>
+       <button class="btn primary" data-g16="Approved for 15 minutes">Approve for 15 minutes</button>`
+    : `<button class="btn danger-btn" data-g16="Refused">Refuse</button>
+       <span class="spacer"></span>
+       <button class="btn primary" data-g16="Reply sent">Answer…</button>`;
+}
+document.getElementById('g16Banner').addEventListener('click', () => {
+  g16Open = true; g16Render();
+});
+document.getElementById('g16Dlg').addEventListener('click', e => {
+  const b = e.target.closest('[data-g16]'); if (!b) return;
+  showToast(g16i + 1 >= G16.length ? `${b.dataset.g16} — all requests handled` : b.dataset.g16);
+  g16i += 1; g16Render();
+});
+g16Render();
+
+/* ---------- gap 11: broker switch simulation ---------- */
+function nowHM(){ const d = new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function logMock(txt){
+  const box = document.getElementById('mockActBox');
+  const row = document.createElement('div');
+  row.className = 'act-row';
+  row.innerHTML = `<span class="act-when">${nowHM()}</span><span class="act-txt">${txt}</span>`;
+  box.prepend(row);
+}
+const mockDot = document.getElementById('mockBrokerDot'),
+      mockLabel = document.getElementById('mockBrokerLabel'),
+      ckLocal = document.getElementById('ckLocal'), ckHosted = document.getElementById('ckHosted');
+document.getElementById('mockGoHosted').addEventListener('click', () => {
+  if (mockLabel.textContent === 'Hosted') return;
+  ckLocal.textContent = ''; ckHosted.textContent = '✓';
+  mockLabel.textContent = 'Hosted'; mockDot.className = 'dot pending';
+  logMock('Broker switched to <b>Hosted</b> (aka.com)…');
+  setTimeout(() => { mockDot.className = 'dot'; logMock('Hosted broker connected (v0.2.0)'); }, 1200);
+});
+document.getElementById('mockGoLocal').addEventListener('click', () => {
+  if (mockLabel.textContent === 'Local') return;
+  ckLocal.textContent = '✓'; ckHosted.textContent = '';
+  mockLabel.textContent = 'Local'; mockDot.className = 'dot';
+  logMock('Broker switched to <b>Local</b> (this Mac)');
+  logMock('Broker started (local, v0.2.0)');
+});
+</script>
+</body>
+</html>

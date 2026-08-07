@@ -14,7 +14,7 @@ test('navigation defaults to the Credentials tab and follows each shell order', 
 
   assert.equal(state.tab, 'secrets');
   assert.deepEqual(TABS, ['secrets', 'connections', 'start', 'activity']);
-  assert.deepEqual(DROPDOWN_TABS, ['secrets', 'connections', 'activity']);
+  assert.deepEqual(DROPDOWN_TABS, ['secrets', 'activity']);
 });
 
 test('query-backed state follows the active broker scope', async () => {

@@ -6,7 +6,8 @@ import { LUCIDE_ICONS } from './icons';
 
 // Activity timestamps. `relTime` renders relative ("just now", "5m", "3h")
 // for anything under 24h and a short absolute date beyond that; `absTime` is
-// the full, unambiguous value shown in the hover tooltip.
+// the full, unambiguous value shown in the hover tooltip. Dense lists stay
+// compact without "ago"; rows that read as a sentence use `relTimeAgo`.
 export function relTime(iso: string, now = Date.now()): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return '';
@@ -21,6 +22,13 @@ export function relTime(iso: string, now = Date.now()): string {
   return d.toLocaleDateString(undefined, sameYear
     ? { month: 'short', day: 'numeric' }
     : { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** Like `relTime`, but compact unit forms read as English: "2h ago". */
+export function relTimeAgo(iso: string, now = Date.now()): string {
+  const text = relTime(iso, now);
+  if (/^\d+[mh]$/.test(text)) return `${text} ago`;
+  return text;
 }
 
 export function absTime(iso: string): string {

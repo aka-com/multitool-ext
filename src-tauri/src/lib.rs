@@ -334,6 +334,7 @@ pub fn run() {
 
             windows::setup_app_menu(&handle)?;
             windows::setup_dropdown_panel(&handle)?;
+            windows::setup_attention_panel(&handle)?;
             windows::setup_tray(&handle)?;
             attention::sync_tray(&handle);
 
@@ -343,39 +344,59 @@ pub fn run() {
             // Closing the main window hides it and keeps the broker running
             // rather than quitting; reopen from the Dock or the tray.
             if let Some(win) = app.get_webview_window(windows::MAIN) {
-                windows::move_traffic_lights_down(&win, 3.0)?;
-                windows::set_window_focused(windows::MAIN, win.is_focused().unwrap_or(false));
+                // Centres the lights in the 48px unified toolbar (see
+                // --titlebar-h): the stock inset assumes a short title bar.
+                windows::position_main_traffic_lights(&win)?;
+                windows::set_window_focused(
+                    &handle,
+                    windows::MAIN,
+                    win.is_focused().unwrap_or(false),
+                );
+                let event_window = win.clone();
                 let handle = handle.clone();
                 win.on_window_event(move |event| match event {
                     WindowEvent::Focused(focused) => {
-                        windows::set_window_focused(windows::MAIN, *focused);
+                        windows::set_window_focused(&handle, windows::MAIN, *focused);
+                    }
+                    WindowEvent::Resized(_) => {
+                        // AppKit re-lays out the standard buttons while the
+                        // native frame changes; restore their top-edge inset.
+                        if let Err(error) = windows::position_main_traffic_lights(&event_window) {
+                            eprintln!("failed to position main-window traffic lights: {error}");
+                        }
                     }
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         windows::ui_hide_main(handle.clone());
                     }
                     WindowEvent::Destroyed => {
-                        windows::set_window_focused(windows::MAIN, false);
+                        windows::set_window_focused(&handle, windows::MAIN, false);
                     }
                     _ => {}
                 });
             }
             if let Some(win) = app.get_webview_window(windows::DROPDOWN) {
-                windows::set_window_focused(windows::DROPDOWN, win.is_focused().unwrap_or(false));
+                windows::set_window_focused(
+                    &handle,
+                    windows::DROPDOWN,
+                    win.is_focused().unwrap_or(false),
+                );
                 let handle = handle.clone();
                 win.on_window_event(move |event| match event {
                     WindowEvent::Focused(focused) => {
-                        windows::set_window_focused(windows::DROPDOWN, *focused);
-                        if !focused {
-                            let _ = windows::hide_dropdown(&handle);
-                        }
+                        // Track focus for request-surface / notification
+                        // policy only. Do not hide on focus loss: keyboard
+                        // app switches (Cmd-Tab) must leave the panel up.
+                        // Outside mouse clicks dismiss via the AppKit
+                        // event monitors installed in windows.rs.
+                        windows::set_window_focused(&handle, windows::DROPDOWN, *focused);
                     }
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = windows::hide_dropdown(&handle);
                     }
                     WindowEvent::Destroyed => {
-                        windows::set_window_focused(windows::DROPDOWN, false);
+                        windows::set_window_focused(&handle, windows::DROPDOWN, false);
                         windows::clear_dropdown_form_hold();
                     }
                     _ => {}

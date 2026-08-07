@@ -15,8 +15,9 @@
   /* layout */
   --content-max: 47.5rem;  /* main-window column cap (head + listing share it) */
   --creds-max: 64rem;      /* the credentials master–detail split's wider cap */
-  --traffic-lights: 54px;  /* width of the macOS traffic-light cluster */
-  --titlebar-h: 38px;      /* main-window custom title bar height */
+  --traffic-lights: 78px;  /* the cluster, plus the gap before the title */
+  --titlebar-h: 48px;      /* main-window unified toolbar height */
+  --toolbar-ctl: 28px;     /* every control on that bar, search included */
 
   /* text */
   --ink: #1d1d1f;          /* primary text */
@@ -134,7 +135,10 @@
   --b-ssh-bg: #e2f3e6;        --b-ssh-ink: #2c7a45;
   --b-agent-bg: rgba(0, 0, 0, .07); --b-agent-ink: #555;
 }*{ box-sizing: border-box; margin: 0; padding: 0; }
-  html, body{ height: 100%; }
+  /* WebKit treats the document viewport as a scroll surface even though the
+     app lays out its own panes. Stop that viewport from stretching the whole
+     Tauri window (including fixed chrome) at a scroll boundary. */
+  html, body{ height: 100%; overscroll-behavior: none; }
   body{
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.9375rem;
@@ -150,7 +154,28 @@
   button{ font-family: inherit; }
   code{ font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(1em - .0625rem); }
   input::placeholder, textarea::placeholder{ color: var(--muted); opacity: .7; }
-  #root{ height: 100%; }
+  #root{ height: 100%; overscroll-behavior: none; }
+  /* Keep elastic feedback local to real scroll panes. `contain` preserves the
+     pane's own boundary effect while preventing the gesture from chaining to
+     the document viewport above it. */
+  :where(
+    .content,
+    .dd-global,
+    .approval-detail,
+    .tile-menu,
+    .cat-connect-menu,
+    .start-menu,
+    .act-filter-menu,
+    .sheet,
+    .conn-detail-pane,
+    .cred-detail-pane,
+    .onepassword-browser,
+    .onepassword-browser-list,
+    .onepassword-fields,
+    .onepassword-review-list,
+    .wt-list,
+    .palette-list
+  ){ overscroll-behavior: contain; }
   /* ---- initial load placeholder ----------------------------------------- */
   /* index.html renders .app-loading inside #root so the first paint fills the
      window with the surface instead of a blank white webview. render() swaps
@@ -173,6 +198,55 @@
   /* No rotation for reduced-motion users; pulse the ring instead. */
   .app-loading-spinner{ animation: auth-pulse 1.2s ease-in-out infinite; }
 }
+  /* ---- non-activating approval HUD ------------------------------------- */
+.attention-hud-empty{ height: 100%; }
+.attention-hud-shell{
+  position: relative;
+  height: calc(100% - 16px); margin: 8px;
+  display: grid; grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center; gap: 11px;
+  padding: 13px 34px 13px 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(24px) saturate(170%);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  user-select: none;
+}
+.attention-hud-icon{
+  position: relative; width: 38px; height: 38px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; background: linear-gradient(160deg, #4a4a52, #26262c);
+}
+.attention-hud-icon svg{ width: 20px; height: 20px; stroke-width: 1.9; }
+.attention-hud-icon span{
+  position: absolute; right: -2px; top: -2px; width: 10px; height: 10px;
+  border: 2px solid var(--surface); border-radius: 50%; background: var(--accent);
+}
+.attention-hud-shell.urgent .attention-hud-icon span{ background: var(--danger); }
+.attention-hud-copy{ min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.attention-hud-copy strong{
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.84375rem; font-weight: 700;
+}
+.attention-hud-copy span{
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 0.71875rem;
+}
+.attention-hud-review{
+  border: 0; border-radius: 7px; padding: 6px 9px; cursor: pointer;
+  color: #fff; background: var(--accent); font: inherit;
+  font-size: 0.75rem; font-weight: 650;
+}
+.attention-hud-review:hover{ filter: brightness(.96); }
+.attention-hud-dismiss{
+  position: absolute; right: 8px; top: 7px;
+  width: 24px; height: 24px; border: 0; border-radius: 6px;
+  cursor: pointer; color: var(--muted-2); background: transparent;
+  font: 1rem/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.attention-hud-dismiss:hover{ color: var(--ink); background: var(--hover); }
   /* ---- surfaces --------------------------------------------------------- */
 .surface{
   height: 100%;
@@ -212,70 +286,54 @@
 }
 .dd-appicon svg{ width: 18px; height: 18px; stroke-width: 1.9; }
   .dd-title{ font-size: 0.96875rem; font-weight: 700; }
+  /* Tray header title: 1px smaller than the desktop brand. */
+  .dropdown-surface .dd-title{ font-size: 0.90625rem; }
   .dd-sub{ font-size: 0.8125rem; color: var(--muted); margin-top: 1px; display: flex; align-items: center; gap: 5px; }
   .dd-sub .dot{ width: 7px; height: 7px; border-radius: 50%; background: #30c94e; box-shadow: 0 0 4px rgba(48,201,78,.7); display: inline-block; }
   .ready-status{ gap: 6px; }
   .ready-state{ display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
   .dd-head{ display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; }
   .dd-identity{ flex: 1; min-width: 0; }
+  /* Tray header: one line, not a brand block. The dot carries broker health,
+     the name anchors the panel, and the scope says which broker is managed.
+     The panel is reached by clicking the Multitool icon, so a 34px app tile
+     would be repeating what the user just pressed. */
+  .dd-identity-line{
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 1px 0 2px;
+}
+  .dd-identity-line .ready-state{ align-self: center; }
+  .dd-identity-line .dot{
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+  background: var(--ok-solid); box-shadow: 0 0 4px rgba(48,201,78,.7);
+}
+  .dd-identity-line .dot-pending{ background: #f5a623; box-shadow: 0 0 4px rgba(245,166,35,.6); }
+  .dd-identity-line .dot-error{ background: var(--danger); box-shadow: 0 0 4px rgba(255,59,48,.6); }
+  .dd-identity-line .dd-title{ flex: 0 0 auto; }
+  .dd-scope{
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 0.78125rem;
+}
+  /* The tray's group register, aligned with the card edge below it. */
+  .dd-sec-h{
+  margin: 12px 0 5px; padding: 0 2px;
+  font-size: 0.75rem; font-weight: 650; color: var(--muted);
+}
+  .agent-tools-context{ color: var(--faint); font-weight: 400; }
+  .dd-tools .dd-sec-h{ margin-top: 4px; }
+  .dd-creds > .dd-sec-h:first-child{ margin-top: 4px; }
   /* ---- main window layout ---------------------------------------------- */
+/* No sidebar: the window is one chrome bar over one content pane. The
+   destinations that column used to hold (Activity Log, Connect agents) hang
+   off the title bar's app menu, and Tools folded into the credential
+   inventory, so a whole column of navigation stopped earning its width. */
 .dw-body{ flex: 1; display: flex; min-height: 0; }
-.dw-side{
-  flex: 0 0 9.75rem; display: flex; flex-direction: column;
-  padding: 14px 10px 10px;
-  border-right: 1px solid var(--line);
-  background: var(--wash);
-  -webkit-user-select: none; user-select: none;
-}
-@media (max-width: 800px) {
-  .dw-side { flex-basis: 7.25rem; }
-}
-  .dw-brand{ display: flex; align-items: center; gap: 9px; padding: 2px 4px 14px; }
-  .dw-brand .dd-title{ font-size: 0.90625rem; }
-  .dw-nav{ display: flex; flex-direction: column; gap: 2px; flex: 1; }
-  .nav-item{
-  display: flex; align-items: center; gap: 7px;
-  border: none; background: transparent; cursor: pointer;
-  text-align: left; padding: 7px 9px; border-radius: 7px;
-  font-size: 0.875rem; color: var(--ink-3);
-}
-  .nav-item:hover{ background: var(--hover); }
-  .nav-item.on{ background: var(--accent-wash-2); color: var(--accent-ink); font-weight: 600; }
-  .nav-tab-label{ flex: 1; min-width: 0; }
   .nav-count{
   flex: 0 0 auto; min-width: 19px; height: 19px; padding: 0 5px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 999px; background: var(--amber-wash); color: var(--amber-strong);
   font-size: 0.6875rem; font-weight: 700; line-height: 1;
 }
-  /* Keep the reactive destination (waiting requests atop the activity
-     log) beside the sidebar controls it relates to, while the primary
-     setup/navigation destinations stay grouped at the top. The compact
-     vertical rail keeps its existing uninterrupted tab order. */
-  @media (min-width: 721px) {
-    .dw-nav .nav-item[data-tab="activity"]{ margin-top: auto; margin-bottom: 4px; }
-  }
-  /* Below the narrow breakpoint (keep in step with NARROW_LAYOUT in app.tsx)
-     the left bar turns sideways: it collapses to a slim rail and each menu
-     option rotates 90° to read down the bar. */
-  @media (max-width: 720px) {
-    .dw-side{ flex: 0 0 3rem; padding: 12px 5px 10px; align-items: center; }
-    .dw-brand{ flex-direction: column; align-items: center; gap: 6px; padding: 2px 0 12px; }
-    .dw-brand > div:not(.dd-appicon){ display: none; }
-    /* The brand mark shrinks with the rail so it reads as the rail's cap,
-       not a block wedged into it. */
-    .dw-brand .dd-appicon{ width: 28px; height: 28px; border-radius: 7px; }
-    .dw-brand .dd-appicon svg{ width: 15px; height: 15px; }
-    .dw-nav{ align-items: center; gap: 6px; }
-    .nav-item{
-      writing-mode: vertical-rl; text-orientation: mixed;
-      justify-content: center; align-items: center; padding: 10px 7px;
-    }
-    .nav-tab-label{ flex: none; }
-    .nav-count{ writing-mode: horizontal-tb; min-width: 17px; height: 17px; padding: 0 4px; }
-    .dw-settings{ align-self: center; flex-direction: column; }
-    .settings-menu{ left: 0; right: auto; }
-  }
   .dw-main{
   flex: 1; display: flex; flex-direction: column; min-width: 0;
   width: 100%; background: var(--main-surface);
@@ -290,29 +348,72 @@
   .dw-head-title{ min-width: 0; display: flex; align-items: center; gap: 8px; }
   .dw-head h2{ font-size: 1.0625rem; }/* ---- custom title bar (main window) ---------------------------------- */
 /* The window uses titleBarStyle "Overlay": the native macOS traffic lights
-   float over the top-left of this bar, so the app owns its own chrome and the
-   title sits centered across the full width. */
+   float over the top-left of this bar. With the sidebar gone this is the
+   window's only chrome, so it carries the app name at the leading edge (clear
+   of the lights), the inventory's own controls in the middle, and the broker
+   switcher plus app menu at the trailing edge — one unified toolbar rather
+   than a title strip over a second header row. */
 .dw-titlebar{
   flex: 0 0 auto; position: relative;
-  display: flex; align-items: center; justify-content: center;
-  height: var(--titlebar-h); padding: 0 12px;
+  display: flex; align-items: center; gap: 8px;
+  height: var(--titlebar-h); padding: 2px 10px 2px var(--traffic-lights);
   border-bottom: 1px solid var(--line);
   background: var(--wash);
   user-select: none;
 }
   .dw-titlebar .dw-title{
-  font-size: 0.8125rem; font-weight: 600; color: var(--ink-3);
+  flex: 0 0 auto;
+  margin-left: 4px;
+  font-size: 0.9375rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink);
   -webkit-user-select: none; user-select: none;
 }
-  /* The title sits in the true middle of the window (not nudged by the
-     traffic lights); the broker switcher is pinned to the right edge. */
-  .dw-titlebar .dw-title-center{
-  position: absolute; left: 50%; transform: translateX(-50%);
+  /* Search takes the slack so it stays visually centred as the window grows,
+     with the actions pinned to its trailing side. */
+  .dw-toolbar-mid{
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  justify-content: center;
 }
+  .dw-titlebar .dw-toolbar-mid .tb-search{
+  flex: 0 1 22rem; min-width: 6rem;
+  height: calc(var(--toolbar-ctl) + 4px); min-height: calc(var(--toolbar-ctl) + 4px);
+  margin: 0;
+}
+  /* Every control on this bar is one square, the height of the search field
+     beside it: mismatched heights in a single run read as misalignment. */
+  .dw-toolbar-mid .btn,
+  .dw-titlebar-controls .broker-btn,
+  .dw-titlebar-controls .icon-btn,
+  .dw-titlebar-controls .add-tool-btn{ height: var(--toolbar-ctl); }
+  .dw-titlebar-controls .add-tool-btn,
+  .dw-titlebar-controls .vault-btn,
+  .dw-titlebar-controls .app-menu-btn{
+  width: var(--toolbar-ctl); padding: 0; justify-content: center;
+}
+  /* The solid fill carries more visual weight than the neighboring outlines:
+     narrow it by 3px overall, shorten it by 2px on each edge, and sit it on
+     the bar's own centre line. The stronger titlebar selector and matching
+     size constraints keep the shared toolbar-control rule from stretching it. */
+  .dw-titlebar .dw-titlebar-controls .add-tool-btn{
+  width: calc(var(--toolbar-ctl) - 3px);
+  height: calc(var(--toolbar-ctl) - 4px);
+  min-height: calc(var(--toolbar-ctl) - 4px);
+  max-height: calc(var(--toolbar-ctl) - 4px);
+}
+  /* Below the narrow breakpoint the middle cluster would crush the title;
+     search keeps the bar and the rest folds away with the second column. */
+  @media (max-width: 720px){
+    .dw-toolbar-mid{ justify-content: flex-end; }
+    .inspector-btn{ display: none; }
+  }
 
-  /* ---- broker switcher (titlebar, right) ------------------------------- */
-  .broker-switch-wrap{
-  position: absolute; right: 10px; top: 50%; z-index: 7; transform: translateY(-50%);
+  /* ---- titlebar controls (back + vault + broker, right) ---------------- */
+  .dw-titlebar-controls{
+  position: static; z-index: 7;
+  display: flex; align-items: center; gap: 8px; margin-left: auto;
+}
+  .broker-switch-wrap,
+  .vault-switch-wrap{
+  position: relative;
 }
   .broker-btn{
   display: inline-flex; align-items: center; gap: 6px;
@@ -322,8 +423,36 @@
   cursor: default;
 }
   .broker-btn:hover, .broker-btn.on{ background: var(--hover); border-color: var(--line); }
+  .broker-btn:disabled{ opacity: .55; cursor: default; }
+  .broker-btn:disabled:hover{ background: transparent; }
+  /* Secondary routes return to Inventory from the window's actual header.
+     It shares the broker/vault shell and the toolbar control height, so it
+     aligns exactly with the local/remote switcher beside it. */
+  .dw-titlebar-controls .titlebar-back-btn{
+  height: var(--toolbar-ctl); min-height: var(--toolbar-ctl);
+  padding: 0 9px 0 7px; gap: 3px; cursor: pointer;
+}
+  .titlebar-back-btn svg{ width: 13px; height: 13px; }
   .broker-label{ max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .broker-caret{ display: inline-flex; color: var(--muted-2); }
+  .vault-btn-1p{ display: inline-flex; line-height: 0; }
+  /* Icon-only in the toolbar: a square button the size of the app-menu gear,
+     so the trailing cluster reads as one run of controls. */
+  .vault-btn{ width: 26px; height: 26px; padding: 0; justify-content: center; position: relative; }
+  .vault-btn .vault-btn-1p svg{ width: 15px; height: 15px; }
+  .vault-btn.is-connect{ color: var(--muted-2); }
+  .vault-btn.is-connect:hover{ color: var(--ink-2); }
+  /* More than one linked vault is worth a number; one is what the mark
+     already says. */
+  .vault-count{
+  position: absolute; right: -3px; bottom: -3px;
+  min-width: 13px; height: 13px; padding: 0 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: 1.5px solid var(--surface);
+  background: var(--chip-bg); color: var(--ink-2);
+  font-size: 0.5625rem; font-weight: 700; line-height: 1;
+}
+  .vault-btn-1p svg{ width: 12px; height: 12px; }
   .broker-dot{
   width: 7px; height: 7px; border-radius: 50%; display: inline-block;
   background: var(--muted-2);
@@ -369,17 +498,17 @@
   .broker-pane .inline-error{
   font-size: 0.75rem; color: var(--danger-ink); word-break: break-word;
 }
-  .broker-pane .adv-collapse{ margin: -7px 0 6px; }
-  .broker-pane .bp-setup-code{ margin-top: 8px; }
-  .broker-pane .bp-setup-wrap{ display: flex; align-items: flex-end; gap: 8px; }
-  .broker-pane .bp-setup-wrap .bp-setup-code{ flex: 1; min-width: 0; }
+  .broker-pane .adv-collapse{ margin: -3px 0 6px; }
+  .broker-pane .bp-setup-code{ min-width: 0; margin: 0; }
+  .broker-pane .bp-setup-wrap{
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 8px;
+}
+  .broker-pane .bp-setup-wrap > .f-row,
+  .broker-pane .bp-setup-wrap > .bp-actions{ grid-column: 1 / -1; }
   .broker-pane .bp-actions{ display: flex; gap: 8px; margin-top: 6px; }
   .broker-pane .app-loading-spinner{ align-self: flex-start; }
 
-  /* First run has no broker yet and no history to sit beside, so the inert
-     sidebar is dropped and the chooser centers over the whole window. Other
-     takeovers keep the sidebar (dimmed) for context. */
-  .dw-body.first-run .dw-side{ display: none; }
 
   /* First-run chooser: two option cards, Local (recommended) and Hosted.
      Each is a two-column row — icon, then title over description. */
@@ -421,10 +550,6 @@
   .dd-sub .dot.dot-pending{ background: #f5a623; box-shadow: 0 0 4px rgba(245,166,35,.6); }
   .dd-sub .dot.dot-error{ background: var(--danger); box-shadow: 0 0 4px rgba(255,59,48,.6); }
 
-  /* While a takeover owns the content pane, the sidebar is inert. */
-  .dw-side.disabled .dw-nav .nav-item,
-  .dw-side.disabled .gear-btn{ opacity: .45; pointer-events: none; }
-  .dw-side.disabled .dw-brand{ opacity: .7; }
   .load-failure{
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     margin: 10px 18px 0; padding: 9px 11px;
@@ -435,17 +560,33 @@
   .load-failure > div{ display: flex; flex-direction: column; min-width: 0; }
   .load-failure span{ color: var(--ink-2); overflow-wrap: anywhere; }
   .dropdown-content-container > .load-failure{ margin: 8px 10px 0; }
-  /* ---- settings popover (gear, sidebar bottom) ------------------------- */
-/* The sidebar footer pairs the appearance toggle with the settings gear. */
-.dw-settings{ position: relative; display: flex; align-items: center; gap: 2px; }
-  .gear-btn, .theme-btn{ justify-content: center; }
-  /* Anchored to the gear's left edge and allowed to overhang the sidebar on
-     the right, so the popover is wider than the 156px rail it hangs off. */
+  /* ---- app menu (title-bar gear) --------------------------------------- */
+/* The sidebar's footer gear became the window's one menu, at the trailing
+   edge of the title bar beside the broker switcher. It drops downward from
+   there and is sized by its own content, not by a rail. */
+.app-menu-wrap{ position: relative; display: flex; align-items: center; }
+  .app-menu-btn{ width: 26px; height: 26px; border-radius: 7px; }
+  .app-menu-btn.on{ background: var(--hover-2); color: var(--ink-2); }
+  /* A waiting request is the one thing in the menu that cannot wait to be
+     found: the gear carries the same amber mark the Activity row does. */
+  .app-menu-badge{
+  position: absolute; right: 1px; top: 1px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--amber-strong);
+  border: 2px solid var(--surface);
+}
   .settings-menu{
-  position: absolute; left: 0; right: -70px; bottom: calc(100% + 4px); z-index: 12;
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
+  min-width: 232px;
   display: flex; flex-direction: column; gap: 2px; padding: 4px;
   background: var(--panel); border: 1px solid var(--line-mid); border-radius: 9px;
   box-shadow: var(--shadow-menu);
+}
+  .menu-rule{ margin: 3px 5px; border-top: 1px solid var(--line); }
+  .menu-count{
+  margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--amber-wash); color: var(--amber-strong);
+  font-size: 0.6875rem; font-weight: 700; line-height: 1;
 }
   /* Build version, above the first action. Deliberately not a .menu-item: it
      is a hint, so no hover, no pointer, and nothing to click or focus. */
@@ -460,10 +601,21 @@
   font-size: 0.84375rem; color: var(--ink-2);
 }
   .menu-item:hover{ background: var(--hover); }
+  /* The app menu doubles as the window's navigation, so the current
+     destination is marked the way the sidebar used to mark it. */
+  .menu-item.on{ background: var(--accent-wash-2); color: var(--accent-ink); font-weight: 600; }
+  .menu-item.on svg{ color: var(--accent-ink); }
   /* Icons come in mixed intrinsic sizes; a fixed square keeps every row's
      glyph and label on the same vertical lines. */
   .menu-item svg{ flex: 0 0 15px; width: 15px; height: 15px; color: var(--muted-2); }
-  /* ---- segmented tabs (dropdown) --------------------------------------- */
+  /* The tray menu's one inline preference: a label + segmented pair on a
+     menu row. The shared .seg carries a form margin; a menu row spaces with
+     its own padding instead. */
+  .settings-menu .menu-seg-row{ display: flex; align-items: center; gap: 8px; padding: 4px 9px; }
+  .settings-menu .menu-seg-row label{ flex: 1; font-size: 0.84375rem; color: var(--ink-2); }
+  .settings-menu .menu-seg-row .seg{ margin: 0; flex: none; }
+  .settings-menu .menu-seg-row .seg-btn{ flex: none; padding: 3px 10px; font-size: 0.71875rem; }
+  /* ---- segmented control (forms, activity filters) ---------------------- */
 .seg{ display: flex; gap: 2px; margin: 0 14px 10px; background: var(--seg-bg); border-radius: 8px; padding: 2px; }
   .seg-btn{
   flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
@@ -472,17 +624,11 @@
   border-radius: 6px; cursor: pointer;
 }
   .seg-btn.on{ background: var(--seg-on-bg); color: var(--seg-on-ink); box-shadow: var(--shadow-seg); font-weight: 600; }
-  .seg-count{
-  min-width: 17px; height: 17px; padding: 0 4px; display: inline-flex;
-  align-items: center; justify-content: center; border-radius: 999px;
-  background: var(--amber-wash); color: var(--amber-strong);
-  font-size: 0.65625rem; font-weight: 700; line-height: 1;
-}
   .seg.in-form{ margin: 0; }
-  /* Everything below the tray's tab switcher is one bounded pane. Besides
-     drawing the tab/content divider, paint containment makes this the fixed-
-     position containing block for narrow tool-detail drawers, so their panel
-     and scrim cannot cover the tray header or tab bar. */
+  /* Everything below the tray's header is one bounded pane. Besides
+     drawing the header/content divider, paint containment makes this the
+     fixed-position containing block for narrow tool-detail drawers, so their
+     panel and scrim cannot cover the tray header. */
 .dropdown-content-container{
   position: relative; flex: 1; min-height: 0; contain: paint;
   display: flex; flex-direction: column; overflow: hidden;
@@ -503,16 +649,22 @@
   flex: 1; overflow-y: scroll; overflow-x: hidden; padding: 0 6px 12px 14px;
 }
   .dd-content{ position: relative; min-height: 0; }
+  /* The Activity toggle has no tab strip below the tray header, so its scroll
+     pane supplies the breathing room that other views get from their own
+     leading bands. Keep this on the pane so requests and live sessions share
+     the same inset when they appear above the audit rows. */
+  .dd-content.activity-content{ padding-top: 10px; }
   /* The main scroll pane spans the available app region so its scrollbar
      stays at the window edge. Its page content retains the narrower centered
      measure shared with the header. The 8px right inset plus the reserved
      8px scrollbar track matches the header's 16px right inset. */
   .dw-main .content{
   container-type: size;
-  /* The bottom inset is the page's own breathing room: the last card on a
-     scrolled-to-the-end page would otherwise sit flush against the window
-     edge (or, on Secrets, against the status bar). */
-  padding: 0 8px 24px 24px;
+  /* The toolbar is the page's only header now, so the first row of content
+     needs its own breathing room under the hairline. The bottom inset is the
+     same breathing room at the other end: the last card on a scrolled-to-the-
+     end page would otherwise sit flush against the window edge. */
+  padding: 14px 8px 24px 24px;
 }
   .dw-main .content > *{
   width: min(100%, calc(var(--content-max) - 2rem));
@@ -558,19 +710,59 @@
   .live-row .s-sub{ max-width: 100%; }
   .live-row .agent-sub{ font-family: inherit; }
   .agent-onboarding{ margin: 9px 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-bg); }
-  /* A compact route to the dedicated Inbox from every other screen. */
+  /* A compact route to the dedicated Inbox from every other screen. The
+     card chrome lives here on the base rule — the banner is a notification
+     wherever it is seated, including the tray's page band. */
   .request-banner{
   width: 100%; display: flex; align-items: center; gap: 10px; margin: 8px 0;
-}
-  /* Seated in a list column, the column's own gap carries the spacing. */
-  .tools-list > .request-banner, .creds-list-col > .request-banner{
-  margin: 0;
-  padding: 9px 11px; border: 1px solid var(--amber-border); border-radius: 9px;
+  padding: 9px 11px; border: 1px solid var(--amber-border); border-radius: 10px;
   background: var(--amber-wash); color: var(--ink); text-align: left;
   font: inherit; cursor: pointer;
 }
+  /* Seated in a list column, the column's own gap carries the spacing. */
+  .tools-list > .request-banner, .creds-list-col > .request-banner{ margin: 0; }
+  /* The window's notice is chrome too: it spans the content pane rather
+     than floating as the first card of the inventory, and its two edges use
+     one hairline token so neither side reads heavier than the other.
+     Urgency stays with the wash and the icon. */
+  .dw-main .dd-global.request-route-only{
+  margin: 0 0 2px; padding: 0; border-bottom: 0;
+}
+  .dw-main .dd-global.request-route-only > *{
+  width: 100%; max-width: none; margin: 0;
+  padding: 9px 24px; border: 0; border-radius: 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+  .dw-main .dd-global.request-route-only > .request-banner.is-urgent{ box-shadow: none; }
+  /* Tray: menu-scale copy, aligned with the section groups below it. */
+  .dropdown-surface .request-banner-copy b{ font-size: 0.8125rem; font-weight: 600; }
+  /* In the tray the notice is chrome, not content: it spans the panel edge
+     to edge under the header instead of floating as a card inside the list,
+     so it reads as the panel telling you something rather than as the first
+     row of the inventory. The hairline (not the amber border) does the
+     separating, matching how the header divides from the body. */
+  .dropdown-surface .dd-global.request-route-only{
+  margin: 0; padding: 0; border-bottom: 0;
+}
+  .dropdown-surface .dd-global.request-route-only > .request-banner{
+  margin: 0; border: 0; border-radius: 0; padding: 9px 14px;
+  /* The band's two edges are the same hairline: the rule above it is the
+     content container's border-top, so this bottom border must use the same
+     token — an amber or red edge on one side only reads as a rendering bug.
+     Urgency is carried by the wash and the icon, not by the separators. */
+  border-bottom: 1px solid var(--line);
+}
+  .dropdown-surface .dd-global.request-route-only > .request-banner.is-urgent{
+  box-shadow: none;
+}
   .request-banner:hover{ filter: brightness(.985); }
   .request-banner:focus-visible{ outline: 2px solid var(--accent); outline-offset: 1px; }
+  .request-banner.is-urgent{
+  border-color: var(--danger-border); background: var(--danger-wash);
+  box-shadow: 0 0 0 1px var(--danger-border);
+}
+  .request-banner.is-urgent .request-banner-ico{ color: var(--danger-text); }
+  .request-banner.is-urgent .request-banner-copy span{ color: var(--danger-text); }
   .request-banner-ico{ flex: 0 0 auto; display: inline-flex; color: var(--amber-strong); }
   .request-banner-copy{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .request-banner-copy b{ font-size: 0.84375rem; font-weight: 650; }
@@ -700,11 +892,19 @@
   .elicit-refuse-btn{ color: var(--danger-ink); }
 
   /* ---- traffic confirmation ------------------------------------------- */
-  /* Same queue row and alert shape as an elicitation — the user is being
-     interrupted the same way — but the call being held is shown verbatim in
-     its own well, because that is what the decision is about. */
+  /* The decision is written in Multitool's voice. Agent-authored request
+     text remains available one disclosure deeper. */
   .approval-note .elicit-note-txt b{ font-weight: 600; }
-  .approval-call{ margin: 12px auto 0; padding: 10px 12px; max-width: 460px;
+  .approval-permission-summary{ max-width: 480px; line-height: 1.5; }
+  .approval-raw-wrap{ margin-top: 9px; }
+  .approval-raw-toggle{
+    display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px;
+    border: 0; border-radius: 6px; background: transparent; color: var(--muted);
+    font: inherit; font-size: 0.75rem; font-weight: 600; cursor: pointer;
+  }
+  .approval-raw-toggle:hover{ color: var(--ink-2); background: var(--hover); }
+  .approval-raw-toggle svg{ width: 12px; height: 12px; }
+  .approval-call{ margin: 5px auto 0; padding: 10px 12px; max-width: 480px;
     text-align: left; background: var(--field-bg); border: 1px solid var(--line-field);
     border-radius: 8px; }
   .approval-summary{ font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
@@ -713,11 +913,13 @@
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 0.71875rem; line-height: 1.5; color: var(--muted); white-space: pre-wrap;
     overflow-wrap: anywhere; }
-  .approval-facts{ display: grid; gap: 5px; margin: 12px auto 0; max-width: 460px;
-    text-align: left; font-size: 0.75rem; }
-  .approval-facts div{ display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
+  .approval-facts{ display: grid; gap: 7px; margin: 14px auto 0; padding: 12px 14px;
+    max-width: 480px; text-align: left; font-size: 0.78125rem;
+    background: var(--field-bg); border: 1px solid var(--line-field); border-radius: 9px; }
+  .approval-facts div{ display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; }
   .approval-facts dt{ color: var(--muted); }
-  .approval-facts dd{ margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .approval-facts dd{ margin: 0; min-width: 0; color: var(--ink); font-weight: 500;
+    overflow-wrap: anywhere; }
   /* Agent-, upstream-, and target-controlled text is isolated from
      surrounding punctuation so bidi controls cannot reorder the dialog. */
   .untrusted-identity{ unicode-bidi: isolate; }
@@ -848,7 +1050,7 @@
   .setup-instructions code{ font: inherit; }
   
   /* ---- tables ----------------------------------------------------------- */
-.s-name{ font-weight: 600; font-size: 0.8125rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.s-name{ font-weight: 600; font-size: 0.8125rem; }
   .s-sub{ font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.6875rem; color: var(--muted); margin-top: 2px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .c-name{ font-weight: 600; font-size: 0.90625rem; }
   .badge{ display: inline-block; padding: 2px 8px; border-radius: 9px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
@@ -857,10 +1059,12 @@
   .b-ssh{ background: var(--b-ssh-bg); color: var(--b-ssh-ink); }
   .val-wrap{ display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
   /* The value slot is the positioning context: the masked value is the base
-   layer, and the copy button / "Copied" status overlay it centered. */
+   layer, and the copy button / progress / "Copied" status overlay it on the
+   same center as the dots. */
 .val-slot{ position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 92px; }
   .val-slot code{ transform: translateY(-2px); transition: opacity .14s ease; }
-  /* Dim the placeholder behind the centered overlay on hover or after a copy. */
+  /* Dim the placeholder behind the centered overlay on hover, while fetching,
+     or after a copy. */
 .val-wrap:hover .val-slot code, .val-slot.is-copied code{ opacity: .22; }
   .val-overlay{ position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
   .ghost-copy{
@@ -884,9 +1088,29 @@
   color: var(--ok-ink); font-weight: 600; font-size: 0.78125rem; line-height: 1;
   letter-spacing: normal; transform: translateY(-2px); animation: copied-pop .22s ease;
 }
+  /* In-flight remote/1Password resolve: always visible (no hover gate), same
+     center as Copy / Copied, muted so it reads as progress not success. */
+  .copying-badge{
+  display: inline-flex; align-items: center;
+  color: var(--muted); font-weight: 600; font-size: 0.78125rem; line-height: 1;
+  letter-spacing: normal; transform: translateY(-2px);
+}
   @keyframes copied-pop{ from { opacity: 0; transform: none; } to { opacity: 1; transform: translateY(-2px); } }
   .icon-btn{ border: none; background: transparent; cursor: pointer; color: var(--muted-2); padding: 4px; border-radius: 5px; line-height: 0; }
   .icon-btn:hover{ background: var(--hover-2); color: var(--ink-2); }
+/* The tray header's Activity toggle. Selected takes the accent treatment the
+   old segmented tab used. A waiting-request count widens the button and rides
+   inside it beside the icon; it keeps the queue's amber even while selected —
+   pending is semantic state, independent of what's on screen. */
+.icon-btn.activity-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.icon-btn.activity-toggle.on { background: var(--accent-wash-2); color: var(--accent-ink); }
+.icon-btn.activity-toggle.on:hover { background: var(--accent-wash-2); color: var(--accent-ink); }
+.activity-count {
+  min-width: 17px; height: 15px; padding: 0 4px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--amber-wash); color: var(--amber-strong);
+  font-size: 0.65625rem; font-weight: 700; line-height: 1;
+}
 .sec-reveal-value{
   display: block;
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
@@ -977,7 +1201,7 @@
 .anchored-menu-portal,
 .conn-context-menu-wrap,
 .secret-context-menu-wrap,
-.conn-action-menu-wrap {
+.dd-totp-menu-wrap {
   position: fixed; z-index: 16; visibility: hidden;
   max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
 }
@@ -987,14 +1211,13 @@
 .anchored-menu-portal .act-filter-menu,
 .conn-context-menu-wrap .tile-menu,
 .secret-context-menu-wrap .tile-menu,
-.conn-action-menu-wrap .tile-menu {
+.dd-totp-menu-wrap .tile-menu {
   position: static; left: auto; right: auto; top: auto; bottom: auto;
   transform: none; width: max-content; min-width: 0;
   max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
   box-sizing: border-box; overflow-y: auto;
 }
-.conn-context-menu-wrap .tile-menu,
-.conn-action-menu-wrap .tile-menu {
+.conn-context-menu-wrap .tile-menu {
   width: min(250px, calc(100vw - 16px));
 }
 /* The reveal menu is two words wide; let it size to its one item. */
@@ -1080,6 +1303,7 @@
   max-height: calc(100% - 60px); overflow-y: auto;
 }
   .sheet.wide{ left: 50%; right: auto; transform: translateX(-50%); width: 460px; max-width: calc(100% - 28px); }
+  .sheet.wide.add-secret-sheet{ top: 50%; transform: translate(-50%, -50%); }
   /* The guided cloud flow puts three choices in a row; the ordinary form
      width leaves them too narrow to read. */
   .sheet.wide.cloud-guided{ width: 520px; }
@@ -1199,21 +1423,51 @@
   .external-doc-link:hover { color: color-mix(in srgb, var(--muted) 75%, var(--ink)); }
   /* ---- settings --------------------------------------------------------- */
   .set-row{ display: flex; align-items: flex-start; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line-soft); }
+  /* A settings row's control column is trailing and intrinsic: the segmented
+     appearance picker must not stretch across the row the way a form-embedded
+     .seg does. */
+  .set-row .appearance-seg{ flex: 0 0 auto; width: 9.5rem; align-self: center; }
   .set-txt{ flex: 1; }
   .set-txt .st-title{ font-size: 0.875rem; font-weight: 600; }
   .set-txt .st-sub{ font-size: 0.78125rem; color: var(--muted); line-height: 1.45; margin-top: 2px; }
-  .notification-setting{ flex-direction: column; gap: 9px; }
-  .notification-modes{ align-self: stretch; width: 100%; }
   .notification-warning{
     display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
     margin: 8px 0 2px; padding: 9px 11px; border: 1px solid var(--amber-border);
     border-radius: 8px; background: var(--amber-wash); color: var(--amber-ink);
     font-size: 0.78125rem; line-height: 1.4;
   }
-  .switch{ position: relative; flex: 0 0 auto; margin-top: 2px; width: 36px; height: 22px; border-radius: 11px; background: var(--switch-off); border: none; cursor: pointer; transition: background .18s ease; }
-  .switch.on{ background: #34c759; }
-  .switch::after{ content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-knob); transition: left .18s ease; }
-  .switch.on::after{ left: 16px; }
+  .notification-health{
+    margin: 8px 0 2px; padding: 10px 11px; border: 1px solid var(--line);
+    border-radius: 9px; background: var(--card-bg); font-size: 0.78125rem;
+  }
+  .notification-health-head > div{ display: flex; flex-direction: column; gap: 2px; }
+  .notification-health-head span{ color: var(--muted); line-height: 1.4; }
+  .notification-health ul{ display: grid; gap: 7px; margin: 10px 0; padding: 0; list-style: none; }
+  .notification-health-item{ display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+  .notification-health-item > span:last-child{ display: flex; flex-direction: column; min-width: 0; }
+  .notification-health-item small{ color: var(--muted); line-height: 1.35; }
+  .notification-health-mark{
+    flex: 0 0 17px; width: 17px; height: 17px; border-radius: 50%; text-align: center;
+    font-size: 0.6875rem; font-weight: 750; line-height: 17px; background: var(--line-soft);
+    color: var(--muted);
+  }
+  /* Optical centering: the bullet and the exclamation both sit low in their
+     line box — the bullet because its glyph is centred on the x-height, the
+     exclamation because its dot hangs on the baseline. The smaller bullet
+     needs one extra pixel of lift to reach the disc's true centre. */
+  .notification-health-mark{ position: relative; }
+  .notification-health-item.manual .notification-health-mark{ top: -2px; }
+  .notification-health-item.warn .notification-health-mark{ top: -1px; }
+  .notification-health-item.ok .notification-health-mark{
+    color: var(--ok-ink); background: var(--ok-wash);
+  }
+  .notification-health-item.warn .notification-health-mark{
+    color: var(--amber-ink); background: var(--amber-wash);
+  }
+    .notification-health-actions{ display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+  /* The preview acts here rather than leaving for System Settings, so it
+     holds the trailing edge away from the two destinations. */
+  .notification-health-actions .nh-preview{ margin-left: auto; }
   .set-collapse{ border-bottom: 1px solid var(--line-soft); padding: 8px 2px; }
   .set-collapse summary{ cursor: pointer; font-size: 0.875rem; font-weight: 600; list-style-position: inside; }
   .set-panel{ padding: 9px 0 2px; }
@@ -1514,8 +1768,9 @@
 .sample-connected svg { width: 12px; height: 12px; }
 
 /* ---- flat tools list (steady state) ----------------------------------- */
-/* One row per connection; the catalog waits behind "+ Add tool". */
-.flat-conn-wrap + .flat-conn-wrap,
+/* One row per connection; spacing and hover/selection shape the list without
+   rules between neighboring connections. The virtual-list pad still needs a
+   boundary so a scrolled-in first row does not visually merge into it. */
 .tool-list-pad + .flat-conn-wrap { border-top: 1px solid var(--line); }
 .tool-list-pad { width: 100%; }
 /* The one add path: a row at the bottom of the tools list that expands
@@ -1542,6 +1797,34 @@
 .flat-conn-row .cat-conn-status { margin-top: 0; }
 /* Selection stays visible without adding a rail along the list edge. */
 .flat-conn-wrap.sel { background: var(--accent-wash); }
+
+/* Inside the merged inventory a tool row is a credential row that happens to
+   be a tool: same 30px chip, same name-over-subtitle block, same 8px inset
+   and rounded hover, same accent fill when selected. Only the trailing
+   status word differs, because only tools have one. Keeping two row shapes
+   in one list made the sections look like two lists that happened to touch. */
+.creds-list-col .cat-rows { padding: 4px; }
+.creds-list-col .flat-conn-row {
+  gap: 10px; padding: 6px 8px; border-radius: 8px;
+}
+.creds-list-col .flat-conn-wrap.sel { background: none; }
+.creds-list-col .flat-conn-wrap.sel .flat-conn-row { background: var(--accent); color: #fff; }
+.creds-list-col .flat-conn-row .cat-ico {
+  width: 30px; height: 30px; border-radius: 8px;
+}
+.creds-list-col .flat-conn-row .cat-ico svg { width: 15px; height: 15px; }
+.creds-list-col .flat-conn-wrap.sel .cat-ico {
+  border-color: transparent; background: rgba(255, 255, 255, .25); color: #fff;
+}
+.creds-list-col .flat-tx b { font-size: 0.8125rem; }
+.creds-list-col .flat-tx > span { color: var(--muted); font-size: 0.71875rem; }
+.creds-list-col .flat-conn-wrap.sel .flat-tx > span,
+.creds-list-col .flat-conn-wrap.sel .cc-live { color: rgba(255, 255, 255, .82); }
+/* The status pill keeps its own colour on an unselected row; on the accent
+   fill it goes to a translucent white so it does not fight the selection. */
+.creds-list-col .flat-conn-wrap.sel .cc-pill {
+  background: rgba(255, 255, 255, .22); border-color: transparent; color: #fff;
+}
 
 /* ---- drag-to-reorder (Tools list) ------------------------------------- */
 /* Reorderable rows are themselves the drag source; no separate handle shifts
@@ -1574,7 +1857,7 @@
   flex: 0 0 clamp(20rem, calc(38% + 2.5rem), 26.25rem);
   min-width: 0;
   position: sticky; top: 0;
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex; flex-direction: column;
   height: fit-content; max-height: calc(100vh - 130px);
   height: calc(100cqh - 14px); max-height: calc(100cqh - 14px);
 }
@@ -1582,57 +1865,119 @@
    escapes through #overlays; any other popover added here must do the same
    or remain wholly inside the pane border. */
 .conn-detail-pane {
-  --cd-gutter-x: 16px;
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
   padding: 14px 16px 14px;
   border: 1px solid var(--line); border-radius: 12px;
   background: var(--card-bg); box-shadow: var(--shadow-sm);
 }
-.cd-head { display: flex; align-items: center; gap: 10px; }
+.cd-head { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; }
 .cd-actions { position: relative; display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 /* The switch's nudge is for labelled settings rows, where it aligns with a
    first line of text; here it is centered against the whole title block. */
 .cd-actions .switch { margin-top: 0; }
-.cd-actions .icon-btn, .cd-actions .tile-menu-wrap { flex: 0 0 auto; }
-.cd-actions .icon-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0;
-}
-.cd-actions .icon-btn svg { width: 15px; height: 15px; }
 .cd-title { flex: 1; min-width: 0; }
-.cd-title b { display: block; font-size: 0.875rem; }
+.cd-title b { display: block; font-size: 0.9375rem; letter-spacing: -0.01em; }
 .cd-title span {
   display: block; margin-top: 1px; overflow: hidden; color: var(--muted);
   font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap;
 }
-.cd-sec {
-  position: relative;
-  margin-top: 16px; padding-top: 16px;
+/* The tool inspector groups like the credential one: a muted heading in the
+   list's register (.cdet-sec-h) over a card (.cdet-card) whose rows are
+   ruled off from each other. Everything below is that card's row grammar —
+   a bold label, an optional explanation under it, and the control that acts
+   on it flush right. Sections used to be bands ruled across the whole pane,
+   which made settings, addresses, and facts read as one undifferentiated
+   column. */
+.cd-head + .cdet-sec-h { margin-top: 4px; }
+.cd-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; box-sizing: border-box; padding: 10px 12px;
+  text-align: left;
 }
-.cd-sec::before {
-  content: ''; position: absolute; top: 0;
-  left: calc(-1 * var(--cd-gutter-x)); right: calc(-1 * var(--cd-gutter-x));
-  border-top: 1px solid var(--line-soft);
+.cd-row + .cd-row,
+.cd-row-note + .cd-row,
+.cd-disclosed + .cd-row { border-top: 1px solid var(--line-soft); }
+.cd-row-tx { flex: 1; min-width: 0; }
+.cd-row-tx > b { display: block; font-size: 0.8125rem; font-weight: 600; }
+.cd-row-tx > p {
+  margin-top: 2px; color: var(--muted); font-size: 0.71875rem; line-height: 1.45;
 }
-/* Every section headline in the panel speaks to the user in sentence case
-   and the text ink — "Connect to this database", "Connect to Multitool MCP"
-   — one register, no tracked-caps machinery labels. */
-.cd-connect-lbl {
-  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
-  font-size: 0.8125rem; font-weight: 600;
+/* A second explanation under the same label (the consequence of a switch
+   that is on) reads as a new paragraph, not a new row. */
+.cd-row-tx > p + p { margin-top: 5px; }
+.cd-row-tx > code {
+  display: block; margin-top: 2px; color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78125rem; overflow-wrap: anywhere;
 }
-/* No hairline under the connect address block: confirm continues the same
-   group without a second rule right under the field. */
-.cd-connect + .cd-sec::before { display: none; }
-.cd-connect + .cd-sec { margin-top: 12px; padding-top: 0; }
-.cd-connect-lbl > span { flex: 1; min-width: 0; }
-.cd-connect-lbl svg { flex: 0 0 auto; color: var(--muted); }
-/* Address lifecycle ⋯ sits on the Connect label; menu portals under #overlays. */
-.cd-connect-lbl .ep-opts-wrap { margin-left: auto; }
-.cd-connect-lbl .ep-opts-wrap .tile-menu-btn {
+.cd-row > .switch { flex: 0 0 auto; margin-top: 0; }
+/* Rows that do something on click — the two folds, the manage actions, the
+   removal. Borderless by design: the card is the frame. */
+button.cd-row-click {
+  border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+}
+button.cd-row-click:hover { background: var(--hover); }
+button.cd-row-click:disabled { color: var(--muted); cursor: default; background: none; }
+button.cd-row-click:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cd-row-danger b { color: var(--danger-ink); }
+.cd-row-chev {
+  flex: 0 0 auto; display: inline-flex; color: var(--muted-2);
+  transform: rotate(-90deg); transition: transform .14s ease;
+}
+.cd-row-chev svg { width: 13px; height: 13px; }
+button.cd-row[aria-expanded="true"] .cd-row-chev { transform: rotate(0); }
+/* A notice that belongs to the row above it — an approval window, a
+   cooldown — hangs under that row inside the same cell. The child selectors
+   are named rather than universal: .cd-confirm-window and friends set their
+   own top margin later in this file and would otherwise win the cascade. */
+.cd-row-note { padding: 0 12px 10px; }
+.cd-row-note:first-child { padding-top: 10px; }
+.cd-row-note > .cd-confirm-window,
+.cd-row-note > .cd-confirm-note,
+.cd-row-note > .mcp-res-more { margin-top: 0; }
+/* What a fold reveals: ruled off from its row, on the card's inset. A group
+   that is only facts (a disabled tool) has no row above to rule off from. */
+.cd-disclosed { padding: 10px 12px; border-top: 1px solid var(--line-soft); }
+.cdet-card > .cd-disclosed:first-child { border-top: 0; }
+.cd-disclosed > .cd-confirm-row { margin-top: 0; padding-top: 0; border-top: 0; }
+.cd-disclosed > .cd-confirm-row + .cd-confirm-row { margin-top: 12px; }
+/* A block row stacks its own content (help, command, verification) rather
+   than pairing a label with a control. Its prose takes the row's own
+   description size, so a card does not carry two body sizes. */
+.cd-row-stack { flex-direction: column; align-items: stretch; gap: 0; }
+.cd-row-stack > .cd-help:first-child { margin-top: 0; }
+.cd-row-stack > .cd-help,
+.cd-row-stack > .rule-note {
+  font-size: 0.71875rem; line-height: 1.45;
+}
+.cd-row-stack > :last-child { margin-bottom: 0; }
+/* Address lifecycle ⋯ sits at the end of the connect row; menu portals
+   under #overlays. */
+.cd-connect-row .ep-opts-wrap { flex: 0 0 auto; }
+.cd-connect-row .ep-opts-wrap .tile-menu-btn {
   width: 22px; height: 22px; color: var(--muted);
 }
-.cd-connect-lbl .ep-opts-wrap .tile-menu-btn svg { width: 15px; height: 15px; }
+.cd-connect-row .ep-opts-wrap .tile-menu-btn svg { width: 15px; height: 15px; }
+/* Inside a card the address needs no field chrome of its own — a box in a
+   box. It keeps the mono face, at the value size the other rows use, and
+   puts Copy at the row's right as a compact button rather than a page one. */
+.cdet-card .ep-strip { margin-top: 3px; }
+/* Both selectors carry .ep-field so they outrank the base strip rules
+   below, which are written at the same class depth. The Copy button keeps
+   its fixed width from there — that width reserves the "Copied" label so
+   the button does not resize under the click — but takes the compact
+   height and weight the card's other controls use. */
+.cdet-card .ep-strip .ep-field .ep-addr { font-size: 0.78125rem; }
+.cdet-card .ep-strip .ep-field .ep-copy {
+  height: 24px; padding: 0 9px; font-size: 0.71875rem; font-weight: 600;
+}
+.cd-row-tx > .ep-strip:first-child { margin-top: 0; }
+.cdet-card .ep-strip .ep-field {
+  flex-direction: row; align-items: center; gap: 8px;
+  padding: 0; border: 0; border-radius: 0; background: none;
+}
+.cdet-card .ep-strip .ep-field .ep-copy,
+.cdet-card .ep-strip .ep-field .ep-copy-wrap { align-self: center; }
 /* Non-action row: the opt-in expiry date at the top of the address menu. */
 .menu-meta {
   padding: 6px 9px 4px; font-size: 0.75rem; color: var(--muted);
@@ -1843,15 +2188,15 @@ textarea.cloud-paste-zone {
 .cloud-parsed-control .field-error { flex: 1 0 100%; margin-top: 0; }
 /* Bottom-left slot in the action row: Skip / Back / return to guided. */
 .sheet-actions .cloud-guide-left { margin-right: auto; }
-/* Traffic confirmation: a labelled switch row, so the promise ("Confirm
-   each request") sits beside the control that makes it rather than in a
-   tooltip. The sub-line names the unit, which differs per kind. */
-.cd-confirm-row { display: flex; align-items: flex-start; gap: 12px; }
+/* The per-tool policies inside Advanced. They are rows of the same card as
+   Options, so they take the same grammar: label, explanation under it, the
+   control flush right, all centered. They used to run a size larger with a
+   flex-start switch, which made one card read as two. */
+.cd-confirm-row { display: flex; align-items: center; gap: 10px; }
 .cd-confirm-txt { flex: 1; min-width: 0; }
-.cd-confirm-lbl { font-size: 0.8125rem; font-weight: 600; line-height: 1.4; }
-.cd-confirm-sub { margin-top: 5px; color: var(--muted); font-size: 0.75rem; line-height: 1.35; }
-/* The switch centers on the label's first line (18px line vs 22px switch). */
-.cd-confirm-row .switch { flex: 0 0 auto; margin-top: -2px; }
+.cd-confirm-lbl { font-size: 0.8125rem; font-weight: 600; }
+.cd-confirm-sub { margin-top: 2px; color: var(--muted); font-size: 0.71875rem; line-height: 1.45; }
+.cd-confirm-row .switch { flex: 0 0 auto; margin-top: 0; }
 /* Secondary per-tool policies share the same row grammar inside Advanced;
    spacing alone separates them — no hairlines between options. */
 .cd-statements, .cd-ep-auth, .cd-ep-expiry { margin-top: 12px; }
@@ -1865,27 +2210,26 @@ textarea.cloud-paste-zone {
 .cd-confirm-cooldown { background: var(--danger-wash); border-color: var(--danger-border); }
 .cd-confirm-cooldown svg { color: var(--danger-ink); }
 .cd-confirm-note { margin-top: 8px; color: var(--muted); font-size: 0.75rem; line-height: 1.4; }
-/* Advanced continues the settings group the confirm row starts: no hairline
-   of its own, just the group's 12px row spacing (see the rows inside it). */
-.cd-advanced { margin-top: 12px; padding-top: 0; }
-.cd-advanced::before { display: none; }
-.cd-advanced-options { margin-top: 12px; }
-.cd-advanced-options > .cd-confirm-row {
-  margin-top: 0; padding-top: 0; border-top: 0;
-}
-.cd-advanced-options > .cd-confirm-row + .cd-confirm-row { margin-top: 12px; }
-/* Details sits under Advanced with the same disclosure chrome. */
-.cd-details { margin-top: 12px; padding-top: 0; }
-.cd-details::before { display: none; }
-.cd-details-body { margin-top: 12px; }
 .cd-tool-scope { align-items: center; }
 .cd-tool-scope .cat-meta-tools { flex: 0 0 auto; }
-.cd-off-note { margin-top: 12px; }
-/* The Details card: the target's parts spelled out as label–value rows.
-   Values are mono and wrap; labels stay put. */
+/* Details: the target's parts spelled out as label–value rows. Values are
+   mono and wrap; labels stay put. Inside a fold the card already frames
+   them, so the facts carry no box of their own. */
 .cd-facts {
   margin-top: 0; padding: 2px 12px;
   background: var(--wash); border: 1px solid var(--line-soft); border-radius: 9px;
+}
+/* In the fold the facts are a two-column key/value grid: the card's rule
+   above them is the only line they need, and values read left-aligned
+   against a fixed label column instead of drifting to the right edge. */
+.cd-disclosed > .cd-facts {
+  display: grid; grid-template-columns: 5.375rem 1fr; gap: 5px 10px;
+  padding: 0; background: none; border: 0; border-radius: 0;
+}
+.cd-disclosed > .cd-facts .cd-fact { display: contents; }
+.cd-disclosed > .cd-facts .cd-fact-k,
+.cd-disclosed > .cd-facts .cd-fact-v {
+  padding: 0; border-top: 0; text-align: left; font-size: 0.71875rem;
 }
 .cd-fact { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; font-size: 0.75rem; }
 .cd-fact + .cd-fact { border-top: 1px solid var(--line-soft); }
@@ -1902,7 +2246,7 @@ textarea.cloud-paste-zone {
 }
 .cd-live-link:hover { text-decoration: underline; }
 /* Alerts sit above the panel card, not inside it. */
-.cd-alerts { flex: 0 0 auto; margin-top: 0; max-width: none; }
+.cd-alerts { flex: 0 0 auto; margin: 0 0 10px; max-width: none; }
 .conn-detail-backdrop { display: none; }
 
 @media (max-width: 720px) {
@@ -1923,7 +2267,6 @@ textarea.cloud-paste-zone {
   .cd-alerts { padding: 16px 18px 0; }
   .cd-alerts + .conn-detail-pane { padding-top: 12px; }
   .conn-detail-pane {
-    --cd-gutter-x: 18px;
     border: none; border-radius: 0;
     background: transparent; box-shadow: none;
     padding: 16px 18px 8px;
@@ -2001,10 +2344,6 @@ textarea.cloud-paste-zone {
 /* Fixes sit under the message, not beside it: a wrapping row of compact
    buttons (the targeted fix, then the retry). */
 .cc-issue-fixes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
-/* The attention card carries its own weight — a section hairline right
-   under it would double the separation, so the next section drops it. */
-.cc-issues + .cd-sec { padding-top: 0; }
-.cc-issues + .cd-sec::before { display: none; }
 /* ---------------------------- secrets page ------------------------------ */
 /* The Credentials page is a Passwords-style master–detail: category tiles
    over a monogram list on the left, the selected credential's inspector on
@@ -2013,6 +2352,32 @@ textarea.cloud-paste-zone {
    app.tsx) ride the same pane over the list, like the tools slide-over. */
 .creds-split { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 14px; }
 .creds-list-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* The column scrolls its overflow; it must never absorb it by shrinking the
+   sections. A flex item's automatic minimum size is its content — except
+   when it clips, and .cat-rows does (overflow: hidden, for its rounded
+   corners), which resolves that minimum to zero. So under All, where the
+   credential cards below refuse to give any height back, the tools card was
+   the one section that could be squeezed, and it collapsed to a bare rounded
+   bar under its own heading. Filtering to Agent Tools alone hid it: with
+   nothing to overflow, nothing shrank. */
+.creds-list-col > * { flex: none; }
+/* On a wide inventory the list and inspector are separate vertical panes.
+   The left pane keeps the page's elastic scrolling; the right pane consumes
+   the full available content height and therefore never rides that bounce. */
+@media (min-width: 721px) {
+  .dw-main .inventory-content { min-height: 0; overflow-y: hidden; }
+  .dw-main .inventory-content > .creds { height: 100%; }
+  .dw-main .inventory-content .creds-split {
+    height: 100%; min-height: 0; align-items: stretch; padding-bottom: 0;
+  }
+  .dw-main .inventory-content .creds-list-col {
+    min-height: 0; overflow-y: auto; overscroll-behavior-y: contain;
+    padding-bottom: 14px;
+  }
+  .dw-main .inventory-content .cred-detail-col {
+    position: static; height: 100%; max-height: none;
+  }
+}
 /* The split earns a wider measure than the reading column; the page header
    widens with it so search and Add stay on the pane edge. */
 .dw-main .content > .creds { width: min(100%, calc(var(--creds-max) - 2rem)); }
@@ -2021,7 +2386,15 @@ textarea.cloud-paste-zone {
 /* Category tiles: the Passwords app's sidebar scopes, compressed into the
    tile grid its own compact layout uses (the app's left edge already
    belongs to navigation). Counts read the inventory, not the search. */
-.cred-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+/* Category tiles: two columns of filled colour discs — one hue per scope —
+   with the label and a trailing count. The selected scope takes a solid
+   accent fill: with only five or six of these, the strong marker is easier
+   to find at a glance than a wash, and it matches the app's other
+   pick-one-of-a-few controls. Counts read the inventory, not the search. */
+.cred-tiles {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px; margin-bottom: 8px;
+}
 .cred-tile {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px;
   border: 1px solid var(--line); border-radius: 10px;
@@ -2032,31 +2405,40 @@ textarea.cloud-paste-zone {
 .cred-tile.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .cred-tile-ico {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
-  width: 24px; height: 24px; border-radius: 7px; color: #fff;
+  width: 24px; height: 24px; border-radius: 999px; color: #fff;
 }
-.cred-tile.is-all .cred-tile-ico { background: var(--accent); }
-.cred-tile.is-passwords .cred-tile-ico { background: var(--kind-mcp-ink); }
-.cred-tile.is-secrets .cred-tile-ico { background: var(--kind-db-ink); }
-.cred-tile.is-codes .cred-tile-ico { background: var(--warning-dot); }
-.cred-tile.is-onepassword .cred-tile-ico { background: var(--muted-2); }
-/* Optical centering: the globe and timer glyphs sit a hair low-right in
-   their tiles, and the 1Password disc runs a touch large at 17px. */
-.cred-tile.is-passwords .cred-tile-ico svg,
-.cred-tile.is-codes .cred-tile-ico svg { transform: translate(-.5px, -.25px); }
-.cred-tile.is-onepassword .cred-tile-ico svg { width: 16px; height: 16px; }
-.cred-tile.on .cred-tile-ico { background: rgba(255, 255, 255, .25); }
+/* The label and its count share the row; the count holds the trailing edge. */
+.cred-tile-tx {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+}
 .cred-tile-label {
   flex: 1; min-width: 0; font-size: 0.78125rem; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cred-tile-count { color: var(--muted); font-size: 0.84375rem; font-weight: 700; }
 .cred-tile.on .cred-tile-label, .cred-tile.on .cred-tile-count { color: #fff; }
+/* One hue per scope. On the selected tile the disc drops to a translucent
+   white so the glyph stays legible on the accent fill. */
+.cred-tile.is-all .cred-tile-ico { background: var(--accent); }
+.cred-tile.is-connections .cred-tile-ico { background: #3f7ee8; }
+.cred-tile.is-passwords .cred-tile-ico { background: var(--kind-mcp-ink); }
+.cred-tile.is-secrets .cred-tile-ico { background: var(--kind-db-ink); }
+.cred-tile.is-codes .cred-tile-ico { background: var(--warning-dot); }
+.cred-tile.is-onepassword .cred-tile-ico { background: var(--muted-2); }
+.cred-tile.on .cred-tile-ico { background: rgba(255, 255, 255, .25); }
+/* Optical centering: the globe and timer glyphs sit a hair low-right. */
+.cred-tile.is-passwords .cred-tile-ico svg,
+.cred-tile.is-codes .cred-tile-ico svg { transform: translate(-.5px, -.25px); }
+/* The 1Password disc runs a touch large at its natural 17px. */
+.cred-tile.is-onepassword .cred-tile-ico svg { width: 16px; height: 16px; }
 
 /* Both credential groups stay visible even when one is empty, each under
    a header in the page register (same type as the "Credentials" head
    above). */
 .credential-group { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
-.creds-sec-h { margin: 14px 2px 4px; font-size: 1.0625rem; }
+/* Flush with the left edge of the rows it labels — an indented header
+   over a full-width card reads as a misalignment, not a hierarchy. */
+.creds-sec-h { margin: 14px 0 5px; font-size: 0.8125rem; font-weight: 650; color: var(--muted); }
 /* The leading header borrows the category tiles' own 8px bottom margin,
    so its breathing room matches the 14px between later sections. */
 .cred-tiles + .creds-sec-h { margin-top: 6px; }
@@ -2137,13 +2519,16 @@ textarea.cloud-paste-zone {
 /* Per-group actions (Change Password…, Set Up Code…, Edit, Delete) rule
    off from the rows above them, like the reference app's edit surface.
    They read as part of the card, not page-level chrome: a soft wash fill
-   instead of the raised button border and shadow. */
+   instead of the raised button border and shadow. Flush right with the
+   value column (same 12px inset as .cdet-row). */
 .cdet-card-actions {
-  display: flex; justify-content: flex-end; gap: 8px;
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+  width: 100%; box-sizing: border-box;
   padding: 8px 12px; border-top: 1px solid var(--line-soft);
 }
 .cdet-card-actions.is-lone { border-top: 0; }
 .cdet-card-actions .btn {
+  flex: 0 0 auto;
   border: 0; box-shadow: none; background: var(--chip-bg);
   color: var(--ink-2); font-weight: 500;
 }
@@ -2160,23 +2545,54 @@ textarea.cloud-paste-zone {
 .cdet-row:focus-within { background: var(--hover); }
 .cdet-edit-wrap { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .cdet-edit-wrap .cdet-edit { flex: 1; }
-.cdet-hero { padding: 0 0 12px; text-align: center; }
+/* Identity is a row, not a centred crest: monogram, name, and kind on one
+   line, the same shape as the list row this pane was opened from. */
+.cdet-hero {
+  display: flex; align-items: center; gap: 12px;
+  padding: 2px 2px 10px; text-align: left;
+}
 .cdet-mono {
-  display: flex; align-items: center; justify-content: center;
-  width: 56px; height: 56px; margin: 0 auto 8px;
-  border: 1px solid var(--line); border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; flex: 0 0 38px;
+  width: 38px; height: 38px; margin: 0;
+  border: 1px solid var(--line-soft); border-radius: 9px;
   background: var(--chip-bg); color: var(--ink-2);
-  font-size: 1.5rem; font-weight: 700;
+  font-size: 1.0625rem; font-weight: 700;
 }
-.cdet-title { margin: 0; font-size: 1.0625rem; font-weight: 650; overflow-wrap: anywhere; }
-.cdet-title.is-mono {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9375rem;
+.cdet-hero-tx { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* What kind of thing this is, and where it is kept — the line the list row
+   spends on a subtitle. */
+.cdet-kind {
+  color: var(--muted); font-size: 0.75rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Groups carry the same muted register as the list's section heads, so the
+   pane reads in the same voice as the column beside it. */
+.cdet-sec-h {
+  margin: 16px 0 7px; font-size: 0.8125rem; font-weight: 650; color: var(--muted);
+}
+.cdet-hero + .cdet-sec-h { margin-top: 4px; }
+/* Title doubles as the rename control — looks like a heading, acts like a
+   button into the site/name field. */
+.cdet-title {
+  display: block; margin: 0; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; font-size: 0.9375rem; font-weight: 650;
+  overflow-wrap: anywhere; cursor: pointer; text-align: left;
+  border-radius: 6px;
+}
+.cdet-title:hover { color: var(--accent-ink); }
+.cdet-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Secret names run long and uppercase, so they take a step down from the
+   password-site title size. */
+.cdet-title.is-secret {
+  font-size: 0.875rem;
+}
+/* Cards now sit under their own heading, so their top margin comes from the
+   heading rather than the card. */
 .cdet-card {
-  margin-top: 10px; border: 1px solid var(--line-soft); border-radius: 10px;
+  margin-top: 0; border: 1px solid var(--line-soft); border-radius: 10px;
   background: var(--wash-2); overflow: hidden;
 }
+.cdet-card + .cdet-card { margin-top: 10px; }
 .cdet-row { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 7px 12px; }
 .cdet-row + .cdet-row { border-top: 1px solid var(--line-soft); }
 .cdet-lbl { flex: 0 0 auto; width: 6.75rem; color: var(--muted); font-size: 0.78125rem; }
@@ -2185,22 +2601,76 @@ textarea.cloud-paste-zone {
   gap: 8px; color: var(--ink-2); font-size: 0.8125rem; text-align: right;
   overflow-wrap: anywhere;
 }
-.cdet-val .val-wrap { max-width: 100%; }
+.cdet-inline-value {
+  min-width: 0; display: inline-flex; align-items: center; justify-content: flex-end;
+  gap: 8px; max-width: 100%;
+}
+.cdet-inline-value > span:first-child,
+.cdet-inline-value > code { min-width: 0; overflow-wrap: anywhere; }
+.cdet-inline-actions { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+.cdet-inline-btn {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 25px; height: 24px; padding: 0; color: var(--muted-2);
+  border: 1px solid var(--line-mid); border-radius: 7px; background: var(--btn-bg);
+}
+.cdet-inline-btn:hover { color: var(--ink-2); background: var(--hover); }
+.cdet-inline-btn svg { width: 12px; height: 12px; }
+.cdet-secret-value .sec-reveal-value { display: inline; text-align: left; user-select: text; }
+.cdet-agent-access {
+  display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 9px 12px;
+}
+.cdet-agent-access b {
+  flex: 1; min-width: 0; transform: translateY(-1px);
+  font-size: 0.8125rem; font-weight: 600;
+}
+.cdet-agent-access .switch:disabled { opacity: .4; cursor: default; }
+/* Mask hugs the dots and sits flush right; the Copy overlay is centered on
+   that same box (not a wider min-width slot that left the dots floating). */
+.cdet-val .val-wrap {
+  display: inline-flex; justify-content: flex-end; max-width: 100%;
+}
+.cdet-val .val-slot {
+  min-width: 0; justify-content: center;
+}
 .cdet-val .used-by-links { align-items: flex-end; }
 .cdet-val .used-by-link { text-align: right; }
 .cdet-muted { color: var(--muted); }
 /* A reveal lands on its own full-width line under the mask it belongs to. */
 .cdet-reveal { padding: 0 12px 10px; }
-/* The table-tuned pixel nudges sit the mask dots and the Copied status high
-   in the taller inspector rows, and the centered 92px slot floats the dots
-   off the value column's right edge. Re-seat all three here; the centered
-   Copy chip overlay stays where it is. */
-.cred-detail-pane .val-slot { justify-content: flex-end; }
-.cred-detail-pane .val-slot code { transform: none; }
-.cred-detail-pane .copied-badge { transform: translateY(1px); animation: copied-settle .22s ease; }
+/* Inspector / tray expansion rows are taller than table cells; drop the
+   baseline nudge so the dots and the centered Copy / Copying… / Copied
+   overlays share one center. The value column still right-aligns the slot. */
+.cred-detail-pane .val-slot,
+.dd-cred-exp .val-slot { min-width: 0; justify-content: center; }
+.cred-detail-pane .val-slot code,
 .dd-cred-exp .val-slot code { transform: none; }
-.dd-cred-exp .copied-badge { transform: none; animation: copied-settle .22s ease; }
+.cred-detail-pane .copied-badge,
+.cred-detail-pane .copying-badge,
+.dd-cred-exp .copied-badge,
+.dd-cred-exp .copying-badge { transform: none; animation: copied-settle .22s ease; }
+/* Overlay is centered on the mask; allow the chip to paint outside the
+   tight slot so a wider "Copying…" label does not shift the center. */
+.cred-detail-pane .val-overlay,
+.dd-cred-exp .val-overlay {
+  left: 50%; right: auto; top: 50%; bottom: auto;
+  width: max(100%, 4.75rem); height: max(100%, 1.5rem);
+  transform: translate(-50%, -50%);
+}
 @keyframes copied-settle { from { opacity: 0; } }
+/* A tool's own credentials, listed inside its inspector as rows of the
+   Secrets card: the name over its value, with copy and reveal at the row's
+   end. The name wraps rather than truncating, because a name like
+   MULTITOOL_AWS_AWS_ACCESS_KEY_ID is the whole identity of the row. Mask
+   and value share one size, so revealing does not resize the row. */
+.cd-secret-name { overflow-wrap: anywhere; }
+.cd-secret-act {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border-radius: 6px; color: var(--muted-2);
+}
+.cd-secret-act:hover { color: var(--ink-2); background: var(--hover); }
+.cd-secret-act svg { width: 14px; height: 14px; }
+.cd-secret-act.is-copying { opacity: .5; }
+
 .cdet-source { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
 .cdet-source-icon { display: inline-flex; color: var(--muted); }
 .cdet-source-tx { min-width: 0; }
@@ -2245,27 +2715,55 @@ textarea.cloud-paste-zone {
   .creds.detail-open .cred-detail-col { animation: none; }
 }
 
-/* The tray: the same monogram rows, expanding in place to copy actions. */
-.dd-creds { display: flex; flex-direction: column; gap: 6px; }
-.dd-cred-sec-h {
-  /* 13px left inset = the card border + its 4px padding + the row's 8px,
-     so the heads sit on the same vertical line as row content and the
-     search field's text. */
-  margin: 2px 13px -2px; color: var(--muted);
-  font-size: 0.65625rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
-}
+/* The tray: the same monogram rows, expanding in place to copy actions.
+   Match the tools ledge's top inset so the inventory keeps its position when
+   there are no tools above it. */
+.dd-creds { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .dd-cred-list {
   display: flex; flex-direction: column; padding: 4px;
   border: 1px solid var(--line); border-radius: 12px;
   background: var(--card-bg); box-shadow: var(--shadow-sm);
 }
-.dd-cred-head { display: flex; align-items: center; gap: 2px; }
-.dd-cred-head .dd-cred-toggle { flex: 1; min-width: 0; }
-.dd-cred.open .dd-cred-toggle { background: var(--hover); }
-.dd-cred-chev { display: inline-flex; color: var(--muted-2); }
-/* The open row's trailing slot swaps its chevron for the ⋯ action menu. */
+/* C1 icon-well cluster: name toggle grows; wells and optional ⋯ sit as
+   real siblings (not nested buttons inside the expand control). */
+.dd-cred-head {
+  display: flex; align-items: center; gap: 4px; min-width: 0;
+}
+.dd-cred-head .dd-cred-open {
+  flex: 1 1 auto; min-width: 0; width: auto; max-width: 100%;
+}
+.dd-cred.open .dd-cred-open { background: var(--hover); }
+.dd-cred-wells {
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  padding-right: 2px;
+}
+/* 24px circular wells: state markers and one-click copy / 2FA affordances. */
+.dd-cred-well {
+  width: 24px; height: 24px; padding: 0; border-radius: 999px; flex: 0 0 auto;
+  border: 1px solid var(--line-strong); background: var(--chip-bg);
+  color: var(--muted-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  font: inherit; cursor: pointer;
+}
+.dd-cred-well svg { width: 12px; height: 12px; display: block; }
+.dd-cred-well:hover:not(:disabled):not(.is-state) {
+  border-color: var(--line-strong); background: var(--hover); color: var(--ink-2);
+}
+.dd-cred-well:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dd-cred-well:disabled { opacity: .55; cursor: default; }
+.dd-cred-well.is-state { cursor: default; }
+.dd-cred-well.is-busy { opacity: .7; color: var(--muted); }
+.dd-cred-well.is-done { color: var(--ok-ink); border-color: var(--ok-solid); }
+.dd-cred-well.pill {
+  width: auto; padding: 0 7px; gap: 3px;
+  font-size: 0.65625rem; font-weight: 650; color: var(--muted); line-height: 1;
+}
+.dd-cred-well.pill svg { width: 11px; height: 11px; }
+.dd-cred-well.pill.on {
+  border-color: var(--accent); background: var(--accent-wash-2); color: var(--accent-ink);
+}
 .dd-cred-menu-btn {
-  flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+  width: 26px; height: 26px; padding: 0; flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 7px; background: transparent;
   color: var(--muted-2); cursor: pointer;
@@ -2273,6 +2771,17 @@ textarea.cloud-paste-zone {
 .dd-cred-menu-btn:hover { background: var(--hover-2); color: var(--ink-2); }
 .dd-cred-menu-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .dropdown-surface .cred-mono { width: 26px; height: 26px; border-radius: 7px; font-size: 0.8125rem; }
+/* The tray row's kind chip, in place of the desktop's letter monogram: a
+   padlock for passwords, a key-file mark for secrets. Muted by default so a
+   column of them reads as texture; the secret variant takes the accent tint
+   the inventory already uses for non-password credentials. */
+.cred-chip {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--chip-bg); color: var(--muted-2);
+}
+.cred-chip.is-secret { background: var(--accent-wash-2); color: var(--accent-ink); }
+.cred-chip svg { width: 14px; height: 14px; display: block; }
 .dropdown-surface .cred-row-tx b { font-size: 0.78125rem; }
 .dd-cred-exp {
   /* Flush with the row above it, not inset inside it. */
@@ -2280,10 +2789,99 @@ textarea.cloud-paste-zone {
   background: var(--wash-2); overflow: hidden;
 }
 .dd-cred-exp .cdet-lbl { width: 5.5rem; }
-.dd-creds > .credential-group-add { align-self: flex-end; }
-/* Empty tray: the note and the add link read as one centred block, so the
-   note gives up the padding that would otherwise strand the link below it. */
-.dd-creds > .credential-group-add.centered { align-self: center; margin-left: 0; text-align: center; }
+/* 2FA well menu: countdown rides the trailing edge of the copy row. */
+.dd-totp-copy {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+}
+.dd-totp-preview {
+  margin-left: auto; color: var(--muted); font-size: 0.6875rem; font-weight: 600;
+  letter-spacing: .02em; white-space: nowrap;
+}
+/* ---- tray tools: Option B slim bars ------------------------------------- */
+/* One narrow full-width bar per tool above credentials — icon, name, target,
+   live count; green dot when healthy, word pill when not. */
+.dd-tools { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 0; }
+/* Search already supplies a 12px bottom gap. Let either inventory consume
+   that gap instead of stacking its own top inset on top of it. */
+.dd-cat-search + .dd-tools,
+.dd-cat-search + .dd-creds { margin-top: 0; }
+/* Card of slim bars in the credential-list grammar. */
+.tools-band {
+  display: flex; flex-direction: column; padding: 2px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card-bg); box-shadow: var(--shadow-sm);
+}
+.tool-bar {
+  display: flex; align-items: center; gap: 9px; min-width: 0;
+  padding: 7px 8px; border-radius: 8px; cursor: pointer;
+}
+/* No rules between tray tool rows: at menu scale the card edge and the row
+   spacing already group them, and a hairline every 30px turned the band into
+   a table. The credential cards below it read the same way. */
+.tool-bar:hover { background: var(--hover); }
+.tool-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tool-bar.on { background: var(--accent-wash-2); }
+.tool-bar-ico {
+  display: inline-flex; flex: 0 0 auto; line-height: 0; color: var(--muted-2);
+}
+.tool-bar-ico svg { width: 13px; height: 13px; display: block; }
+.tool-bar-ico.kind-mcp { color: var(--kind-mcp-ink); }
+.tool-bar-ico.kind-db { color: var(--kind-db-ink); }
+.tool-bar-ico.kind-ssh { color: var(--kind-ssh-ink); }
+.tool-bar-ico.kind-api { color: var(--kind-api-ink); }
+/* Cloud reuses the soft blue of db — no dedicated kind token yet. */
+.tool-bar-ico.kind-cloud { color: var(--kind-db-ink); }
+/* Two lines per tool — name over destination — so the name never has to
+   compete with a long URL for the same horizontal run, and the row matches
+   the credential rows stacked beneath it. */
+.tool-bar-tx {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+}
+.tool-bar-tx b {
+  min-width: 0;
+  font-size: 0.78125rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tool-bar-dest {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--faint); font-size: 0.6875rem;
+}
+.tool-bar .cc-dot { width: 7px; height: 7px; margin-right: 3px; }
+.tool-bar .cc-pill { padding: 1px 7px; font-size: 0.65625rem; }
+/* A tool agents may not use is still listed — the switch is how it comes
+   back — but it stops competing with the live ones for attention. The switch
+   itself keeps full contrast: it is the control, not the state being dimmed. */
+.tool-bar.is-off .tool-bar-ico,
+.tool-bar.is-off .tool-bar-tx { opacity: 0.45; }
+.tool-bar-switch { flex: 0 0 auto; }
+.tool-bar-more {
+  display: flex; align-items: center; width: 100%; min-width: 0;
+  margin: 0; padding: 6px 8px; border: 0;
+  border-radius: 0 0 8px 8px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 0.71875rem; font-weight: 600;
+  cursor: pointer; text-align: left;
+}
+.tool-bar-more:hover { background: var(--hover); color: var(--ink-2); }
+.tool-bar-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The combined view's wrapper lays out nothing — it exists so .detail-open
+   can reveal the tool-detail drawer and scrim the Tools tab used to host
+   (their base narrow-layout styles live with .conn-detail-col above). */
+.dd-combined { display: contents; }
+@media (max-width: 720px) {
+  .dd-combined.detail-open .conn-detail-col { display: flex; animation: cd-slide .2s ease; }
+  /* Same half-strength scrim as the tray's .catalog drawer: the content
+     pane is the fixed containing block, so the pair stays inside it. */
+  .dd-combined.detail-open .conn-detail-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 6;
+    border: 0; padding: 0; background: rgba(15,17,30,.19); cursor: default;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dd-combined.detail-open .conn-detail-col { animation: none; }
+}
+
 .dd-creds > .muted-note.dd-cred-empty { padding-bottom: 12px; }
 .dropdown-surface .catalog { gap: 12px; }
 .dropdown-surface .cat-search { width: 100%; }
@@ -2306,11 +2904,11 @@ textarea.cloud-paste-zone {
 }
 .totp-live:hover { background: var(--accent-wash); }
 .totp-live-loading { color: var(--muted-2); cursor: default; }
+.totp-live > svg { width: 12px; height: 12px; color: var(--muted); }
 .totp-countdown { min-width: 2.2em; color: var(--muted); font-size: 0.65625rem; letter-spacing: 0; }
-/* The credential sheet's type segments and password extras. Three classes so
-   the breathing room under the tabs outranks `.seg.in-form`'s margin: 0. */
-.seg.in-form.secret-kind-seg { margin-bottom: 4px; }
-.secret-kind-seg .seg-btn { flex: 1; }
+/* Credentials page: Password / Secret picker under Add credential. */
+.add-credential-menu-wrap { position: relative; flex: 0 0 auto; }
+.add-credential-menu { min-width: 10rem; }
 /* The credential form is one Passwords-style inset group: hairline rows,
    label left, borderless value right. Errors and hints hang under their row
    inside the group, so a message never detaches from its field. */
@@ -2334,6 +2932,16 @@ textarea.cloud-paste-zone {
 }
 .sf-line input::placeholder { text-overflow: ellipsis; }
 .sf-row .field-error, .sf-row .field-hint { margin: 0 0 4px; padding-left: calc(6.5rem + 10px); }
+/* The Screen Recording denial belongs to the right-aligned Code value and
+   keeps its settings action inline as a quiet link. */
+.sf-row .totp-capture-error { text-align: right; }
+.field-error-link {
+  display: inline; margin: 0 0 0 .25em; padding: 0; border: 0;
+  background: transparent; color: var(--accent-text); font: inherit;
+  text-decoration: underline; cursor: pointer;
+}
+.field-error-link:hover { color: var(--accent-ink); }
+.field-error-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* A hint annotates the value, not the label, so it hangs off the right edge
    under the input it describes. */
 .sf-row .field-hint { text-align: right; }
@@ -2360,57 +2968,61 @@ textarea.cloud-paste-zone {
 .password-generator-menu-trigger svg { width: 12px; height: 12px; }
 .password-generator-menu-trigger[aria-expanded="true"] { border-color: var(--accent); z-index: 1; }
 .password-format-menu { min-width: 210px; }
+.secret-origin-line .cred-select { margin-left: auto; }
+/* Group is an action-sized picker, not another form field: give it the same
+   compact raised treatment as Generate and seat it at the row's right edge. */
+.secret-origin-line .cred-trigger {
+  width: auto; min-height: 28px; padding: 3px 9px;
+  border-color: var(--line-strong); background: var(--btn-bg);
+  box-shadow: var(--shadow-xs);
+}
+.secret-origin-line .cred-trigger:hover { background: var(--btn-hover); }
+.secret-origin-line .cred-name { font-size: 0.78125rem; }
+.secret-origin-line .cred-chevron { margin-left: 8px; }
 .label-note { margin-left: 4px; color: var(--muted-2); font-weight: 400; }
 .field-hint { margin-top: 4px; color: var(--muted); font-size: 0.71875rem; line-height: 1.45; }
 /* The QR-image picker under the 2FA input: a hidden real <input type=file>
    supplies the native chooser; the styled button forwards its click. Its
    own block keeps it off the remove-checkbox's line, right-aligned like the
    Generate row above so both under-field buttons hang off the same edge. */
-.totp-qr-row { display: flex; justify-content: flex-end; margin-top: 7px; }
+.totp-qr-row {
+  display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 7px;
+}
 .totp-qr-input { display: none; }
 .totp-qr-btn { display: inline-flex; align-items: center; gap: 6px; }
 .totp-qr-btn svg { color: var(--muted); }
+/* Failed capture / unreadable image: show the crop so the user can tell
+   whether they missed the QR before trying again. */
+.totp-qr-preview {
+  display: flex; gap: 10px; align-items: flex-start; margin-top: 8px;
+  padding: 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-2, var(--panel));
+}
+.totp-qr-preview-thumb {
+  width: 72px; height: 72px; object-fit: contain; flex: 0 0 auto;
+  border-radius: 4px; background: #fff; border: 1px solid var(--line);
+}
+.totp-qr-preview-body { min-width: 0; flex: 1 1 auto; }
+.totp-qr-preview-label {
+  color: var(--muted); font-size: 0.71875rem; line-height: 1.4;
+}
+.totp-qr-preview-status {
+  margin-top: 3px; color: var(--danger, #c0392b); font-size: 0.78125rem; line-height: 1.4;
+}
+.totp-qr-preview-actions {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px;
+}
 label.totp-remove-check {
   display: inline-flex; align-items: center; gap: 7px; margin-top: 7px;
   color: var(--muted); font-size: 0.78125rem; font-weight: 400; cursor: pointer;
 }
 .totp-remove-check input { margin: 0; accent-color: var(--accent); }
 
-/* The status bar: vault state compressed into one line of chrome flush with
-   the window bottom, outside the scroll pane, so it costs the table nothing
-   and managing vaults never reflows it. */
-.secrets-statusbar {
-  position: relative; flex: 0 0 auto;
-  display: flex; align-items: center; gap: 10px;
-  height: 35px; padding: 0 14px 2px;
-  border-top: 1px solid var(--line);
-  /* No fill of its own: the bar sits on the same surface as the page
-     content above it, in the main window and the tray alike. */
-  background: transparent; color: var(--muted); font-size: 0.75rem;
-}
-.sb-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sb-spacer { flex: 1; }
-.sb-vaults {
-  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
-  border: 0; background: transparent; padding: 4px 8px; border-radius: 7px;
-  color: var(--ink-3); font: inherit; font-size: 0.75rem; font-weight: 600;
-  cursor: pointer;
-}
-.sb-vaults:hover, .sb-vaults.on { background: var(--hover); }
-.sb-vaults:disabled { opacity: .55; cursor: default; }
-.sb-vaults:disabled:hover { background: transparent; }
-.sb-1p { display: inline-flex; }
-.sb-1p svg { width: 13px; height: 13px; }
-.sb-chev { display: inline-flex; transition: transform .15s ease; }
-.sb-chev svg { width: 12px; height: 12px; color: var(--muted-2); }
-.sb-chev.open { transform: rotate(180deg); }
-@media (prefers-reduced-motion: reduce) { .sb-chev { transition: none; } }
-/* The popover anchors upward off the bar's right end. Menus portal to
-   #overlays at z-index 16; the panel sits just under them. */
+/* The vaults popover drops from the titlebar control, matching broker-menu. */
 /* "Edit connection method…" is the menu's longest label; never fold it. */
 .vault-menu-wrap .menu-item { white-space: nowrap; }
 .vaults-panel {
-  position: absolute; right: 12px; bottom: 42px; z-index: 15;
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 60;
   width: min(350px, calc(100vw - 24px));
   border: 1px solid var(--line-mid); border-radius: 10px; overflow: hidden;
   background: var(--panel); box-shadow: var(--shadow-menu);
@@ -2452,8 +3064,13 @@ label.totp-remove-check {
   display: inline-flex; align-items: center; gap: 6px;
 }
 .onepassword-integration-actions { flex: 0 0 auto; }
+.linked-secret-source-wrap { margin-top: 10px; }
+.linked-secret-source-label {
+  margin: 0 2px 5px; color: var(--muted);
+  font-size: 0.71875rem; line-height: 1.4;
+}
 .linked-secret-source {
-  display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; padding: 10px;
+  display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 10px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--wash);
 }
 .linked-secret-source > span { display: inline-flex; color: var(--accent-ink); }
@@ -2783,25 +3400,15 @@ label.totp-remove-check {
 .cc-test.running { opacity: .8; }
 /* Resources the server advertises, listed under the connection the same
    way credentials and wirings are. */
-.mcp-res-head {
-  margin-top: 7px; color: var(--muted); font-size: 0.65625rem; font-weight: 700;
-  letter-spacing: .04em; text-transform: uppercase;
-}
-.mcp-res { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; min-width: 0; }
-/* The server names its own resources, at whatever length it likes. The name
-   keeps its natural width up to 60% of the row and truncates past that,
-   so a long one gives the URI beside it something to live in instead of
-   pushing the row off the panel. Both carry a title with the full text. */
-.mcp-res b {
-  flex: 0 0 auto; max-width: 60%; overflow: hidden;
-  font-size: 0.71875rem; font-weight: 600;
+/* A resource the server advertises, as a row of the Resources card: the
+   name it gave, over the URI it lives at. The URI truncates rather than
+   wrapping — it is an identifier to recognise, not to read — and both
+   carry a title with the full text. */
+.mcp-res code {
+  overflow: hidden; color: var(--muted-2); font-size: 0.6875rem;
   text-overflow: ellipsis; white-space: nowrap;
 }
-.mcp-res code {
-  display: block; margin-top: 0; overflow: hidden; color: var(--muted-2);
-  font-size: 0.6875rem; text-overflow: ellipsis; white-space: nowrap;
-}
-.mcp-res-more { margin-top: 3px; color: var(--muted); font-size: 0.6875rem; }
+.mcp-res-more { color: var(--muted); font-size: 0.6875rem; }
 
 /* ----------------------------- MCP sign-in sheet -------------------------- */
 .auth-sheet .auth-target { margin: -6px 0 10px; }
@@ -2928,13 +3535,16 @@ label.totp-remove-check {
 
 /* Connection state at a glance: green = agents on, grey = off, amber = needs attention. */
 /* The enable/disable switch — the detail header's master control. */
+/* One definition, at the size the mockups draw: a second, smaller .switch
+   used to sit earlier in this file and lose the cascade except for its
+   margin — which is why settings rows carry the 2px nudge. */
 .switch{
-  position: relative; flex: 0 0 auto; width: 34px; height: 20px; padding: 0;
-  border: none; border-radius: 999px; background: var(--hover-2); cursor: pointer;
-  transition: background .15s ease;
+  position: relative; flex: 0 0 auto; margin-top: 2px; width: 36px; height: 22px;
+  padding: 0; border: none; border-radius: 999px; background: var(--hover-2);
+  cursor: pointer; transition: background .15s ease;
 }
 .switch::after{
-  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
   border-radius: 50%; background: #fff; box-shadow: var(--shadow-knob);
   transition: left .15s ease;
 }
@@ -3050,6 +3660,13 @@ label.totp-remove-check {
 .palette-verb{ flex: 0 0 auto; font-size: 0.71875rem; font-weight: 650;
   color: var(--accent-text); opacity: 0; }
 .palette-row:hover .palette-verb, .palette-row.sel .palette-verb{ opacity: 1; }
+/* Announced but not yet available: present so the catalog shows where it is
+   going, grayed so nothing suggests it can be clicked. */
+.palette-row.soon{ cursor: default; }
+.palette-row.soon:hover{ background: none; }
+.palette-row.soon .cat-ico, .palette-row.soon .palette-tx{ opacity: .45; }
+.palette-soon{ flex: 0 0 auto; padding: 2px 8px; border-radius: 9px;
+  font-size: 0.6875rem; font-weight: 650; background: var(--chip-bg); color: var(--muted); }
 .palette-hints{ display: flex; gap: 16px; padding: 8px 14px;
   border-top: 1px solid var(--line); font-size: 0.6875rem; color: var(--muted-2); }
 .palette-hints kbd{ font-family: inherit; background: var(--chip-bg); border-radius: 4px;

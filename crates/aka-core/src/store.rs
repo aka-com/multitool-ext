@@ -31,7 +31,7 @@ use crate::paths::Paths;
 use crate::template::{is_valid_secret_name, Template};
 use crate::types::{
     CloudProvider, Connection, ConnectionConfig, ConnectionKind, SecretKind, SecretMeta,
-    SecretSource, SecretValue, Settings, SignerSpec, MAX_CLOUD_SESSION_TTL_SECS,
+    SecretOrigin, SecretSource, SecretValue, Settings, SignerSpec, MAX_CLOUD_SESSION_TTL_SECS,
     MIN_CLOUD_SESSION_TTL_SECS,
 };
 use crate::vault::{SecretVault, VaultAttrs};
@@ -375,6 +375,7 @@ impl Store {
             updated_at: now,
             source: SecretSource::Local,
             kind,
+            origin: SecretOrigin::User,
             site,
             username,
             totp_vault_id: totp.is_some().then(Uuid::new_v4),
@@ -445,6 +446,28 @@ impl Store {
         if let Some(username) = username {
             secret.username = username.filter(|username| !username.is_empty());
         }
+        secret.updated_at = Utc::now();
+        let meta = secret.clone();
+        self.commit(&mut state, next)?;
+        Ok(meta)
+    }
+
+    /// Move a secret between the Your Secrets and Connection Secrets lists.
+    /// Grouping is presentation metadata, so it applies to any kind or
+    /// source; setting the current value is a no-op that leaves
+    /// `updated_at` alone.
+    pub fn set_secret_origin(&self, id: &Uuid, origin: SecretOrigin) -> Result<SecretMeta> {
+        let mut state = self.state.lock().unwrap();
+        let mut next = state.clone();
+        let secret = next
+            .secrets
+            .iter_mut()
+            .find(|s| &s.id == id)
+            .ok_or(CoreError::SecretNotFound)?;
+        if secret.origin == origin {
+            return Ok(secret.clone());
+        }
+        secret.origin = origin;
         secret.updated_at = Utc::now();
         let meta = secret.clone();
         self.commit(&mut state, next)?;
@@ -1006,6 +1029,7 @@ impl Store {
                 reference: Box::new(reference),
             },
             kind: SecretKind::Secret,
+            origin: SecretOrigin::User,
             site: None,
             username: None,
             totp_vault_id: None,
@@ -1715,6 +1739,9 @@ fn prepare_connection_with_secrets(
             updated_at: now,
             source: SecretSource::Local,
             kind: SecretKind::Secret,
+            // Born inside a connection's setup: listed under Connection
+            // Secrets until the user says otherwise.
+            origin: SecretOrigin::Connection,
             site: None,
             username: None,
             totp_vault_id: None,
@@ -2917,6 +2944,42 @@ mod tests {
         assert!(matches!(error, CoreError::InvalidConnectionConfig(_)));
         assert!(store.secret_by_name("ORPHAN_TOKEN").is_none());
         assert_eq!(vault.len(), before_invalid);
+    }
+
+    #[tokio::test]
+    async fn connection_created_secrets_group_apart_and_can_be_regrouped() {
+        let (store, _vault, _dir) = store().await;
+        // Directly added secrets belong to the user's own list.
+        let own = store.add_secret("GITHUB_API_KEY", val("ghp")).unwrap();
+        assert_eq!(own.origin, SecretOrigin::User);
+        // Connection-first setup lands its credential in Connection Secrets.
+        let (minted, _connection) = store
+            .add_connection_with_secret(
+                "API_TOKEN",
+                val("api-token"),
+                api_spec(
+                    "tool-api",
+                    "api.example.com",
+                    "Authorization: Bearer {{API_TOKEN}}",
+                ),
+            )
+            .unwrap();
+        assert_eq!(minted.origin, SecretOrigin::Connection);
+        // The user can move it into their own list (and back) from the
+        // secret's editor; the choice persists in the index.
+        let moved = store
+            .set_secret_origin(&minted.id, SecretOrigin::User)
+            .unwrap();
+        assert_eq!(moved.origin, SecretOrigin::User);
+        assert_eq!(
+            store.secret_by_id(&minted.id).unwrap().origin,
+            SecretOrigin::User
+        );
+        // Setting the current value is a no-op that leaves updated_at alone.
+        let unchanged = store
+            .set_secret_origin(&minted.id, SecretOrigin::User)
+            .unwrap();
+        assert_eq!(unchanged.updated_at, moved.updated_at);
     }
 
     #[tokio::test]

@@ -2102,6 +2102,7 @@ fn cmd_secret_rename(name: String, new_name: String, root: Option<PathBuf>, url:
             new_site: None,
             new_username: None,
             new_totp: None,
+            new_origin: None,
         },
     ));
     ack(format!("renamed secret {name} → {new_name}"));
@@ -2126,6 +2127,7 @@ fn cmd_secret_replace(
             new_site: None,
             new_username: None,
             new_totp: None,
+            new_origin: None,
         },
     ));
     ack(format!("replaced the value of secret {name} ({byte_len} bytes)"));

@@ -184,9 +184,17 @@ is why it only appears on this path — and embeds the profile at
 Get the profile from the Apple developer portal: a **Developer ID** profile
 for app id `com.aka.desktop` with the Keychain Sharing capability enabled.
 
-Nothing about the app's behaviour changes between the two — same entitlement,
-same access group, same runtime probe. The only question either answers is
-whether macOS honours the entitlement at all, so try the default first.
+Time Sensitive notifications are another restricted capability. The build
+only adds `com.apple.developer.usernotifications.time-sensitive` when the
+selected profile explicitly authorizes it. Without that grant, ordinary
+notifications continue to work but Time Sensitive delivery is unavailable;
+signing the entitlement anyway would make `taskgated` reject the entire app
+before it starts.
+
+Nothing about the app's Keychain behaviour changes between the two — same
+access group, same runtime probe. The only question either answers for secret
+storage is whether macOS honours the entitlement at all, so try the default
+first.
 
 Human presence is not independently enforced for vault reads. The signed app
 reads its data-protection Keychain items without an OS dialog; submitting a

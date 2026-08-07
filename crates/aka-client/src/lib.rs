@@ -1542,6 +1542,7 @@ mod tests {
                     new_site: None,
                     new_username: None,
                     new_totp: None,
+                    new_origin: None,
                 },
             )
             .await

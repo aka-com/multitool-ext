@@ -1660,9 +1660,9 @@ async fn handle_conn(
         return Ok(());
     }
 
-    // Confirmation can wait for 90 seconds. Resolve again after it and use
-    // that fresh record, while requiring the exact authority the prompt
-    // described to still be current.
+    // Confirmation can wait for the full approval_timeout (default five
+    // minutes). Resolve again after it and use that fresh record, while
+    // requiring the exact authority the prompt described to still be current.
     let Ok(connection) = state
         .broker
         .store
