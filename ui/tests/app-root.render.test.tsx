@@ -141,17 +141,19 @@ test('the application root boots against the mock bridge', () => {
   assert.ok(gear, 'the app menu replaces the sidebar');
   testingLibrary.fireEvent.click(gear);
   const items = [...document.querySelectorAll<HTMLButtonElement>('.settings-menu [data-act="tab"]')];
+  assert.equal(document.querySelectorAll('.settings-menu .menu-item svg').length, 0,
+    'the desktop app menu uses text-only rows');
   assert.deepEqual(
     // Activity carries its waiting-request count inline.
     items.map((item) => item.querySelector('.menu-count')
       ? item.textContent?.replace(/\d+$/, '').trim() : item.textContent?.trim()),
-    ['Inventory', 'Activity Log', 'Connect agents'],
+    ['Credentials', 'Activity Log', 'Connect agents'],
   );
   // The menu carries the way back as well as the way out.
   assert.equal(items[0]?.dataset.tab, 'secrets');
   assert.equal(items[0]?.classList.contains('on'), true);
   testingLibrary.fireEvent.click(gear);
-  // The title bar is the inventory's header: no second strip under it, so
+  // The title bar is the Credentials header: no second strip under it, so
   // search and Add ride the same bar as the title.
   const bar = document.querySelector<HTMLElement>('.dw-titlebar');
   assert.ok(bar);
@@ -166,7 +168,7 @@ test('the application root boots against the mock bridge', () => {
     'the inspector fold is gone; the pane is always on screen');
 });
 
-test('secondary pages offer a titlebar Back button to Inventory', async () => {
+test('secondary pages offer a titlebar Back button to Credentials', async () => {
   for (const [tab, title] of [['activity', 'Activity log']] as const) {
     goToTab(tab);
     const heading = await testingLibrary.waitFor(() => {
@@ -183,7 +185,7 @@ test('secondary pages offer a titlebar Back button to Inventory', async () => {
     testingLibrary.fireEvent.click(back);
     await testingLibrary.waitFor(() => {
       assert.equal(document.querySelector('.dw-head'), null);
-      assert.ok(document.querySelector('#secret-search'), 'Back returns to Inventory');
+      assert.ok(document.querySelector('#secret-search'), 'Back returns to Credentials');
       assert.equal(testingLibrary.queryByRole(titlebar, 'button', { name: 'Back' }), null);
     });
   }
@@ -283,7 +285,7 @@ test('the credential library always groups passwords apart from secrets', async 
   const sectionHeads = [...document.querySelectorAll<HTMLElement>('.creds-sec-h')];
   assert.deepEqual(
     sectionHeads.map((head) => head.textContent),
-    // Tools head the merged inventory, above the credentials they use.
+    // Tools head Credentials, above the credentials they use.
     ['Agent Tools MCPs, APIs, Cloud IAMs', 'Passwords', 'Secrets'],
   );
   assert.equal(sectionHeads[0]?.querySelector('.agent-tools-context')?.textContent,
@@ -292,7 +294,7 @@ test('the credential library always groups passwords apart from secrets', async 
   assert.equal(document.querySelector('.credential-group-add'), null,
     'the per-group add links are gone from the desktop listing');
 
-  // The category tiles scope the list and count the whole inventory.
+  // The category tiles scope and count the whole Credentials page.
   const tiles = [...document.querySelectorAll<HTMLElement>('.cred-tile')];
   assert.deepEqual(
     tiles.map((tile) => tile.querySelector('.cred-tile-label')?.textContent),
@@ -308,7 +310,7 @@ test('the credential library always groups passwords apart from secrets', async 
   assert.deepEqual(hosts, ['google.com', 'x.com']);
   assert.ok(document.body.textContent?.includes('raykyri@gmail.com'));
   assert.equal(document.querySelectorAll('.flat-conn-wrap.sel, .cred-row.on').length, 1,
-    'the unified inventory has only one selected row');
+    'Credentials has only one selected row');
   const firstConnection = document.querySelector<HTMLElement>('.flat-conn-row');
   assert.ok(firstConnection);
   testingLibrary.fireEvent.click(firstConnection);

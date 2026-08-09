@@ -49,7 +49,7 @@ export type SettingsSurface = 'desktop' | 'menubar';
 
 /** The Credentials page's sidebar-tile filter scopes. The tile presentation
  * (labels, icons, order) lives with the view in app.tsx. */
-// 'connections' scopes the unified inventory to tools; the rest scope the
+// 'connections' scopes the Credentials page to tools; the rest scope the
 // credentials inside it.
 export type SecretCategory =
   'all' | 'connections' | 'passwords' | 'secrets' | 'codes' | 'onepassword';

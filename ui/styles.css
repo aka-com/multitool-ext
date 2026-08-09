@@ -286,13 +286,13 @@
 }
 .dd-appicon svg{ width: 18px; height: 18px; stroke-width: 1.9; }
   .dd-title{ font-size: 0.96875rem; font-weight: 700; }
-  /* Tray header title: 1px smaller than the desktop brand. */
-  .dropdown-surface .dd-title{ font-size: 0.90625rem; }
+  /* Tray header title is compact enough to share one menu-scale line. */
+  .dropdown-surface .dd-title{ font-size: 0.84375rem; font-weight: 650; }
   .dd-sub{ font-size: 0.8125rem; color: var(--muted); margin-top: 1px; display: flex; align-items: center; gap: 5px; }
   .dd-sub .dot{ width: 7px; height: 7px; border-radius: 50%; background: #30c94e; box-shadow: 0 0 4px rgba(48,201,78,.7); display: inline-block; }
   .ready-status{ gap: 6px; }
   .ready-state{ display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-  .dd-head{ display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; }
+  .dd-head{ display: flex; align-items: center; gap: 7px; padding: 9px 12px 8px; }
   .dd-identity{ flex: 1; min-width: 0; }
   /* Tray header: one line, not a brand block. The dot carries broker health,
      the name anchors the panel, and the scope says which broker is managed.
@@ -327,7 +327,7 @@
 /* No sidebar: the window is one chrome bar over one content pane. The
    destinations that column used to hold (Activity Log, Connect agents) hang
    off the title bar's app menu, and Tools folded into the credential
-   inventory, so a whole column of navigation stopped earning its width. */
+   Credentials page, so a whole column of navigation stopped earning its width. */
 .dw-body{ flex: 1; display: flex; min-height: 0; }
   .nav-count{
   flex: 0 0 auto; min-width: 19px; height: 19px; padding: 0 5px;
@@ -351,7 +351,7 @@
 /* The window uses titleBarStyle "Overlay": the native macOS traffic lights
    float over the top-left of this bar. With the sidebar gone this is the
    window's only chrome, so it carries the app name at the leading edge (clear
-   of the lights), the inventory's own controls in the middle, and the broker
+   of the lights), the Credentials controls in the middle, and the broker
    switcher plus app menu at the trailing edge — one unified toolbar rather
    than a title strip over a second header row. */
 .dw-titlebar{
@@ -377,7 +377,7 @@
   .dw-titlebar .dw-toolbar-mid .tb-search{
   flex: 0 1 22rem; min-width: 6rem;
   height: calc(var(--toolbar-ctl) + 4px); min-height: calc(var(--toolbar-ctl) + 4px);
-  margin: 0;
+  margin: 0; transform: translateY(1px);
 }
   /* Every control on this bar is one square, the height of the search field
      beside it: mismatched heights in a single run read as misalignment. */
@@ -426,7 +426,7 @@
   .broker-btn:hover, .broker-btn.on{ background: var(--hover); border-color: var(--line); }
   .broker-btn:disabled{ opacity: .55; cursor: default; }
   .broker-btn:disabled:hover{ background: transparent; }
-  /* Secondary routes return to Inventory from the window's actual header.
+  /* Secondary routes return to Credentials from the window's actual header.
      It shares the broker/vault shell and the toolbar control height, so it
      aligns exactly with the local/remote switcher beside it. */
   .dw-titlebar-controls .titlebar-back-btn{
@@ -649,7 +649,12 @@
      visual insets read 14px, keeping content flush with the tab bar above. */
   flex: 1; overflow-y: scroll; overflow-x: hidden; padding: 0 6px 12px 14px;
 }
-  .dd-content{ position: relative; min-height: 0; }
+  /* The menu-bar panel uses the platform's overlay scrollbar so it disappears
+     at rest; without a reserved track, keep the full trailing inset here. */
+  .dropdown-surface .dd-content{
+  position: relative; min-height: 0; overflow-y: auto;
+  padding: 0 10px 8px;
+}
   /* The Activity toggle has no tab strip below the tray header, so its scroll
      pane supplies the breathing room that other views get from their own
      leading bands. Keep this on the pane so requests and live sessions share
@@ -671,8 +676,10 @@
   width: min(100%, calc(var(--content-max) - 2rem));
   margin-left: auto; margin-right: auto;
 }
-  .content::-webkit-scrollbar, .dd-global::-webkit-scrollbar{ width: 8px; }
-  .content::-webkit-scrollbar-thumb, .dd-global::-webkit-scrollbar-thumb{ background: var(--scroll-thumb); border-radius: 4px; }/* ---- global band ------------------------------------------------------ */
+  .dw-main .content::-webkit-scrollbar, .dd-global::-webkit-scrollbar,
+  .creds-list-col::-webkit-scrollbar{ width: 8px; }
+  .dw-main .content::-webkit-scrollbar-thumb, .dd-global::-webkit-scrollbar-thumb,
+  .creds-list-col::-webkit-scrollbar-thumb{ background: var(--scroll-thumb); border-radius: 4px; }/* ---- global band ------------------------------------------------------ */
 /* Reserve the scrollbar track here too (see .content): the Active sessions and
    "Waiting on you" bands fill past their max-height with many items, and holding
    the 8px keeps the band from jumping sideways when its scrollbar appears. */
@@ -723,7 +730,7 @@
   /* Seated in a list column, the column's own gap carries the spacing. */
   .tools-list > .request-banner, .creds-list-col > .request-banner{ margin: 0; }
   /* The window's notice is chrome too: it spans the content pane rather
-     than floating as the first card of the inventory, and its two edges use
+     than floating as the first card of Credentials, and its two edges use
      one hairline token so neither side reads heavier than the other.
      Urgency stays with the wash and the icon. */
   .dw-main .dd-global.request-route-only{
@@ -737,24 +744,18 @@
   .dw-main .dd-global.request-route-only > .request-banner.is-urgent{ box-shadow: none; }
   /* Tray: menu-scale copy, aligned with the section groups below it. */
   .dropdown-surface .request-banner-copy b{ font-size: 0.8125rem; font-weight: 600; }
-  /* In the tray the notice is chrome, not content: it spans the panel edge
-     to edge under the header instead of floating as a card inside the list,
-     so it reads as the panel telling you something rather than as the first
-     row of the inventory. The hairline (not the amber border) does the
-     separating, matching how the header divides from the body. */
-  .dropdown-surface .dd-global.request-route-only{
-  margin: 0; padding: 0; border-bottom: 0;
+  /* In the tray a request is an inset card at the head of the scrolling
+     content, so it moves naturally with Connections and credentials. */
+  .dropdown-surface .dd-content > .dd-global.request-route-only{
+  width: calc(100% - 8px); margin: 8px 4px 2px; padding: 0;
+  border: 0; overflow: visible;
 }
-  .dropdown-surface .dd-global.request-route-only > .request-banner{
-  margin: 0; border: 0; border-radius: 0; padding: 9px 14px;
-  /* The band's two edges are the same hairline: the rule above it is the
-     content container's border-top, so this bottom border must use the same
-     token — an amber or red edge on one side only reads as a rendering bug.
-     Urgency is carried by the wash and the icon, not by the separators. */
-  border-bottom: 1px solid var(--line);
+  .dropdown-surface .dd-content > .dd-global.request-route-only > .request-banner{
+  margin: 0; padding: 9px 11px;
+  border: 1px solid var(--amber-border); border-radius: 9px;
 }
-  .dropdown-surface .dd-global.request-route-only > .request-banner.is-urgent{
-  box-shadow: none;
+  .dropdown-surface .dd-content > .dd-global.request-route-only > .request-banner.is-urgent{
+  border-color: var(--danger-border);
 }
   .request-banner:hover{ filter: brightness(.985); }
   .request-banner:focus-visible{ outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1819,7 +1820,7 @@
 /* Selection stays visible without adding a rail along the list edge. */
 .flat-conn-wrap.sel { background: var(--accent-wash); }
 
-/* Inside the merged inventory a tool row is a credential row that happens to
+/* On the merged Credentials page a tool row is a credential row that happens to
    be a tool: same 30px chip, same name-over-subtitle block, same 8px inset
    and rounded hover, same accent fill when selected. Only the trailing
    status word differs, because only tools have one. Keeping two row shapes
@@ -2382,20 +2383,40 @@ textarea.cloud-paste-zone {
    bar under its own heading. Filtering to Agent Tools alone hid it: with
    nothing to overflow, nothing shrank. */
 .creds-list-col > * { flex: none; }
-/* On a wide inventory the list and inspector are separate vertical panes.
+/* On a wide Credentials page the list and inspector are separate vertical panes.
    The left pane keeps the page's elastic scrolling; the right pane consumes
    the full available content height and therefore never rides that bounce. */
 @media (min-width: 721px) {
-  .dw-main .inventory-content { min-height: 0; overflow-y: hidden; }
-  .dw-main .inventory-content > .creds { height: 100%; }
-  .dw-main .inventory-content .creds-split {
+  /* Let the Credentials panes reach the window edge. The ordinary page inset
+     belongs inside the scrolling list here; leaving it on .content shortens
+     the pane and makes its final credential card look clipped. */
+  .dw-main .credentials-content {
+    min-height: 0; overflow-y: hidden;
+    padding-right: 14px; padding-bottom: 0;
+  }
+  .dw-main .credentials-content > .creds { height: 100%; }
+  .dw-main .credentials-content .creds-split {
     height: 100%; min-height: 0; align-items: stretch; padding-bottom: 0;
+    /* The list column below carries the scrollbar's gutter in its own padding,
+       so the split hands that much of its gap over. The two always sum to 20:
+       card width is (column - padding), and the column is (split - gap), so
+       holding the sum holds both the cards and the inspector exactly where
+       they were. The distance a reader sees, card edge to inspector, is that
+       same 20px whichever side of the scroll boundary it sits on. */
+    gap: 6px;
   }
-  .dw-main .inventory-content .creds-list-col {
-    min-height: 0; overflow-y: auto; overscroll-behavior-y: contain;
-    padding-bottom: 14px;
+  .dw-main .credentials-content .creds-list-col {
+    min-height: 0; overflow-y: scroll; overscroll-behavior-y: contain;
+    /* macOS paints its overlay scrollbar inside this box and gives it no
+       layout width: a 6px knob held 3px off the scrollport edge, claiming the
+       trailing 9px. Anything narrower than that and the knob is drawn on the
+       credential cards rather than beside them. The ::-webkit-scrollbar track
+       below does not save us — it only applies when the reader has asked for
+       always-visible scrollbars, and then it takes real width anyway. 14px is
+       the page's own inset, and it leaves the knob 5px clear of the cards. */
+    padding-right: 14px; padding-bottom: 24px;
   }
-  .dw-main .inventory-content .cred-detail-col {
+  .dw-main .credentials-content .cred-detail-col {
     position: static; height: 100%; max-height: none;
   }
 }
@@ -2406,12 +2427,12 @@ textarea.cloud-paste-zone {
 
 /* Category tiles: the Passwords app's sidebar scopes, compressed into the
    tile grid its own compact layout uses (the app's left edge already
-   belongs to navigation). Counts read the inventory, not the search. */
+   belongs to navigation). Counts read Credentials, not the search. */
 /* Category tiles: two columns of filled colour discs — one hue per scope —
    with the label and a trailing count. The selected scope takes a solid
    accent fill: with only five or six of these, the strong marker is easier
    to find at a glance than a wash, and it matches the app's other
-   pick-one-of-a-few controls. Counts read the inventory, not the search. */
+   pick-one-of-a-few controls. Counts read Credentials, not the search. */
 .cred-tiles {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px; margin-bottom: 8px;
@@ -2740,13 +2761,13 @@ textarea.cloud-paste-zone {
 }
 
 /* The tray: the same monogram rows, expanding in place to copy actions.
-   Match the tools ledge's top inset so the inventory keeps its position when
+   Match the tools ledge's top inset so Credentials keeps its position when
    there are no tools above it. */
 .dd-creds { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .dd-cred-list {
-  display: flex; flex-direction: column; padding: 4px;
-  border: 1px solid var(--line); border-radius: 12px;
-  background: var(--card-bg); box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; padding: 0;
+  border: 0; border-radius: 0;
+  background: transparent; box-shadow: none;
 }
 /* C1 icon-well cluster: name toggle grows; wells and optional ⋯ sit as
    real siblings (not nested buttons inside the expand control). */
@@ -2761,10 +2782,14 @@ textarea.cloud-paste-zone {
   display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
   padding-right: 2px;
 }
-/* 24px circular wells: state markers and one-click copy / 2FA affordances. */
+/* Give external-vault provenance a little separation from the key action it
+   qualifies without loosening the rest of the menu-bar action cluster. */
+.dd-cred-wells .s-source-icon { margin-right: 2px; }
+/* Mockup-scale action buttons: compact rounded squares instead of the old
+   circular key wells. The 2FA control remains a pill below. */
 .dd-cred-well {
-  width: 24px; height: 24px; padding: 0; border-radius: 999px; flex: 0 0 auto;
-  border: 1px solid var(--line-strong); background: var(--chip-bg);
+  width: 24px; height: 24px; padding: 0; border-radius: 7px; flex: 0 0 auto;
+  border: 1px solid var(--line-mid); background: var(--btn-bg);
   color: var(--muted-2);
   display: inline-flex; align-items: center; justify-content: center;
   font: inherit; cursor: pointer;
@@ -2779,7 +2804,7 @@ textarea.cloud-paste-zone {
 .dd-cred-well.is-busy { opacity: .7; color: var(--muted); }
 .dd-cred-well.is-done { color: var(--ok-ink); border-color: var(--ok-solid); }
 .dd-cred-well.pill {
-  width: auto; padding: 0 7px; gap: 3px;
+  width: auto; padding: 0 7px; gap: 3px; border-radius: 999px;
   font-size: 0.65625rem; font-weight: 650; color: var(--muted); line-height: 1;
 }
 .dd-cred-well.pill svg { width: 11px; height: 11px; }
@@ -2798,7 +2823,7 @@ textarea.cloud-paste-zone {
 /* The tray row's kind chip, in place of the desktop's letter monogram: a
    padlock for passwords, a key-file mark for secrets. Muted by default so a
    column of them reads as texture; the secret variant takes the accent tint
-   the inventory already uses for non-password credentials. */
+   Credentials already uses for non-password credentials. */
 .cred-chip {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
   width: 26px; height: 26px; border-radius: 7px;
@@ -2806,7 +2831,11 @@ textarea.cloud-paste-zone {
 }
 .cred-chip.is-secret { background: var(--accent-wash-2); color: var(--accent-ink); }
 .cred-chip svg { width: 14px; height: 14px; display: block; }
-.dropdown-surface .cred-row-tx b { font-size: 0.78125rem; }
+.dropdown-surface .cred-row {
+  gap: 9px; padding: 7px 8px;
+}
+.dropdown-surface .cred-row-tx b { font-size: 0.8125rem; }
+.dropdown-surface .cred-row-tx small { font-size: 0.6875rem; }
 .dd-cred-exp {
   /* Flush with the row above it, not inset inside it. */
   margin: 2px 0 8px; border: 1px solid var(--line-soft); border-radius: 9px;
@@ -2825,18 +2854,19 @@ textarea.cloud-paste-zone {
 /* One narrow full-width bar per tool above credentials — icon, name, target,
    live count; green dot when healthy, word pill when not. */
 .dd-tools { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 0; }
-/* Search already supplies a 12px bottom gap. Let either inventory consume
+/* Search already supplies a 12px bottom gap. Let either credential list consume
    that gap instead of stacking its own top inset on top of it. */
 .dd-cat-search + .dd-tools,
 .dd-cat-search + .dd-creds { margin-top: 0; }
-/* Card of slim bars in the credential-list grammar. */
+/* Connections are flat rows on the tray surface, matching the credential
+   groups below instead of nesting another outlined card in the panel. */
 .tools-band {
-  display: flex; flex-direction: column; padding: 2px;
-  border: 1px solid var(--line); border-radius: 12px;
-  background: var(--card-bg); box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; padding: 0;
+  border: 0; border-radius: 0;
+  background: transparent; box-shadow: none;
 }
 .tool-bar {
-  display: flex; align-items: center; gap: 9px; min-width: 0;
+  display: flex; align-items: center; gap: 8px; min-width: 0;
   padding: 7px 8px; border-radius: 8px; cursor: pointer;
 }
 /* No rules between tray tool rows: at menu scale the card edge and the row
@@ -2846,15 +2876,17 @@ textarea.cloud-paste-zone {
 .tool-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tool-bar.on { background: var(--accent-wash-2); }
 .tool-bar-ico {
-  display: inline-flex; flex: 0 0 auto; line-height: 0; color: var(--muted-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px;
+  flex: 0 0 auto; line-height: 0; color: var(--muted-2);
 }
-.tool-bar-ico svg { width: 13px; height: 13px; display: block; }
-.tool-bar-ico.kind-mcp { color: var(--kind-mcp-ink); }
-.tool-bar-ico.kind-db { color: var(--kind-db-ink); }
-.tool-bar-ico.kind-ssh { color: var(--kind-ssh-ink); }
-.tool-bar-ico.kind-api { color: var(--kind-api-ink); }
+.tool-bar-ico svg { width: 14px; height: 14px; display: block; }
+.tool-bar-ico.kind-mcp { color: var(--kind-mcp-ink); background: var(--kind-mcp-wash); }
+.tool-bar-ico.kind-db { color: var(--kind-db-ink); background: var(--kind-db-wash); }
+.tool-bar-ico.kind-ssh { color: var(--kind-ssh-ink); background: var(--kind-ssh-wash); }
+.tool-bar-ico.kind-api { color: var(--kind-api-ink); background: var(--kind-api-wash); }
 /* Cloud reuses the soft blue of db — no dedicated kind token yet. */
-.tool-bar-ico.kind-cloud { color: var(--kind-db-ink); }
+.tool-bar-ico.kind-cloud { color: var(--kind-db-ink); background: var(--kind-db-wash); }
 /* Two lines per tool — name over destination — so the name never has to
    compete with a long URL for the same horizontal run, and the row matches
    the credential rows stacked beneath it. */
@@ -2863,7 +2895,7 @@ textarea.cloud-paste-zone {
 }
 .tool-bar-tx b {
   min-width: 0;
-  font-size: 0.78125rem; font-weight: 600;
+  font-size: 0.8125rem; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tool-bar-dest {
@@ -2878,11 +2910,15 @@ textarea.cloud-paste-zone {
    itself keeps full contrast: it is the control, not the state being dimmed. */
 .tool-bar.is-off .tool-bar-ico,
 .tool-bar.is-off .tool-bar-tx { opacity: 0.45; }
-.tool-bar-switch { flex: 0 0 auto; }
+.dropdown-surface .tool-bar-switch {
+  flex: 0 0 auto; margin-top: 0; width: 32px; height: 19px;
+}
+.dropdown-surface .tool-bar-switch::after { width: 15px; height: 15px; }
+.dropdown-surface .tool-bar-switch.on::after { left: 15px; }
 .tool-bar-more {
   display: flex; align-items: center; width: 100%; min-width: 0;
   margin: 0; padding: 6px 8px; border: 0;
-  border-radius: 0 0 8px 8px; background: transparent;
+  border-radius: 7px; background: transparent;
   color: var(--muted); font: inherit; font-size: 0.71875rem; font-weight: 600;
   cursor: pointer; text-align: left;
 }

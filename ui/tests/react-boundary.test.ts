@@ -318,16 +318,16 @@ test('connection detail headings have no leading connection icon', async () => {
 
 test('Credentials leaves agent-key management to Settings', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
-  const secrets = app.match(
-    /function SecretsView\(\): ReactNode \{([\s\S]*?)function ActivityRow/,
+  const credentials = app.match(
+    /function CredentialsView\(\): ReactNode \{([\s\S]*?)function ActivityRow/,
   )?.[1];
   const settings = app.match(
     /function SettingsSheet\(\): ReactNode \{([\s\S]*?)\/\* --------------------------------- helpers/,
   )?.[1];
 
-  assert.ok(secrets, 'Credentials view is present');
-  assert.doesNotMatch(secrets, /identity|agent key|rotate-key|SharedKeyCard/);
-  // Both inventory routes render the merged list, so both load both halves.
+  assert.ok(credentials, 'Credentials view is present');
+  assert.doesNotMatch(credentials, /identity|agent key|rotate-key|SharedKeyCard/);
+  // Both Credentials routes render the merged list, so both load both halves.
   assert.match(app, /case 'connections':\s*\n\s*case 'secrets': return \['connections', 'secrets'\]/);
   assert.ok(settings, 'Settings sheet is present');
   assert.match(settings, /Reset this computer's agent key/);
@@ -391,20 +391,31 @@ test('scroll elasticity stays inside content panes instead of moving window chro
   assert.match(scrollPanes[2], /overscroll-behavior: contain/);
 });
 
-test('the wide inventory scrolls its list without rubber-banding the inspector', async () => {
+test('the wide Credentials page scrolls its list without rubber-banding the inspector', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 
-  assert.match(app, /content\$\{splitHead \? ' inventory-content' : ''\}/);
-  assert.match(styles, /\.inventory-content \{[^}]*overflow-y: hidden/);
-  assert.match(styles, /\.inventory-content \.creds-list-col \{[^}]*overflow-y: auto/);
+  assert.match(app, /content\$\{credentialsPage \? ' credentials-content' : ''\}/);
+  assert.match(styles, /\.credentials-content \{[^}]*overflow-y: hidden/);
+  assert.match(styles, /\.credentials-content \{[^}]*padding-right: 14px/);
+  assert.match(styles, /\.credentials-content \{[^}]*padding-bottom: 0/);
+  assert.match(styles, /\.credentials-content \.creds-list-col \{[^}]*overflow-y: scroll/);
+  // The list column's gutter and the split's gap always sum to 20. The gutter
+  // holds the macOS overlay knob (a 6px knob held 3px off the scrollport edge,
+  // with no layout width of its own) clear of the credential cards; the gap
+  // gives up exactly what the gutter takes, so the cards keep their width and
+  // the inspector its position.
+  assert.match(styles, /\.credentials-content \.creds-list-col \{[^}]*padding-right: 14px/);
+  assert.match(styles, /\.credentials-content \.creds-split \{[^}]*gap: 6px/);
+  assert.match(styles, /\.credentials-content \.creds-list-col \{[^}]*padding-bottom: 24px/);
+  assert.match(styles, /\.creds-list-col::\-webkit-scrollbar\{ width: 8px/);
   assert.match(
     styles,
-    /\.inventory-content \.cred-detail-col \{[^}]*position: static;[^}]*height: 100%/,
+    /\.credentials-content \.cred-detail-col \{[^}]*position: static;[^}]*height: 100%/,
   );
 });
 
-test('titlebar controls stay trailing when a view has no inventory toolbar', async () => {
+test('titlebar controls stay trailing when a view has no Credentials toolbar', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
   const controls = styles.match(/\.dw-titlebar-controls\{([^}]*)\}/)?.[1];
@@ -416,6 +427,90 @@ test('titlebar controls stay trailing when a view has no inventory toolbar', asy
   assert.match(app, /className="dw-title" data-tauri-drag-region=""/);
   assert.match(app, /className="dw-toolbar-mid" data-tauri-drag-region=""/);
   assert.match(app, /className="dw-titlebar-controls" data-tauri-drag-region=""/);
+});
+
+test('the menu-bar header uses the compact mockup spacing', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const header = styles.match(/\.dd-head\{([^}]*)\}/)?.[1];
+  const title = styles.match(/\.dropdown-surface \.dd-title\{([^}]*)\}/)?.[1];
+
+  assert.ok(header);
+  assert.match(header, /gap: 7px/);
+  assert.match(header, /padding: 9px 12px 8px/);
+  assert.ok(title);
+  assert.match(title, /font-size: 0\.84375rem/);
+  assert.match(title, /font-weight: 650/);
+});
+
+test('the menu-bar request card scrolls and keeps its inset chrome', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+
+  assert.match(
+    app,
+    /className=\{`content dd-content[\s\S]*?<GlobalSections \/>[\s\S]*?<TabContent \/>/,
+  );
+  assert.match(
+    styles,
+    /\.dropdown-surface \.dd-content > \.dd-global\.request-route-only\{[^}]*margin: 8px 4px 2px/,
+  );
+  assert.match(
+    styles,
+    /request-route-only > \.request-banner\{[^}]*border: 1px solid var\(--amber-border\); border-radius: 9px/,
+  );
+});
+
+test('the menu-bar uses compact switches and a native auto-hiding scrollbar', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const content = styles.match(/\.dropdown-surface \.dd-content\{([^}]*)\}/)?.[1];
+  const toggle = styles.match(/\.tool-bar-switch \{([^}]*)\}/)?.[1];
+  const thumb = styles.match(/\.tool-bar-switch::after \{([^}]*)\}/)?.[1];
+
+  assert.ok(content);
+  assert.match(content, /overflow-y: auto/);
+  assert.match(content, /padding: 0 10px 8px/);
+  assert.ok(toggle);
+  assert.match(toggle, /width: 32px/);
+  assert.match(toggle, /height: 19px/);
+  assert.ok(thumb);
+  assert.match(thumb, /width: 15px/);
+  assert.match(thumb, /height: 15px/);
+  assert.match(styles, /\.dw-main \.content::\-webkit-scrollbar/);
+});
+
+test('the menu-bar uses flat groups, tinted tool chips, and compact row type', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const tools = styles.match(/\.tools-band \{([^}]*)\}/)?.[1];
+  const credentials = styles.match(/\.dd-cred-list \{([^}]*)\}/)?.[1];
+  const toolIcon = styles.match(/\.tool-bar-ico \{([^}]*)\}/)?.[1];
+  const credentialAction = styles.match(/\.dd-cred-well \{([^}]*)\}/)?.[1];
+  const credentialRow = styles.match(/\.dropdown-surface \.cred-row \{([^}]*)\}/)?.[1];
+
+  assert.ok(tools);
+  assert.match(tools, /border: 0/);
+  assert.match(tools, /background: transparent/);
+  assert.match(tools, /box-shadow: none/);
+  assert.ok(credentials);
+  assert.match(credentials, /border: 0/);
+  assert.match(credentials, /background: transparent/);
+  assert.match(credentials, /box-shadow: none/);
+  assert.ok(toolIcon);
+  assert.match(toolIcon, /width: 26px/);
+  assert.match(toolIcon, /height: 26px/);
+  assert.match(toolIcon, /border-radius: 7px/);
+  assert.match(styles, /\.tool-bar-ico svg \{ width: 14px; height: 14px/);
+  assert.match(styles, /\.tool-bar-ico\.kind-api \{[^}]*background: var\(--kind-api-wash\)/);
+  assert.ok(credentialAction);
+  assert.match(credentialAction, /width: 24px/);
+  assert.match(credentialAction, /height: 24px/);
+  assert.match(credentialAction, /border-radius: 7px/);
+  assert.match(app, /copied \? ICONS\.check : ICONS\.copy/);
+  assert.ok(credentialRow);
+  assert.match(credentialRow, /padding: 7px 8px/);
+  assert.match(styles, /\.tool-bar-tx b \{[^}]*font-size: 0\.8125rem/);
+  assert.match(styles, /\.dropdown-surface \.cred-row-tx b \{ font-size: 0\.8125rem/);
+  assert.match(styles, /\.dropdown-surface \.cred-row-tx small \{ font-size: 0\.6875rem/);
 });
 
 test('the titlebar Back button shares the broker switcher height', async () => {
@@ -445,14 +540,14 @@ test('the titlebar Add button keeps its reduced height and narrower fill', async
   assert.doesNotMatch(addButton, /transform: translateY/);
 });
 
-test('the titlebar search keeps its increased height without a vertical offset', async () => {
+test('the titlebar search keeps its increased height and 1px optical offset', async () => {
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
   const search = styles.match(/\.dw-titlebar \.dw-toolbar-mid \.tb-search\{([^}]*)\}/)?.[1];
 
   assert.ok(search);
   assert.match(search, /height: calc\(var\(--toolbar-ctl\) \+ 4px\)/);
   assert.match(search, /min-height: calc\(var\(--toolbar-ctl\) \+ 4px\)/);
-  assert.doesNotMatch(search, /transform:/);
+  assert.match(search, /transform: translateY\(1px\)/);
 });
 
 test('the Agent Tools section keeps its long label quiet', async () => {
@@ -468,6 +563,14 @@ test('the Agent Tools section keeps its long label quiet', async () => {
   const heading = styles.match(/\.agent-tools-sec-h\{([^}]*)\}/)?.[1];
   assert.ok(heading);
   assert.match(heading, /justify-content: space-between/);
+});
+
+test('menu-bar external-vault provenance is separated from the key action', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const sourceIcon = styles.match(/\.dd-cred-wells \.s-source-icon \{([^}]*)\}/)?.[1];
+
+  assert.ok(sourceIcon);
+  assert.match(sourceIcon, /margin-right: 2px/);
 });
 
 test('agent-tool secret actions use the compact trailing action spacing', async () => {
@@ -546,7 +649,7 @@ test('the window has no sidebar; its destinations hang off the app menu', async 
   // The rail and everything that only existed to fill it are gone.
   assert.doesNotMatch(styles, /\.dw-side|\.dw-nav|\.dw-brand/);
   assert.doesNotMatch(app, /className="dw-side|className="dw-nav/);
-  // The menu carries the way back to the inventory as well as the way out,
+  // The menu carries the way back to Credentials as well as the way out,
   // so a destination is never a one-way trip.
   const menu = app.match(/function AppMenu\([\s\S]*?\n\}\n/)?.[0];
   assert.ok(menu, 'the app menu is present');

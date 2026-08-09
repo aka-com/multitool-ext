@@ -94,6 +94,9 @@ webauthn-rs = { version = "=0.6.1-dev", features = ["resident-key-support"] }
 
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+cliclack = "0.5"
+comfy-table = { version = "7", default-features = false }
+anstyle = "1"
 
 # Test-only: generates the CA and leaf certificates the Postgres TLS tests
 # need. Never built into a shipped binary.

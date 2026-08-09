@@ -1042,7 +1042,7 @@ export interface EventMap {
   'aka://mcp-auth-changed': McpAuthState;
   'aka://connect-requested': { agent: string; service: string };
   'aka://open-settings': Record<string, never>;
-  /** Show one inventory row, named by id — never a value. */
+  /** Show one Credentials row, named by id — never a value. */
   'aka://open-credential': { id?: string | null };
   /** Open the Request Inbox; `id` deep-links a still-pending approval sheet. */
   'aka://open-requests': { id?: string | null };

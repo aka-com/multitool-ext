@@ -49,7 +49,7 @@ pub struct OpenRequestsPayload {
     pub id: Option<String>,
 }
 
-/// Payload for [`EVT_OPEN_CREDENTIAL`]: select one inventory row.
+/// Payload for [`EVT_OPEN_CREDENTIAL`]: select one Credentials row.
 #[derive(Clone, Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenCredentialPayload {
@@ -1265,7 +1265,7 @@ pub fn ui_quit(app: AppHandle) {
     app.exit(0);
 }
 
-/// Show one credential in the desktop window's inventory (a tray row's
+/// Show one credential on the desktop Credentials page (a tray row's
 /// deep link). The id names a row to select, not a value: the webview still
 /// has to ask the core for anything sensitive, and the lock still applies.
 #[tauri::command]

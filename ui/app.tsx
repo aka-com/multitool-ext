@@ -1123,7 +1123,7 @@ function GlobalSections({ embeddedInStart = false }: { embeddedInStart?: boolean
   if (!showRequests) return null;
   return (
     <div className={`dd-global ${embeddedInStart ? 'start-global' : ''}${
-      !embeddedInStart && unifiedTab(state.tab) ? ' is-wide' : ''} request-route-only`}>
+      !embeddedInStart && credentialsTab(state.tab) ? ' is-wide' : ''} request-route-only`}>
       <RequestsBanner />
     </div>
   );
@@ -1275,7 +1275,7 @@ function requestLiveTotp(scope: string, id: string): Promise<TotpCode> {
   return request;
 }
 
-/** Make one credential the inventory's subject. Shared by the list's own
+/** Make one credential the Credentials page's subject. Shared by the list's own
  * row clicks and by the tray's deep link, so a row arrived at from the menu
  * bar lands in exactly the state clicking it in the window would. */
 function selectCredentialRow(id: string): void {
@@ -1283,7 +1283,7 @@ function selectCredentialRow(id: string): void {
   // credential puts the button back.
   if (state.selectedSecret !== id) state.totpVisible = null;
   state.selectedSecret = id;
-  // The unified inventory has one inspector: taking it for a credential
+  // The Credentials page has one inspector: taking it for a credential
   // releases whichever tool was holding it.
   state.selectedConn = null;
   // Inert in the wide layout; in the narrow one this rides the inspector
@@ -1808,13 +1808,13 @@ function DropdownTotpMenu(): ReactNode {
   );
 }
 
-/** A tray row's trailing C1 icon-well cluster: fingerprint (Touch ID state),
- * key (one-click copy), and a 2FA pill that opens the code menu. Wells sit
+/** A tray row's trailing C1 action cluster: fingerprint (Touch ID state),
+ * copy, and a 2FA pill that opens the code menu. Controls sit
  * outside the row body so they are real buttons, not nested controls.
  *
  * The body itself is a deep link: the tray browses and copies, and anything
  * past that — the username, the value, editing, deleting — is the desktop
- * inventory's job, so the row hands off to the window with itself selected
+ * Credentials page's job, so the row hands off to the window with itself selected
  * rather than growing a second management surface at menu scale. The
  * expansion below survives for one case only: a browser host with no
  * clipboard route reveals in place (see the well's reveal fallback). */
@@ -1874,13 +1874,13 @@ function DropdownCredentialRow({ secret, subtitle }: {
                 title={copying ? 'Copying…' : copied ? 'Copied' : `Copy ${noun}`}
                 aria-label={`Copy ${noun} for ${displayName}`}
                 disabled={copying}>
-                <Icon markup={copied ? ICONS.check : ICONS.key} />
+                <Icon markup={copied ? ICONS.check : ICONS.copy} />
               </button>
             : <button type="button" className="dd-cred-well"
                 data-act="reveal-secret" data-id={secret.id}
                 title={`Reveal ${noun}`}
                 aria-label={`Reveal ${noun} for ${displayName}`}>
-                <Icon markup={ICONS.key} />
+                <Icon markup={ICONS.copy} />
               </button>}
           {secret.totp
             ? <button type="button"
@@ -3719,7 +3719,8 @@ const SECRET_CATEGORY_TILES: ReadonlyArray<{
 /** The compact category name is enough in navigation. Section registers add
  * the longer scope as quiet context without making it compete with the name. */
 function AgentToolsSectionHeading({ tray = false }: { tray?: boolean }): ReactNode {
-  return <h2 className={tray ? 'dd-sec-h agent-tools-sec-h' : 'creds-sec-h agent-tools-sec-h'}>
+  if (tray) return <h2 className="dd-sec-h">Connections</h2>;
+  return <h2 className="creds-sec-h agent-tools-sec-h">
     Agent Tools <span className="agent-tools-context">MCPs, APIs, Cloud IAMs</span>
   </h2>;
 }
@@ -3727,16 +3728,16 @@ function AgentToolsSectionHeading({ tray = false }: { tray?: boolean }): ReactNo
 /** The tool holding the unified inspector, if one does. Tools are only ever
  * the subject on the scopes that show them, so narrowing to Passwords with a
  * tool selected hands the pane back to the credentials. */
-function unifiedToolSelection(): ConnectionSummary | null {
+function selectedCredentialTool(): ConnectionSummary | null {
   if (mode === 'dropdown') return null;
   const scope = state.secretCategory;
   if (scope !== 'all' && scope !== 'connections') return null;
   return state.connections.find((c) => c.id === state.selectedConn) ?? null;
 }
 
-/** Tools at the head of the unified inventory: the same rows the Tools page
+/** Tools at the head of Credentials: the same rows the Tools page
  * showed, above the credentials they authenticate with. */
-function UnifiedConnectionsSection(): ReactNode {
+function CredentialToolsSection(): ReactNode {
   if (mode === 'dropdown') return null;
   const scope = state.secretCategory;
   if (scope !== 'all' && scope !== 'connections') return null;
@@ -3759,7 +3760,7 @@ function UnifiedConnectionsSection(): ReactNode {
   // silently move rows the user cannot see.
   const reorderable = !needle && matching.length > 1;
   // Under All an empty tool list is silent — the credentials below are the
-  // page — unless the whole inventory is empty, which is first run.
+  // page — unless Credentials is completely empty, which is first run.
   const bare = !state.connections.length && !state.secrets.length;
   if (!matching.length && scope === 'all' && !bare) return null;
   return (
@@ -3786,7 +3787,7 @@ function UnifiedConnectionsSection(): ReactNode {
 function CredentialCategoryTiles(): ReactNode {
   const counts = new Map<SecretCategory, number>(SECRET_CATEGORY_TILES.map((tile) =>
     [tile.id, state.secrets.filter((secret) => secretInCategory(secret, tile.id)).length]));
-  // Tools live in the same inventory but are not secrets, so their two
+  // Tools live on the same Credentials page but are not secrets, so their two
   // scopes count connections rather than reading `secrets`.
   counts.set('connections', state.connections.length);
   counts.set('all', (counts.get('all') ?? 0) + state.connections.length);
@@ -3834,10 +3835,10 @@ function CredentialCategoryTiles(): ReactNode {
 
 // The Credentials page is a master–detail split, Passwords-style: category
 // tiles over a monogram list on the left, the selected credential's
-// inspector on the right. The dropdown compresses the same inventory into
+// inspector on the right. The dropdown compresses the same credential set into
 // expandable tray rows. Legacy untyped brokers keep the split but drop the
 // tiles and grouping — everything they hold is a secret.
-function SecretsView(): ReactNode {
+function CredentialsView(): ReactNode {
   const needle = state.secretSearch.trim().toLowerCase();
   const typed = supportsTypedCredentials(state.broker);
   const matching = state.secrets.filter((secret) => secretMatches(secret, needle));
@@ -3901,11 +3902,11 @@ function SecretsView(): ReactNode {
   // scope shows it (tools ride above it under All, and are filtered out
   // entirely by the credential-only scopes).
   const credentialScope = category !== 'connections';
-  // One inventory, two kinds of subject. A tool wins the inspector only
+  // Credentials has two kinds of subject. A tool wins the inspector only
   // while it is the standing selection — picking a credential clears it
   // (see the select-conn / select-secret handlers), so the pane never shows
   // a stale tool beside a highlighted credential row.
-  const tool = unifiedToolSelection();
+  const tool = selectedCredentialTool();
   // The inspector always has a subject: an explicit selection when it is
   // still visible under the active tile and search, else the first row.
   const selected = tool ? null
@@ -3989,9 +3990,9 @@ function SecretsView(): ReactNode {
           {mode === 'dropdown' ? <RequestsBanner /> : null}
           {typed ? <CredentialCategoryTiles /> : null}
           {/* The sample-tools spotlight followed Tools into the merged page;
-              it is the one offer that seeds an empty inventory. */}
+              it is the one offer that seeds an empty Credentials page. */}
           {mode !== 'dropdown' ? <SamplesCard /> : null}
-          <UnifiedConnectionsSection />
+          <CredentialToolsSection />
           {credentialScope ? listBody : null}
         </div>
         {tool
@@ -4622,7 +4623,7 @@ function DropdownCatalogSearch({ kind }: { kind: 'tool' | 'secret' }): ReactNode
 }
 
 /* ---- tray tools: Option B slim bars ------------------------------------- */
-// One narrow full-width bar per tool above the credential inventory (artifact
+// One narrow full-width bar per tool above the credential list (artifact
 // Option B): kind icon, name, state line, live count, and the access switch.
 // Trouble still gets the problem word so the one word that appears is the one
 // that matters. Cap at five bars with an "All tools ›" tail when the list
@@ -4697,8 +4698,8 @@ function ToolBar({ connection: c }: { connection: ConnectionSummary }): ReactNod
 
 function ToolsLedge(): ReactNode {
   const needle = state.secretSearch.trim().toLowerCase();
-  // The tray is browse-only, so an empty tool inventory has no useful
-  // action or status to show here. Let the credential inventory move up.
+  // The tray is browse-only, so an empty tool list has no useful action or
+  // status to show here. Let the credential list move up.
   if (!state.connections.length) return null;
   const matching = needle
     ? state.connections.filter((c) =>
@@ -4731,7 +4732,7 @@ function ToolsLedge(): ReactNode {
   );
 }
 
-/** The tray's single view: the Tools band over the credential inventory,
+/** The tray's single view: the Tools band over the credential list,
  * hosting the tool-detail slide-over the Tools tab used to own. The wrapper
  * lays out nothing (display: contents) — it exists so .detail-open can
  * reveal the fixed-position drawer and scrim. */
@@ -4743,7 +4744,7 @@ function DropdownCredentialsTab(): ReactNode {
       <ConnectionReadyCard />
       <DropdownCatalogSearch kind="secret" />
       <ToolsLedge />
-      <SecretsView />
+      <CredentialsView />
       {open && detail
         ? <>
             <div className="conn-detail-col">
@@ -4772,10 +4773,10 @@ function TabContent(): ReactNode {
   // dropdown puts its search inline above the list; the wide window has it
   // in the header instead (see MainWindow).
   if (mode === 'dropdown') return <DropdownCredentialsTab />;
-  // Tools and credentials are one inventory in the window, from first run
-  // onwards: an empty inventory says so and points at the catalog, rather
+  // Tools and credentials share the Credentials page from first run onward:
+  // an empty page says so and points at the catalog, rather
   // than handing the whole page to a directory the user then has to leave.
-  return <SecretsView />;
+  return <CredentialsView />;
 }
 
 /** The tray's one-line identity: status dot, app name, managed broker.
@@ -5000,9 +5001,9 @@ function applyTheme(next: 'light' | 'dark'): void {
   render();
 }
 
-/** The two tabs the unified inventory answers for. Both routes survive so
+/** The two routes the Credentials page answers for. Both survive so
  * anything that still navigates to Tools lands on the merged page. */
-function unifiedTab(tab: Tab): boolean {
+function credentialsTab(tab: Tab): boolean {
   return tab === 'secrets' || tab === 'connections';
 }
 
@@ -5029,18 +5030,18 @@ function AppMenu({ takeover, requestCount }: {
         ? <div className="settings-menu">
             <div className="menu-version">Version {APP_VERSION}</div>
             {/* The menu is the window's whole navigation now, so it has to
-                carry the way back as well as the way out: the inventory is
+                carry the way back as well as the way out: Credentials is
                 listed beside the two destinations that leave it, with the
                 current one checked. */}
-            <button className={`menu-item ${unifiedTab(state.tab) ? 'on' : ''}`}
-              aria-current={unifiedTab(state.tab) ? 'page' : undefined}
+            <button className={`menu-item ${credentialsTab(state.tab) ? 'on' : ''}`}
+              aria-current={credentialsTab(state.tab) ? 'page' : undefined}
               data-act="tab" data-tab="secrets">
-              <Icon markup={ICONS.key} /> Inventory
+              Credentials
             </button>
             <button className={`menu-item ${state.tab === 'activity' ? 'on' : ''}`}
               aria-current={state.tab === 'activity' ? 'page' : undefined}
               data-act="tab" data-tab="activity">
-              <Icon markup={ICONS.activity} /> Activity Log
+              Activity Log
               {requestCount > 0
                 ? <span className="menu-count">{requestCount}</span>
                 : null}
@@ -5048,19 +5049,18 @@ function AppMenu({ takeover, requestCount }: {
             <button className={`menu-item ${state.tab === 'start' ? 'on' : ''}`}
               aria-current={state.tab === 'start' ? 'page' : undefined}
               data-act="tab" data-tab="start">
-              <Icon markup={ICONS.zap} /> Connect agents
+              Connect agents
             </button>
             <div className="menu-rule"></div>
             <button className="menu-item" data-act="recheck-tools" disabled={recheckRunning}>
-              <Icon markup={ICONS.refresh} />
               {recheckRunning ? 'Rechecking tools…' : 'Recheck all tools'}
             </button>
             <div className="menu-rule"></div>
             <button className="menu-item" data-act="mode-tray">
-              <Icon markup={ICONS.menubar} /> Minimize to menu bar
+              Minimize to menu bar
             </button>
             <button className="menu-item" data-act="open-settings">
-              <Icon markup={ICONS.gear} /> Settings
+              Settings
             </button>
           </div>
         : null}
@@ -5071,7 +5071,7 @@ function AppMenu({ takeover, requestCount }: {
 function viewLoadKeys(tab: Tab): LoadKey[] {
   switch (tab) {
     case 'start': return ['connections', 'identity', 'settings'];
-    // Both inventory routes render the merged list, so a failure in either
+    // Both Credentials routes render the merged list, so a failure in either
     // half has to surface on either route.
     case 'connections':
     case 'secrets': return ['connections', 'secrets'];
@@ -5097,25 +5097,23 @@ function LoadFailureBand(): ReactNode {
 function MainWindow(): ReactNode {
   const takeover = brokerTakeover(state.broker, state.remoteSetup.open);
   const requestCount = activeRequestCount(state.approvals, state.elicitations);
-  // Tools and credentials share one inventory page now, so it takes the
-  // neutral name of the thing it lists rather than either half's.
-  const pageTitle = unifiedTab(state.tab) ? 'Inventory'
+  const pageTitle = credentialsTab(state.tab) ? 'Credentials'
     : state.tab === 'activity' ? 'Activity log'
     : tabLabel(state.tab);
 
   // The master–detail pages split their header into the same two columns as
   // the content below: title and search share the list column, the actions
   // ride the detail column.
-  const splitHead = unifiedTab(state.tab);
-  // One inventory, one search field: it filters tools and credentials
+  const credentialsPage = credentialsTab(state.tab);
+  // One Credentials page, one search field: it filters tools and credentials
   // together, so it reads and writes the credential needle both halves use.
-  const pageSearch = splitHead
+  const pageSearch = credentialsPage
     ? <input id="secret-search" className="cat-search tb-search" type="search"
         placeholder="Search"
         aria-label="Search tools and credentials" value={state.secretSearch}
         onChange={(e) => { state.secretSearch = e.currentTarget.value; render(); }} />
     : null;
-  const pageAction = splitHead
+  const pageAction = credentialsPage
     ? <div className="dw-head-actions">
         <AddCredentialAction />
       </div>
@@ -5137,18 +5135,18 @@ function MainWindow(): ReactNode {
               it on non-interactive children so their painted areas and the
               flex gaps around controls still move the window. */}
           <span className="dw-title" data-tauri-drag-region="">Multitool</span>
-          {/* The inventory search rides the same bar rather than a second
+          {/* The Credentials search rides the same bar rather than a second
               header strip below it. Its add action joins the related vault
               and broker controls in the trailing cluster. */}
-          {!takeover && splitHead
+          {!takeover && credentialsPage
             ? <div className="dw-toolbar-mid" data-tauri-drag-region="">
                 {pageSearch}
               </div>
             : null}
           <div className="dw-titlebar-controls" data-tauri-drag-region="">
-            {!takeover && splitHead ? pageAction : null}
-            {splitHead ? <VaultSwitch /> : null}
-            {!takeover && !splitHead
+            {!takeover && credentialsPage ? pageAction : null}
+            {credentialsPage ? <VaultSwitch /> : null}
+            {!takeover && !credentialsPage
               ? <button className="broker-btn titlebar-back-btn" data-act="tab"
                   data-tab="secrets">
                   <Icon markup={ICONS.chevronLeft} /> Back
@@ -5163,7 +5161,7 @@ function MainWindow(): ReactNode {
             {takeover
               ? <div className="content broker-takeover"><BrokerPane kind={takeover} /></div>
               : <>
-                  {!splitHead && state.tab !== 'start' && (
+                  {!credentialsPage && state.tab !== 'start' && (
                     <div className="dw-head">
                       <div className="dw-head-title">
                         <h2>{pageTitle}</h2>
@@ -5182,7 +5180,7 @@ function MainWindow(): ReactNode {
                       Connect agents is the exception — it embeds its own. */}
                   {state.tab === 'start' ? null : <GlobalSections />}
                   <LoadFailureBand />
-                  <div className={`content${splitHead ? ' inventory-content' : ''}`}>
+                  <div className={`content${credentialsPage ? ' credentials-content' : ''}`}>
                     <TabContent />
                   </div>
                 </>}
@@ -5228,7 +5226,7 @@ function DropdownMenu({ requestCount }: { requestCount: number }): ReactNode {
             <button className={`menu-item ${state.tab !== 'activity' ? 'on' : ''}`}
               aria-current={state.tab !== 'activity' ? 'page' : undefined}
               data-act="tab" data-tab="secrets">
-              <Icon markup={ICONS.key} /> Inventory
+              <Icon markup={ICONS.key} /> Credentials
             </button>
             <button className={`menu-item ${state.tab === 'activity' ? 'on' : ''}`}
               aria-current={state.tab === 'activity' ? 'page' : undefined}
@@ -5298,9 +5296,9 @@ function DropdownWindow(): ReactNode {
           <DropdownMenu requestCount={requestCount} />
         </div>
         <div className="dropdown-content-container">
-          {state.tab === 'start' ? null : <GlobalSections />}
           <LoadFailureBand />
           <div className={`content dd-content${state.tab === 'activity' ? ' activity-content' : ''}`}>
+            {state.tab === 'start' ? null : <GlobalSections />}
             <TabContent />
           </div>
         </div>
@@ -6506,7 +6504,7 @@ function AddCredentialAction(): ReactNode {
   );
 }
 
-/** Reveal directly from an inventory action. The broker still audits the
+/** Reveal directly from a Credentials action. The broker still audits the
  * release and the presentation epoch still prevents a late response from
  * repainting a value after blur or navigation. */
 async function revealSecret(id: string): Promise<void> {
@@ -11090,7 +11088,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       break;
     // A tray row's deep link. The native side picks the window (and defers
     // while a protected form holds the panel); in a browser there is no
-    // second window, so the inventory selects in place.
+    // second window, so Credentials selects in place.
     case 'open-credential':
       state.dropdownTotpMenu = null;
       if (isNativeHost()) {
@@ -12992,7 +12990,7 @@ async function boot() {
     state.sheetErrors = {};
     render();
   });
-  // A tray credential row's deep link: show the inventory with that row as
+  // A tray credential row's deep link: show Credentials with that row as
   // the inspector's subject. Nothing sensitive rides the event — the id
   // names a row, and the value still has to be asked for by name here.
   await listen('aka://open-credential', (event) => {

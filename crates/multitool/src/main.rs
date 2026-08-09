@@ -60,6 +60,7 @@ use zeroize::Zeroizing;
 
 mod client;
 mod mcp_bridge;
+mod presentation;
 mod ssh_agent;
 
 fn parse_client_label(value: &str) -> Result<String, String> {
@@ -90,38 +91,6 @@ const DEFAULT_MANAGE_TOKEN_TTL_DAYS: u64 = 30;
 
 /// Env override for `multitool serve`'s default root when `--root` is omitted.
 const SERVER_ROOT_ENV: &str = "AKA_SERVER_ROOT";
-
-/// Footer for bare `multitool` / `--help`: short workflows first, then stable exit codes.
-const AFTER_HELP: &str = "\
-COMMAND GROUPS
-  Agent   skill  instructions  mcp  run
-  Open    dsn  ssh  cloud  ssh-agent
-  Vault   secret  conn
-  Broker  serve  status  sessions  requests  settings  key  activity  manage
-  Shell   completions
-
-  Commands stay top-level (multitool <command> …); groups are for orientation only.
-
-COMMON WORKFLOWS
-  Agent setup      multitool skill --write
-  MCP client       multitool mcp
-  Headless broker  multitool serve [--listen …]
-  Postgres         eval \"$(multitool dsn <conn>)\" && psql
-  SSH              export SSH_AUTH_SOCK=\"$(multitool ssh <conn>)\"
-  Cloud            eval \"$(multitool cloud env <conn>)\"   # aws / az / gcloud
-  Ops              multitool status | key | activity | requests
-
-See also: multitool <command> --help
-
-EXIT CODES
-  1  generic/internal failure
-  2  invalid command usage or input
-  3  broker is not running
-  4  authentication or confirmation failed
-  5  requested object was not found
-  6  state conflict
-  7  remote broker is unreachable
-  8  connection test failed";
 
 /// Clap help/error colors, matched to the `multitool serve` banner palette:
 /// green headings, cyan syntax, yellow invalid, red errors.
@@ -164,7 +133,6 @@ fn parse_field_value(value: &str) -> Result<String, String> {
     name = "multitool",
     version,
     about = "Secrets broker CLI for AI agents",
-    after_help = AFTER_HELP,
     styles = CLI_STYLES
 )]
 struct Cli {
@@ -1441,15 +1409,17 @@ fn run_cli() {
                 root,
                 broker,
             } => cmd_conn_endpoint(
-                name,
-                issue,
-                renew,
-                revoke,
-                endpoint_require_auth(require_auth, no_require_auth),
-                url,
-                secret,
-                root,
-                broker,
+                ConnEndpointRequest {
+                    name,
+                    issue,
+                    renew,
+                    revoke,
+                    require_auth: endpoint_require_auth(require_auth, no_require_auth),
+                    url,
+                    secret,
+                    root,
+                    broker,
+                },
                 json,
             ),
         },
@@ -1565,8 +1535,7 @@ fn exit_with_raw(code: i32) -> ! {
 }
 
 fn die_with(code: ExitCode, message: impl std::fmt::Display) -> ! {
-    let color = stderr_use_color();
-    eprintln!("{} {message}", paint::bold_red(color, "error:"));
+    presentation::error(message, stderr_use_color());
     exit_with(code);
 }
 
@@ -1841,13 +1810,17 @@ fn cmd_secret_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         ack_dim("no secrets configured (add one with `multitool secret add <name>`)");
         return;
     }
-    for dto in secrets {
-        if dto.used_by_names.is_empty() {
-            println!("{}", dto.name);
-        } else {
-            println!("{}  used by {}", dto.name, dto.used_by_names.join(", "));
-        }
-    }
+    let rows = secrets.into_iter().map(|dto| {
+        vec![
+            dto.name,
+            if dto.used_by_names.is_empty() {
+                "—".into()
+            } else {
+                dto.used_by_names.join(", ")
+            },
+        ]
+    });
+    println!("{}", presentation::table(&["name", "used by"], rows));
 }
 
 /// A management backend plus the runtime driving it. Every mode routes
@@ -1874,7 +1847,15 @@ impl Managed {
     /// this terminal. Make that wait visible before the request blocks.
     fn run_gated<T>(&self, call: impl std::future::Future<Output = ManageResult<T>>) -> T {
         if self.approval_surface_attached() {
-            guide("  waiting for confirmation in the Multitool app…");
+            if presentation::stderr_is_tty() {
+                let spinner = presentation::Spinner::start(
+                    "Waiting for confirmation in the Multitool app…",
+                );
+                let value = self.run(call);
+                spinner.stop("Confirmation received");
+                return value;
+            }
+            guide("waiting for confirmation in the Multitool app…");
         }
         self.run(call)
     }
@@ -2373,7 +2354,7 @@ fn cmd_conn_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         ack_dim("no connections configured (add one with `multitool conn add`)");
         return;
     }
-    for dto in connections {
+    let rows = connections.into_iter().map(|dto| {
         let mut state = Vec::new();
         if !dto.agent_access.enabled {
             state.push("disabled");
@@ -2388,18 +2369,21 @@ fn cmd_conn_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         if dto.agent_access.expose_response_credentials {
             state.push("response credentials: exposed");
         }
-        println!(
-            "{}  {}  {}{}",
+        vec![
             dto.name,
             dto.kind,
             dto.target,
             if state.is_empty() {
-                String::new()
+                "enabled".into()
             } else {
-                format!("  {}", state.join(" · "))
-            }
-        );
-    }
+                state.join(" · ")
+            },
+        ]
+    });
+    println!(
+        "{}",
+        presentation::table(&["name", "kind", "target", "access"], rows)
+    );
 }
 
 fn cmd_conn_show(name: String, root: Option<PathBuf>, url: Option<String>, json: bool) {
@@ -2564,12 +2548,19 @@ fn cmd_sessions(close: Option<u64>, root: Option<PathBuf>, url: Option<String>, 
     } else if sessions.is_empty() {
         ack_dim("no live sessions");
     } else {
-        for session in sessions {
-            println!(
-                "{}  {}  {}  {}  {}",
-                session.id, session.kind, session.connection, session.agent, session.detail
-            );
-        }
+        let rows = sessions.into_iter().map(|session| {
+            vec![
+                session.id.to_string(),
+                session.kind,
+                session.connection,
+                session.agent,
+                session.detail,
+            ]
+        });
+        println!(
+            "{}",
+            presentation::table(&["id", "kind", "connection", "agent", "detail"], rows)
+        );
     }
 }
 
@@ -2603,21 +2594,28 @@ fn cmd_requests(
     } else if requests.is_empty() {
         ack_dim("no pending or recent requests");
     } else {
-        for request in requests {
+        let rows = requests.into_iter().map(|request| {
             let at = request
                 .resolved_at
                 .as_deref()
-                .unwrap_or(&request.requested_at);
-            println!(
-                "{}  {}  {}  {}  {}  {}",
+                .unwrap_or(&request.requested_at)
+                .to_string();
+            vec![
                 at,
                 request.status,
                 request.kind,
                 request.connection,
                 request.agent,
-                request.summary
-            );
-        }
+                request.summary,
+            ]
+        });
+        println!(
+            "{}",
+            presentation::table(
+                &["at", "status", "kind", "connection", "agent", "summary"],
+                rows,
+            )
+        );
     }
 }
 
@@ -3136,7 +3134,17 @@ fn cmd_conn_audit_statements(
 fn cmd_conn_test(name: String, root: Option<PathBuf>, url: Option<String>, json: bool) {
     let managed = management_backend(root, url);
     let dto = conn_dto(&managed, &name);
-    let report = managed.run_gated(managed.backend.test_connection(dto_id(&dto.id)));
+    let message = if managed.approval_surface_attached() {
+        "Waiting for confirmation, then testing the connection…"
+    } else {
+        "Testing the connection…"
+    };
+    if !json && !presentation::stderr_is_tty() {
+        guide(message);
+    }
+    let spinner = presentation::Spinner::start_if(!json, message);
+    let report = managed.run(managed.backend.test_connection(dto_id(&dto.id)));
+    spinner.stop("Connection test complete");
     if json {
         print_json(&report);
     }
@@ -3166,11 +3174,7 @@ fn cmd_conn_test(name: String, root: Option<PathBuf>, url: Option<String>, json:
     }
 }
 
-/// Read, issue/rotate, renew, or revoke a direct endpoint through the same management
-/// backend as the app. Issuance is deliberately online-only: a short-lived
-/// offline broker would drop the newly bound listener as soon as this command
-/// exits. Revocation only narrows access, so it remains a safe offline edit.
-fn cmd_conn_endpoint(
+struct ConnEndpointRequest {
     name: String,
     issue: bool,
     renew: bool,
@@ -3180,8 +3184,24 @@ fn cmd_conn_endpoint(
     secret: bool,
     root: Option<PathBuf>,
     broker: Option<String>,
-    json: bool,
-) {
+}
+
+/// Read, issue/rotate, renew, or revoke a direct endpoint through the same management
+/// backend as the app. Issuance is deliberately online-only: a short-lived
+/// offline broker would drop the newly bound listener as soon as this command
+/// exits. Revocation only narrows access, so it remains a safe offline edit.
+fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
+    let ConnEndpointRequest {
+        name,
+        issue,
+        renew,
+        revoke,
+        require_auth,
+        url,
+        secret,
+        root,
+        broker,
+    } = request;
     let action = endpoint_action(issue, renew, revoke)
         .unwrap_or_else(|message| die_with(ExitCode::Usage, message));
     if json && (url || secret) {
@@ -3426,10 +3446,19 @@ impl BrokerEvents for CliEvents {}
 fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option<PathBuf>) {
     let url = effective_broker_url(url);
     require_existing_root_for_read(root.as_deref(), url.is_some());
-    if std::io::IsTerminal::is_terminal(&std::io::stdin()) && token_env.is_none() {
-        guide("  paste the management token (akamgr_…); end with Ctrl-D");
-    }
-    let token = read_secret_value(&token_env, false);
+    let token = if token_env.is_none()
+        && presentation::stdin_is_tty()
+        && presentation::stderr_is_tty()
+    {
+        let value = presentation::password("Management token (akamgr_…)")
+            .unwrap_or_else(|error| die(format!("could not read the management token: {error}")));
+        Zeroizing::new(value)
+    } else {
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) && token_env.is_none() {
+            guide("paste the management token (akamgr_…); end with Ctrl-D");
+        }
+        read_secret_value(&token_env, false)
+    };
     let paths = store_paths(root.as_deref());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -4652,6 +4681,13 @@ struct StatusReport {
     tools_error: Option<String>,
 }
 
+#[derive(Debug)]
+struct StatusFailure {
+    report: Box<StatusReport>,
+    code: ExitCode,
+    diagnostic: String,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct StatusSshRefusal {
     connection: String,
@@ -4698,7 +4734,7 @@ fn print_status_report(report: &StatusReport) {
         "{}",
         paint::bold_green(
             color,
-            &format!("broker running on {}{}", report.location, location_note)
+            format!("broker running on {}{}", report.location, location_note)
         )
     );
     if let Some(version) = &report.broker_version {
@@ -4753,19 +4789,18 @@ fn print_status_report(report: &StatusReport) {
     }
     if !report.recent_ssh_refusals.is_empty() {
         println!("{}", colon_field(color, "  ", "recent SSH refusals", ""));
-        for refusal in &report.recent_ssh_refusals {
-            println!(
-                "    {}  {}  {}{}",
-                paint::bold_cyan(color, &refusal.connection),
-                refusal.at,
-                paint::bold_yellow(color, &refusal.reason),
-                refusal
-                    .detail
-                    .as_deref()
-                    .map(|detail| format!(" · {detail}"))
-                    .unwrap_or_default()
-            );
-        }
+        let rows = report.recent_ssh_refusals.iter().map(|refusal| {
+            vec![
+                refusal.connection.clone(),
+                refusal.at.clone(),
+                refusal.reason.clone(),
+                refusal.detail.clone().unwrap_or_else(|| "—".into()),
+            ]
+        });
+        println!(
+            "{}",
+            presentation::table(&["connection", "at", "reason", "detail"], rows)
+        );
     }
     if let Some(error) = &report.tools_error {
         println!(
@@ -4774,7 +4809,7 @@ fn print_status_report(report: &StatusReport) {
                 color,
                 "  ",
                 "tools",
-                paint::bold_yellow(color, &format!("unavailable ({error})"))
+                paint::bold_yellow(color, format!("unavailable ({error})"))
             )
         );
         return;
@@ -4785,44 +4820,43 @@ fn print_status_report(report: &StatusReport) {
     }
     println!("{}", colon_field(color, "  ", "tools", ""));
     let approval_surface_attached = report.approval_surface_attached.unwrap_or(false);
-    for tool in &report.tools {
-        let confirm = if tool.confirm {
+    let rows = report.tools.iter().map(|tool| {
+        let mut policy = Vec::new();
+        if tool.confirm {
             if approval_surface_attached {
-                format!(" · {}", paint::bold_yellow(color, "confirm: on"))
+                policy.push("confirm: on".to_string());
             } else {
-                format!(
-                    " · {}",
-                    paint::bold_yellow(
-                        color,
-                        "confirm: on (no approval surface attached — traffic will be refused)"
-                    )
-                )
+                policy.push(
+                    "confirm: on; no approval surface — traffic will be refused".to_string(),
+                );
             }
-        } else {
-            String::new()
-        };
+        }
         // A direct endpoint outlives any session and is revoked separately, so
         // it is named on the row rather than left to the app to reveal.
-        let endpoint = if tool.endpoint {
-            " · direct endpoint issued"
-        } else {
-            ""
-        };
+        if tool.endpoint {
+            policy.push("direct endpoint issued".into());
+        }
         let access = if tool.enabled {
-            paint::bold_green(color, "enabled")
+            "enabled"
         } else {
-            paint::bold_yellow(color, "disabled")
+            "disabled"
         };
-        println!(
-            "    {}  {}  {}  {}{}{}",
-            paint::bold_cyan(color, &tool.name),
-            tool.kind,
-            tool.target,
-            access,
-            confirm,
-            endpoint,
-        );
-    }
+        vec![
+            tool.name.clone(),
+            tool.kind.clone(),
+            tool.target.clone(),
+            access.into(),
+            if policy.is_empty() {
+                "—".into()
+            } else {
+                policy.join(" · ")
+            },
+        ]
+    });
+    println!(
+        "{}",
+        presentation::table(&["name", "kind", "target", "access", "policy"], rows)
+    );
     if !approval_surface_attached {
         if let Some(warning) =
             headless_confirmation_warning(report.tools.iter().filter(|tool| tool.confirm).count())
@@ -4942,7 +4976,7 @@ fn socket_status_exit_code(error: &std::io::Error) -> ExitCode {
     }
 }
 
-fn local_status(root: Option<PathBuf>) -> Result<StatusReport, (StatusReport, ExitCode, String)> {
+fn local_status(root: Option<PathBuf>) -> Result<StatusReport, StatusFailure> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -4988,11 +5022,11 @@ fn local_status(root: Option<PathBuf>) -> Result<StatusReport, (StatusReport, Ex
         )),
         Err(error) => {
             let report = base();
-            return Err((
-                report,
-                socket_status_exit_code(&error),
-                socket_status_error(&socket, &error),
-            ));
+            return Err(StatusFailure {
+                report: Box::new(report),
+                code: socket_status_exit_code(&error),
+                diagnostic: socket_status_error(&socket, &error),
+            });
         }
     };
 
@@ -5075,7 +5109,7 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
                     "{}",
                     paint::bold_yellow(
                         stderr_use_color(),
-                        &format!(
+                        format!(
                             "warning: broker version {} differs from multitool CLI version {}; update them together before making changes",
                             report.broker_version.as_deref().unwrap_or("unknown"),
                             report.cli_version
@@ -5089,7 +5123,11 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
                 print_status_report(&report);
             }
         }
-        Err((report, code, diagnostic)) => {
+        Err(StatusFailure {
+            report,
+            code,
+            diagnostic,
+        }) => {
             if json {
                 print_json(&report);
             } else {
@@ -5124,7 +5162,7 @@ fn format_activity_line(entry: &ActivityDto, color: bool) -> String {
         line.push_str(&format!(" — {detail}"));
     }
     if let Some(agent) = &entry.agent {
-        line.push_str(&format!("  {}", paint::dim(color, &format!("[{agent}]"))));
+        line.push_str(&format!("  {}", paint::dim(color, format!("[{agent}]"))));
     }
     line
 }
@@ -5283,53 +5321,42 @@ fn colon_field(
 
 /// Successful mutation / action ack on stderr.
 fn ack(message: impl std::fmt::Display) {
-    eprintln!(
-        "{}",
-        paint::bold_green(stderr_use_color(), &message.to_string())
-    );
+    presentation::success(message, stderr_use_color());
 }
 
 /// Soft secondary ack ("already …", empty lists) on stderr.
 fn ack_dim(message: impl std::fmt::Display) {
-    eprintln!("{}", paint::dim(stderr_use_color(), &message.to_string()));
+    presentation::remark(message, stderr_use_color());
 }
 
 /// Operator guidance label on stderr (cyan). Values meant for capture stay
 /// on plain stdout separately.
 fn guide(message: impl std::fmt::Display) {
-    eprintln!(
-        "{}",
-        paint::bold_cyan(stderr_use_color(), &message.to_string())
-    );
+    presentation::info(message, stderr_use_color());
 }
 
 /// Warning / note on stderr (yellow).
 fn warn_line(message: impl std::fmt::Display) {
-    eprintln!(
-        "{}",
-        paint::bold_yellow(stderr_use_color(), &message.to_string())
-    );
+    presentation::warning(message, stderr_use_color());
 }
 
-/// Parse argv, coloring the root help footer the same way as `serve` when
-/// stdout is a color-capable terminal.
-fn parse_cli() -> Cli {
-    let mut cmd = Cli::command();
+/// Parse argv with clap's validation and the generated Multitool help view.
+fn configured_cli_command(color: bool) -> clap::Command {
     // Propagate CLI_STYLES from the root command onto every subcommand so
     // `multitool serve --help`, `multitool conn show --help`, etc. match the
-    // top-level palette (clap only sets styles on the derive root by default
-    // until build walks the tree).
-    cmd.build();
-    // Align clap's colorizer with our NO_COLOR / CLICOLOR_FORCE / TTY policy so
-    // the styled Usage/Commands block and the hand-painted footer stay in sync
-    // (Auto alone strips ANSI when stdout is piped even under CLICOLOR_FORCE).
-    if stdout_use_color() {
-        cmd = cmd
-            .color(clap::ColorChoice::Always)
-            .after_help(after_help_colored());
+    // top-level palette, and align clap errors with our help renderer.
+    // Color is configured before build so clap propagates it to every child.
+    let mut cmd = if color {
+        Cli::command().color(clap::ColorChoice::Always)
     } else {
-        cmd = cmd.color(clap::ColorChoice::Never);
-    }
+        Cli::command().color(clap::ColorChoice::Never)
+    };
+    presentation::install_help(&mut cmd, color);
+    cmd
+}
+
+fn parse_cli() -> Cli {
+    let cmd = configured_cli_command(stdout_use_color());
     let matches = match cmd.try_get_matches() {
         Ok(matches) => matches,
         Err(error) => error.exit(),
@@ -5340,104 +5367,9 @@ fn parse_cli() -> Cli {
     }
 }
 
-/// `AFTER_HELP` with the serve-banner palette: green section titles, cyan
-/// labels, dim secondary notes. Only used when [`stdout_use_color`] is true.
-fn after_help_colored() -> String {
-    let header = |text: &str| paint::wrap(true, &format!("{}{}", paint::BOLD, paint::GREEN), text);
-    let label = |text: &str| paint::wrap(true, &format!("{}{}", paint::BOLD, paint::CYAN), text);
-    let dim = |text: &str| paint::wrap(true, paint::DIM, text);
-
-    // Pad the visible label first; ANSI codes must not count toward width.
-    let group = |name: &str, rest: &str| {
-        let padded = format!("{name:<7}");
-        format!("  {} {rest}", label(&padded))
-    };
-    let workflow = |name: &str, rest: &str| {
-        let padded = format!("{name:<16}");
-        format!("  {} {rest}", label(&padded))
-    };
-    let exit = |code: u8, rest: &str| format!("  {}  {rest}", label(&code.to_string()));
-
-    [
-        header("COMMAND GROUPS"),
-        group("Agent", "skill  instructions  mcp  run"),
-        group("Open", "dsn  ssh  cloud  ssh-agent"),
-        group("Vault", "secret  conn"),
-        group(
-            "Broker",
-            "serve  status  sessions  requests  settings  key  activity  manage",
-        ),
-        group("Shell", "completions"),
-        String::new(),
-        format!(
-            "  {}",
-            dim("Commands stay top-level (multitool <command> …); groups are for orientation only.")
-        ),
-        String::new(),
-        header("COMMON WORKFLOWS"),
-        workflow("Agent setup", "multitool skill --write"),
-        workflow("MCP client", "multitool mcp"),
-        workflow("Headless broker", "multitool serve [--listen …]"),
-        workflow("Postgres", "eval \"$(multitool dsn <conn>)\" && psql"),
-        workflow("SSH", "export SSH_AUTH_SOCK=\"$(multitool ssh <conn>)\""),
-        workflow(
-            "Cloud",
-            "eval \"$(multitool cloud env <conn>)\"   # aws / az / gcloud",
-        ),
-        workflow("Ops", "multitool status | key | activity | requests"),
-        String::new(),
-        dim("See also: multitool <command> --help"),
-        String::new(),
-        header("EXIT CODES"),
-        exit(1, "generic/internal failure"),
-        exit(2, "invalid command usage or input"),
-        exit(3, "broker is not running"),
-        exit(4, "authentication or confirmation failed"),
-        exit(5, "requested object was not found"),
-        exit(6, "state conflict"),
-        exit(7, "remote broker is unreachable"),
-        exit(8, "connection test failed"),
-    ]
-    .join("\n")
-}
-
-/// ANSI paint helpers for serve, status, conn show, help, and errors.
+/// Semantic paint helpers retained as a short local name at call sites.
 mod paint {
-    pub const RESET: &str = "\x1b[0m";
-    pub const BOLD: &str = "\x1b[1m";
-    pub const DIM: &str = "\x1b[2m";
-    pub const RED: &str = "\x1b[31m";
-    pub const GREEN: &str = "\x1b[32m";
-    pub const YELLOW: &str = "\x1b[33m";
-    pub const CYAN: &str = "\x1b[36m";
-
-    pub fn wrap(enabled: bool, style: &str, text: &str) -> String {
-        if enabled {
-            format!("{style}{text}{RESET}")
-        } else {
-            text.to_string()
-        }
-    }
-
-    pub fn bold_red(enabled: bool, text: &str) -> String {
-        wrap(enabled, &format!("{BOLD}{RED}"), text)
-    }
-
-    pub fn bold_green(enabled: bool, text: &str) -> String {
-        wrap(enabled, &format!("{BOLD}{GREEN}"), text)
-    }
-
-    pub fn bold_yellow(enabled: bool, text: &str) -> String {
-        wrap(enabled, &format!("{BOLD}{YELLOW}"), text)
-    }
-
-    pub fn bold_cyan(enabled: bool, text: &str) -> String {
-        wrap(enabled, &format!("{BOLD}{CYAN}"), text)
-    }
-
-    pub fn dim(enabled: bool, text: &str) -> String {
-        wrap(enabled, DIM, text)
-    }
+    pub use crate::presentation::{bold_cyan, bold_green, bold_red, bold_yellow, dim};
 }
 
 /// How the agent-facing MCP host came up for the serve banner.
@@ -5470,12 +5402,12 @@ impl ServeBanner {
     /// Plain-text lines (no ANSI). The last line is empty so the process
     /// leaves a blank line before any later log noise.
     fn lines(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        out.push("Multitool broker ready".into());
-        out.push(String::new());
-
-        out.push(format_label("Socket", self.socket.display()));
-        out.push(format_label("Root", self.root.display()));
+        let mut out = vec![
+            "Multitool broker ready".into(),
+            String::new(),
+            format_label("Socket", self.socket.display()),
+            format_label("Root", self.root.display()),
+        ];
         if let Some(host) = &self.advertise_host {
             out.push(format_label(
                 "Data host",
@@ -5602,16 +5534,13 @@ impl ServeBanner {
 
     fn print(&self) {
         let color = stderr_use_color();
-        let warn = format!("{}{}", paint::BOLD, paint::YELLOW);
-        let label_ok = format!("{}{}", paint::BOLD, paint::CYAN);
-        let title = format!("{}{}", paint::BOLD, paint::GREEN);
         for line in self.lines() {
             if line.is_empty() {
                 eprintln!();
                 continue;
             }
             if line == "Multitool broker ready" {
-                eprintln!("{}", paint::wrap(color, &title, &line));
+                eprintln!("{}", paint::bold_green(color, &line));
                 continue;
             }
             let Some((label, value)) = split_label_line(&line) else {
@@ -5622,18 +5551,18 @@ impl ServeBanner {
                 || (label == "MCP" && value.starts_with("not started"))
                 || (matches!(label, "TCP" | "Public URL" | "UI") && value.starts_with("off"));
             let is_quit = label == "Quit";
-            let label_style = if is_warn {
-                warn.as_str()
+            let padded_label = format!("{label:<11}");
+            let label_col = if is_warn {
+                paint::bold_yellow(color, &padded_label)
             } else if is_quit {
-                paint::DIM
+                paint::dim(color, &padded_label)
             } else {
-                label_ok.as_str()
+                paint::bold_cyan(color, &padded_label)
             };
-            let label_col = paint::wrap(color, label_style, &format!("{label:<11}"));
             let value = if is_warn {
-                paint::wrap(color, &warn, value)
+                paint::bold_yellow(color, value)
             } else if is_quit {
-                paint::wrap(color, paint::DIM, value)
+                paint::dim(color, value)
             } else {
                 value.to_string()
             };
@@ -5838,16 +5767,8 @@ fn cmd_serve(args: ServeArgs) {
     let color = stderr_use_color();
     eprintln!(
         "  {} {}",
-        paint::wrap(
-            color,
-            &format!("{}{}", paint::BOLD, paint::CYAN),
-            &format!("{:11}", "Shutdown")
-        ),
-        paint::wrap(
-            color,
-            paint::DIM,
-            &format!("{signal} received; draining active sessions")
-        )
+        paint::bold_cyan(color, format!("{:11}", "Shutdown")),
+        paint::dim(color, format!("{signal} received; draining active sessions"))
     );
     daemon.stop_accepting();
     let sessions = broker.begin_shutdown();
@@ -5856,26 +5777,13 @@ fn cmd_serve(args: ServeArgs) {
     if !drained {
         eprintln!(
             "  {} {}",
-            paint::wrap(
-                color,
-                &format!("{}{}", paint::BOLD, paint::YELLOW),
-                &format!("{:11}", "Shutdown")
-            ),
-            paint::wrap(
-                color,
-                &format!("{}{}", paint::BOLD, paint::YELLOW),
-                "deadline reached with active sessions still closing"
-            )
+            paint::bold_yellow(color, format!("{:11}", "Shutdown")),
+            paint::bold_yellow(color, "deadline reached with active sessions still closing")
         );
     } else if sessions > 0 {
         eprintln!(
-            "  {} {}",
-            paint::wrap(
-                color,
-                &format!("{}{}", paint::BOLD, paint::CYAN),
-                &format!("{:11}", "Shutdown")
-            ),
-            format!("drained {sessions} active data-plane session(s)")
+            "  {} drained {sessions} active data-plane session(s)",
+            paint::bold_cyan(color, format!("{:11}", "Shutdown")),
         );
     }
     drop(mcp_host);
@@ -5906,7 +5814,7 @@ mod tests {
     impl BrokerEvents for TestEvents {}
 
     #[test]
-    fn cli_exit_codes_are_stable_and_documented() {
+    fn cli_exit_codes_are_stable() {
         assert_eq!(ExitCode::Generic as i32, 1);
         assert_eq!(ExitCode::Usage as i32, 2);
         assert_eq!(ExitCode::NoBroker as i32, 3);
@@ -5915,27 +5823,43 @@ mod tests {
         assert_eq!(ExitCode::Conflict as i32, 6);
         assert_eq!(ExitCode::RemoteUnreachable as i32, 7);
         assert_eq!(ExitCode::TestFailed as i32, 8);
+    }
 
-        let help = match Cli::try_parse_from(["multitool", "--help"]) {
+    #[test]
+    fn generated_help_is_grouped_and_does_not_drift() {
+        let help = match configured_cli_command(false)
+            .try_get_matches_from(["multitool", "--help"])
+        {
             Ok(_) => panic!("--help unexpectedly parsed as a command"),
             Err(error) => error.to_string(),
         };
         assert!(
-            help.contains("COMMAND GROUPS"),
+            help.contains("AGENT") && help.contains("BROKER"),
             "bare help should orient with command groups:\n{help}"
         );
         assert!(
             help.contains("COMMON WORKFLOWS"),
             "bare help should orient with workflows:\n{help}"
         );
-        for code in 1..=8 {
-            assert!(help.contains(&format!("  {code}  ")), "{help}");
-        }
-        // Stable exit-code table lives in AFTER_HELP (not free-form prose).
-        assert!(
-            AFTER_HELP.contains("EXIT CODES"),
-            "AFTER_HELP must document exit codes"
-        );
+        assert!(!help.contains("EXIT CODES"), "{help}");
+        assert!(!help.contains("multitool run"), "{help}");
+        assert_eq!(help.matches("Write or print the agent skill file").count(), 1);
+
+        let bare = match configured_cli_command(false).try_get_matches_from(["multitool"]) {
+            Ok(_) => panic!("a commandless invocation unexpectedly parsed"),
+            Err(error) => error.to_string(),
+        };
+        assert!(bare.contains("COMMON WORKFLOWS"), "{bare}");
+
+        let nested = match configured_cli_command(false)
+            .try_get_matches_from(["multitool", "conn", "show", "--help"])
+        {
+            Ok(_) => panic!("nested --help unexpectedly parsed as a command"),
+            Err(error) => error.to_string(),
+        };
+        assert!(nested.contains("multitool conn show"), "{nested}");
+        assert!(nested.contains("ARGUMENTS"), "{nested}");
+        assert!(nested.contains("--broker <BROKER>"), "{nested}");
     }
 
     #[test]
@@ -5995,36 +5919,22 @@ mod tests {
     }
 
     #[test]
-    fn colored_after_help_keeps_plain_structure() {
-        let colored = after_help_colored();
-        assert!(colored.contains("COMMAND GROUPS"));
-        assert!(colored.contains("COMMON WORKFLOWS"));
-        assert!(colored.contains("EXIT CODES"));
-        assert!(colored.contains("multitool skill --write"));
-        assert!(colored.contains("generic/internal failure"));
-        // Color is always on for this helper; escape sequences should be present.
-        assert!(colored.contains('\u{1b}'));
-        // Strip ANSI and compare the plain footer line-for-line.
-        let stripped: String = {
-            let mut out = String::new();
-            let mut chars = colored.chars().peekable();
-            while let Some(c) = chars.next() {
-                if c == '\u{1b}' {
-                    if chars.peek() == Some(&'[') {
-                        chars.next();
-                        for c in chars.by_ref() {
-                            if c.is_ascii_alphabetic() {
-                                break;
-                            }
-                        }
-                    }
-                    continue;
-                }
-                out.push(c);
-            }
-            out
+    fn generated_help_obeys_color_mode() {
+        let colored = match configured_cli_command(true)
+            .try_get_matches_from(["multitool", "--help"])
+        {
+            Ok(_) => panic!("--help unexpectedly parsed as a command"),
+            Err(error) => error.render().ansi().to_string(),
         };
-        assert_eq!(stripped, AFTER_HELP);
+        assert!(colored.contains('\u{1b}'));
+
+        let plain = match configured_cli_command(false)
+            .try_get_matches_from(["multitool", "--help"])
+        {
+            Ok(_) => panic!("--help unexpectedly parsed as a command"),
+            Err(error) => error.to_string(),
+        };
+        assert!(!plain.contains('\u{1b}'));
     }
 
     #[test]
@@ -6193,7 +6103,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_open_failures_follow_the_documented_exit_codes() {
+    fn structured_open_failures_have_specific_exit_codes() {
         use client::OpenSessionError;
         let refused = |status: u16, reason: &str| OpenSessionError::Refused {
             status,

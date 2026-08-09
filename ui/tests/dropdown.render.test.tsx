@@ -122,11 +122,11 @@ test('the tray boots as one combined view with no tab switcher', async () => {
   });
   assert.deepEqual(
     [...document.querySelectorAll('.dd-sec-h')].map((h) => h.textContent),
-    ['Agent Tools MCPs, APIs, Cloud IAMs', 'Passwords', 'Secrets'],
+    ['Connections', 'Passwords', 'Secrets'],
   );
-  assert.equal(document.querySelector('.dd-tools .agent-tools-context')?.textContent,
-    'MCPs, APIs, Cloud IAMs');
-  // Option B slim bars: one bar per tool; overflow past five is "All tools ›".
+  assert.equal(document.querySelector('.dd-tools .agent-tools-context'), null,
+    'the menu-bar section uses the compact Connections label');
+  // Flat connection rows: one bar per tool; overflow past five is "All tools ›".
   const band = document.querySelector<HTMLElement>('.tools-band');
   assert.ok(band, 'the tools slim-bar band renders');
   const bars = [...band.querySelectorAll<HTMLElement>('.tool-bar')];
@@ -199,7 +199,7 @@ test('the tray gear opens the panel menu, not the Settings sheet', async () => {
     // The Activity row carries a pending-request count; drop it to compare.
     .map((item) => item.textContent?.replace(/\s+/g, ' ').replace(/\s*\d+$/, '').trim());
   assert.deepEqual(labels, [
-    'Inventory', 'Activity Log', 'Settings', 'Quit Multitool',
+    'Credentials', 'Activity Log', 'Settings', 'Quit Multitool',
   ]);
   // Connecting an agent is a window-only walkthrough: no route from here.
   assert.equal(menu.querySelector('[data-tab="start"]'), null);
@@ -216,7 +216,7 @@ test('the tray gear opens the panel menu, not the Settings sheet', async () => {
   assert.ok(document.querySelector('.dd-head .settings-menu'), 'the menu stays open');
   testingLibrary.fireEvent.click(light);
   assert.equal(document.documentElement.dataset.theme, 'light');
-  // A destination click dismisses the popover. Inventory is the view the tray
+  // A destination click dismisses the popover. Credentials is the view the tray
   // is already on, so this leaves the panel where the next test expects it.
   pickTrayMenuItem(menu, '[data-tab="secrets"]');
   await testingLibrary.waitFor(() => {
@@ -224,11 +224,11 @@ test('the tray gear opens the panel menu, not the Settings sheet', async () => {
   });
 });
 
-test('the request notice spans the tray edge to edge with matching hairlines', () => {
+test('the request notice is an inset card inside the tray scroller', () => {
   const band = document.querySelector<HTMLElement>('.dd-global.request-route-only');
   assert.ok(band, 'the waiting-request band renders in the tray');
-  assert.ok(band.parentElement?.classList.contains('dropdown-content-container'),
-    'the notice is chrome under the header, not a row inside the list');
+  assert.ok(band.parentElement?.classList.contains('dd-content'),
+    'the notice scrolls with Connections and credentials');
   assert.ok(band.querySelector('.request-banner'));
 });
 
@@ -287,7 +287,7 @@ test('the tray omits the tools ledge when there are no tools', async () => {
     const search = document.querySelector('.dd-cat-search');
     assert.ok(search);
     assert.ok(search.nextElementSibling?.classList.contains('dd-creds'),
-      'the credential inventory directly consumes the search gap');
+      'the credential list directly consumes the search gap');
   } finally {
     await testingLibrary.act(async () => {
       appState.state.connections = connections;
@@ -352,16 +352,16 @@ test('a tool bar opens the detail slide-over', async () => {
   });
 });
 
-test('credential rows use the C1 icon-well cluster', async () => {
+test('credential rows use the compact copy-action cluster', async () => {
   const rows = await testingLibrary.waitFor(() => {
     const list = [...document.querySelectorAll<HTMLElement>('.dd-cred')];
     assert.ok(list.length >= 1, 'credential rows render');
     return list;
   });
-  // Every row keeps a key well outside the expand toggle (one-click copy).
+  // Every row keeps a copy button outside the expand toggle (one-click copy).
   for (const row of rows) {
     assert.ok(row.querySelector('.dd-cred-wells button[data-act="copy-secret"]'),
-      'the key well copies without expanding');
+      'the copy button copies without expanding');
     assert.equal(row.querySelector('.dd-cred-open .dd-cred-wells'), null,
       'wells are siblings of the toggle, not nested buttons');
   }
