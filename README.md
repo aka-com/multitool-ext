@@ -75,10 +75,16 @@ encode credential material into a new form.
    DATABASE_URL, SSH endpoint, etc., while MCPs get a unified tool.
 
    ```sh
-   eval "$(aka dsn analytics)" && psql             # ticket stays in PGPASSWORD
-   export SSH_AUTH_SOCK="$(aka ssh production)"    # scoped signing agent
-   claude mcp add multitool -- aka mcp             # unified MCP tool
+   aka run analytics -- psql                       # scoped PG* environment
+   aka run production -- ssh production            # scoped signing agent
+   aka setup claude-code                           # print MCP client setup
    ```
+
+   `aka run <connection> -- <command>` is the one runner for every kind:
+   the connection's kind decides whether the child gets a `PG*`
+   environment, a scoped signing agent, temporary cloud credentials, or
+   `AKA_URL`/`AKA_TOKEN` for an API endpoint. `aka env <connection>`
+   prints the same values as shell exports.
 
    For each connection type, the broker injects the real credential on
    the upstream connection. Turn the connection off in the app to refuse
@@ -89,6 +95,103 @@ encode credential material into a new form.
 
 Any agent that uses MCP or the CLI works: Claude Code, Claude Desktop,
 Codex, Cursor, your own harness using `curl`.
+
+### Headless CLI
+
+Agent and client onboarding lives under one setup namespace:
+
+```sh
+aka setup codex               # print a paste-ready MCP client config
+aka setup claude-code --write # apply it: register, write the skill, pin the repo
+aka setup skill --write       # install the repo-local agent skill on its own
+aka setup instructions        # print the authoritative setup document
+```
+
+`--write` registers the MCP server with clients that own their config
+through a CLI (Claude Code), writes `.claude/skills/multitool/SKILL.md`,
+and pins the working directory to the current context. Clients configured
+by editing a file you own (Codex, Claude Desktop) get the stanza printed
+and the path named, so nothing rewrites a file holding your other servers.
+
+The former top-level `skill` and `instructions` commands remain hidden
+compatibility aliases for existing scripts.
+
+For headless setup, connection creation and updates are grouped by kind so
+each command exposes only relevant fields:
+
+```sh
+aka serve  # ~/.akaserver, TCP 127.0.0.1:4780, public URL http://localhost:4780
+aka conn add pg analytics --host db.example.com --dbname app \
+  --user agent --secret DATABASE_PASSWORD
+aka conn update pg analytics --sslmode verify-full
+```
+
+An add tests itself against the pinned destination as soon as it lands, so
+a typo in a host or a stale credential surfaces immediately. The
+connection is added either way — a failed test reports and points at
+`aka conn test <name>`, it does not roll the add back. Pass `--no-test`
+when the destination is not reachable yet.
+
+Per-connection policy is kind-free, so it rides `conn update` by name:
+
+```sh
+aka conn update analytics --confirm      # hold traffic for user confirmation
+aka conn disable analytics               # refuse every agent's calls
+```
+
+Use `aka serve --no-listen` for Unix-socket-only operation. Override
+`--listen` and `--public-url` when a proxy, tunnel, or remote deployment needs
+different addresses.
+
+The desktop app never attaches to a headless broker directly: "Local
+Multitool" in the app runs its own broker on `~/.aka`, while `aka serve` uses
+`~/.akaserver`. To point the app at a headless broker, connect it as a hosted
+instance — `aka setup desktop` prints the URL and management token to paste
+into the app's connect form.
+
+Pass `--json` to bounded reads and mutations for machine-readable output.
+Successful mutations return an `ok`, `action`, and `result` envelope; streaming
+and format-specific commands such as `serve`, `mcp`, and `completions` do not
+offer JSON mode.
+
+### Joining a shared broker
+
+A teammate joins a broker someone else runs with a one-use invite. The
+operator mints it on the broker host; `/v1/pair` is never served over TCP,
+so an invite is the only way the shared agent key crosses a network:
+
+```sh
+aka admin invite --label rae                          # on the broker host
+aka login https://broker.example.dev/join#akajoin_…   # on their machine
+```
+
+The code rides in the URL fragment, which is never sent to a server, so
+joining is one pasted command. An invite expires in 15 minutes and is
+spent by the first redemption; what it hands back is the same shared agent
+key every agent on that broker holds, so it grants no identity of its own.
+`aka login` stores that key and defines a context. Management commands
+need their own credential (`aka admin login --broker <url>`); the two
+planes stay separate, and `aka logout` forgets only the agent key.
+
+### Broker contexts
+
+Commands point at a broker through one resolution chain, so `--root` and
+`--broker` are needed only to override it:
+
+```
+--root/--broker  →  AKA_BROKER  →  a repo .aka pin  →  aka use default  →  local
+```
+
+```sh
+aka use                       # list contexts and show what resolves now
+aka use corp --broker https://broker.example.dev
+aka use corp --pin            # write ./.aka so this repo's agents inherit it
+```
+
+`local` (the desktop app's `~/.aka`) and `server` (the `aka serve` root)
+are built in. Usage commands (`run`, `env`, `mcp`) open sessions on this
+machine's broker, so a context pointing at a remote broker is refused with
+what each kind would need instead.
 
 ### Compatibility with pre-rename installs
 
@@ -108,41 +211,53 @@ Agents that run shell commands don't need MCP at all: each connection
 is automatically exposed as a local endpoint, that automatically
 injects the credential on the upstream.
 
-- **Postgres** — `aka dsn <connection>` prints shell-safe `PG*` exports with
-  the short-lived ticket in `PGPASSWORD`, keeping it out of process-visible
-  argv:
+`aka run <connection> -- <command>` covers every kind; the connection's
+kind decides what the child process gets.
+
+- **Postgres** — a short-lived `PG*` environment with the ticket in
+  `PGPASSWORD`, keeping it out of process-visible argv:
 
   ```sh
-  eval "$(aka dsn analytics)"
-  psql
+  aka run analytics -- psql
   ```
 
   The broker-facing Postgres leg does not support TLS and therefore sets
   `PGSSLMODE=disable`; use it only over the trusted path to the broker.
   Upstream TLS from the broker to the database is configured separately on
-  the connection. `--format uri` is available for compatibility but embeds
-  the ticket in argv.
+  the connection. `aka env analytics` prints shell-safe exports instead;
+  its `--format uri` embeds the ticket in argv.
 
-- **SSH** — `aka ssh <connection>` prints an `SSH_AUTH_SOCK` backed by a
-  scoped signing agent; the private key never leaves the broker. Works
-  with stock `ssh`, `git`, `scp`, and `rsync`:
+- **SSH** — stock `ssh`, `git`, `scp`, `sftp`, or `rsync` with a scoped
+  signing agent and the mandatory broker-safe SSH options; the private key
+  never leaves the broker:
 
   ```sh
-  export SSH_AUTH_SOCK="$(aka ssh production)"
-  ssh production uptime
-  git push production main
-  scp app.tar.gz production:/srv/app/
-  rsync -av build/ production:/srv/app/
+  aka run production -- ssh production uptime
+  aka run production -- git push production main
+  aka run production -- scp app.tar.gz production:/srv/app/
+  aka run production -- rsync -av build/ production:/srv/app/
   ```
 
-- **HTTP / API** — each API connection gets a loopback endpoint, which
-  you can use to directly reach the upstream with `curl` and SDKs.
-  Issue the endpoint in the app, then send its endpoint secret in place
-  of the real credential; the broker swaps it for the real one upstream:
+- **Cloud** — temporary AWS/Azure/GCP credentials in the child's
+  environment; the vaulted long-lived identity never prints:
 
   ```sh
-  curl -H "Authorization: Bearer $ENDPOINT_SECRET" \
-    http://127.0.0.1:52000/user/repos
+  aka run staging-aws -- aws s3 ls
+  ```
+
+  For tooling that fetches credentials itself, `aka cloud creds` and
+  `aka cloud install` emit `credential_process` forms.
+
+- **HTTP / API** — each API connection gets a loopback endpoint, which
+  you can use to directly reach the upstream with `curl` and SDKs. Issue
+  the endpoint (`aka endpoint github --issue`, or in the app), then send
+  its endpoint secret in place of the real credential; the broker swaps it
+  for the real one upstream. `aka run` and `aka env` hand that endpoint to
+  a command as `AKA_URL` and `AKA_TOKEN`:
+
+  ```sh
+  eval "$(aka env github)"
+  curl -H "Authorization: Bearer $AKA_TOKEN" "$AKA_URL/user/repos"
   ```
 
 ### Multitool MCP setup
@@ -160,13 +275,23 @@ connection changes and upstream provisioning are announced to active sessions;
 the agent refreshes its catalog without reconnecting to Multitool.
 Use `multitool_status` first when a tool is missing or an upstream failed.
 
-**Claude Code**:
+Generate a paste-ready configuration for your client. This is a setup command;
+the generated configuration launches the separate `aka mcp` runtime bridge:
+
+```sh
+aka setup codex
+aka setup claude-code
+aka setup claude-desktop
+```
+
+**Claude Code** (`aka setup claude-code`):
 
 ```sh
 claude mcp add multitool -- aka mcp --client claude-code
 ```
 
-**Claude Desktop** in `claude_desktop_config.json`:
+**Claude Desktop** (`aka setup claude-desktop`) in
+`claude_desktop_config.json`:
 
 ```json
 {
@@ -179,7 +304,7 @@ claude mcp add multitool -- aka mcp --client claude-code
 }
 ```
 
-**Codex** in `~/.codex/config.toml`:
+**Codex** (`aka setup codex`) in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.multitool]
@@ -187,8 +312,9 @@ command = "aka"
 args = ["mcp", "--client", "codex"]
 ```
 
-Any client that launches stdio servers can run `aka mcp` directly,
-which discovers the broker and its key automatically.
+`aka mcp` is the stdio server command launched by the configured client. It
+discovers the broker and its key automatically; users normally run
+`aka setup <client>` instead of invoking the runtime bridge themselves.
 
 ## Contributing
 

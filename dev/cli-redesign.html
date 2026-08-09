@@ -1,0 +1,1116 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>aka CLI redesign — persona walkthrough</title>
+<!--
+  Interactive design proposal for the pre-launch CLI redesign (see the
+  review in chat: loops ranked by frequency; contexts replace --root/--broker;
+  `aka run` replaces dsn/ssh/cloud-env; `aka login` + `aka admin invite`
+  replace out-of-band key handoff; policy toggles fold into `conn update`;
+  the admin plane is fenced under `aka admin`).
+
+  Pick a persona, pick a flow, and step through it in the mock terminal
+  (buttons, or ← / → / space). The "Command tree" card swaps to a full
+  reference of the proposed surface with new/renamed/kept badges.
+
+  The Interactivity toggle compares two levels that share the same command
+  tree: "Soft" keeps the CLI flags-only (status header + NEXT hint on bare
+  aka, scaffold errors instead of forms, print-by-default setup with
+  --write, zero-prompt invite URLs); "Guided" is the prompt-driven variant
+  (dashboard, wizard add, setup that writes config).
+
+  Tokens are copied from ui/styles.css (:root and the dark overrides) so the
+  chrome matches the app; the terminal palette is fixed-dark on purpose.
+-->
+<style>
+  :root{
+    color-scheme: light;
+    --ink:#1d1d1f; --ink-2:#2c2c30; --ink-3:#3c3c42;
+    --muted:#66666f; --muted-2:#6d6d76; --faint:#707078;
+    --accent:#0a7cff; --accent-text:#0a7cff; --accent-ink:#0a63d0;
+    --accent-wash:rgba(10,124,255,.08); --accent-wash-2:rgba(10,124,255,.12);
+    --accent-border:rgba(10,124,255,.32);
+    --ok-ink:#1a8f3c; --ok-wash:rgba(52,199,89,.09); --ok-border:rgba(52,199,89,.28);
+    --amber-ink:#7a5410; --amber-wash:rgba(255,190,50,.16); --amber-border:rgba(200,140,20,.3);
+    --danger-ink:#d70015; --danger-wash:rgba(255,59,48,.08); --danger-border:rgba(255,59,48,.38);
+    --panel:#fbfbfd; --btn-bg:#fff; --btn-hover:#f2f2f5;
+    --card-bg:rgba(255,255,255,.72);
+    --chip-bg:rgba(0,0,0,.06); --chip-ink:#4c4c53;
+    --hover:rgba(0,0,0,.06);
+    --wash:rgba(0,0,0,.025); --wash-2:rgba(0,0,0,.04);
+    --seg-bg:rgba(0,0,0,.065); --seg-on-bg:#fff; --seg-on-ink:#111;
+    --line:rgba(0,0,0,.08); --line-soft:rgba(0,0,0,.06);
+    --line-mid:rgba(0,0,0,.10); --line-strong:rgba(0,0,0,.14);
+    --shadow-xs:0 1px 1px rgba(0,0,0,.04);
+    --shadow-card:0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
+    --window:#eef0f3;
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --ink:#ececf0; --ink-2:#d8d8de; --ink-3:#c9c9d1;
+    --muted:#9a9aa4; --muted-2:#8e8e96; --faint:#84848d;
+    --accent:#0a7cff; --accent-text:#58a6ff; --accent-ink:#7db8ff;
+    --accent-wash:rgba(88,166,255,.12); --accent-wash-2:rgba(88,166,255,.18);
+    --accent-border:rgba(88,166,255,.32);
+    --ok-ink:#4cd97b; --ok-wash:rgba(52,199,89,.14); --ok-border:rgba(76,217,123,.32);
+    --amber-ink:#e8b64c; --amber-wash:rgba(255,190,50,.14); --amber-border:rgba(232,182,76,.34);
+    --danger-ink:#ff6b61; --danger-wash:rgba(255,90,80,.14); --danger-border:rgba(255,110,100,.48);
+    --panel:#1b1b20; --btn-bg:#26262c; --btn-hover:#303038;
+    --card-bg:rgba(255,255,255,.04);
+    --chip-bg:rgba(255,255,255,.08); --chip-ink:#b9b9c2;
+    --hover:rgba(255,255,255,.06);
+    --wash:rgba(255,255,255,.03); --wash-2:rgba(255,255,255,.05);
+    --seg-bg:rgba(255,255,255,.09); --seg-on-bg:#3a3a42; --seg-on-ink:#f2f2f6;
+    --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.07);
+    --line-mid:rgba(255,255,255,.11); --line-strong:rgba(255,255,255,.16);
+    --shadow-xs:0 1px 1px rgba(0,0,0,.3);
+    --shadow-card:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    --window:#0d0d10;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; }
+  body{
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color:var(--ink); background:var(--window);
+    -webkit-font-smoothing:antialiased;
+    padding:28px 24px 64px;
+  }
+  code, .mono{
+    font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  code{
+    background:var(--chip-bg); color:var(--ink-2);
+    padding:.08em .35em; border-radius:5px; font-size:.92em;
+  }
+  .wrap{ max-width:1160px; margin:0 auto; }
+
+  /* ---------- header ---------- */
+  .top{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:22px; }
+  .top h1{ margin:0; font-size:1.45rem; letter-spacing:-.01em; }
+  .top h1 .mono{ font-weight:700; }
+  .top h1 span.lite{ font-weight:500; color:var(--muted); }
+  .top .sub{ margin:6px 0 0; color:var(--muted); font-size:.875rem; max-width:46rem; line-height:1.45; }
+  .seg{ display:inline-flex; background:var(--seg-bg); border-radius:8px; padding:2px; flex:0 0 auto; }
+  .seg button{
+    appearance:none; border:0; background:transparent; color:var(--muted);
+    font:inherit; font-size:.8125rem; padding:4px 12px; border-radius:6px; cursor:pointer;
+  }
+  .seg button[aria-pressed="true"]{ background:var(--seg-on-bg); color:var(--seg-on-ink); box-shadow:var(--shadow-xs); }
+  .segwrap{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; flex:0 0 auto; }
+
+  /* ---------- persona cards ---------- */
+  .personas{ display:grid; grid-template-columns:repeat(5, 1fr); gap:10px; }
+  @media (max-width: 900px){ .personas{ grid-template-columns:repeat(2, 1fr); } }
+  .pcard{
+    appearance:none; text-align:left; font:inherit; cursor:pointer;
+    background:var(--card-bg); border:1px solid var(--line-mid); border-radius:12px;
+    padding:12px 14px; color:var(--ink); box-shadow:var(--shadow-xs);
+    transition:border-color .12s, background .12s;
+  }
+  .pcard:hover{ background:var(--hover); }
+  .pcard[aria-pressed="true"]{ border-color:var(--accent-border); background:var(--accent-wash); }
+  .pcard .pico{ font-size:1.15rem; display:block; margin-bottom:6px; }
+  .pcard .pname{ font-weight:600; font-size:.875rem; display:block; }
+  .pcard .pdesc{ display:block; margin-top:3px; font-size:.75rem; color:var(--muted); line-height:1.35; }
+  .pcard.ref{ border-style:dashed; }
+  .pcard .rank{
+    float:right; font-size:.6875rem; color:var(--accent-ink); background:var(--accent-wash-2);
+    border-radius:99px; padding:1px 7px; font-weight:600;
+  }
+
+  .persona-blurb{ margin:14px 2px 4px; color:var(--muted); font-size:.8125rem; line-height:1.5; max-width:56rem; }
+
+  /* ---------- flow chips ---------- */
+  .flows{ display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 18px; }
+  .fchip{
+    appearance:none; font:inherit; font-size:.8125rem; cursor:pointer;
+    border:1px solid var(--line-mid); background:var(--btn-bg); color:var(--ink-3);
+    border-radius:99px; padding:5px 14px;
+  }
+  .fchip:hover{ background:var(--btn-hover); }
+  .fchip[aria-pressed="true"]{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  .fchip .n{ opacity:.65; margin-right:6px; font-size:.75rem; }
+
+  /* ---------- stage ---------- */
+  .stage{ display:grid; grid-template-columns:320px minmax(0,1fr); gap:18px; align-items:start; }
+  @media (max-width: 900px){ .stage{ grid-template-columns:1fr; } }
+
+  .rail{ display:flex; flex-direction:column; gap:8px; }
+  .rstep{
+    appearance:none; text-align:left; font:inherit; cursor:pointer;
+    display:grid; grid-template-columns:24px 1fr; gap:10px;
+    background:var(--card-bg); border:1px solid var(--line-soft); border-radius:11px;
+    padding:11px 12px; color:var(--ink);
+  }
+  .rstep:hover{ background:var(--hover); }
+  .rstep .idx{
+    width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:.72rem; font-weight:600; background:var(--chip-bg); color:var(--muted); margin-top:1px;
+  }
+  .rstep .rt{ font-size:.8125rem; font-weight:600; }
+  .rstep .rn{ font-size:.75rem; color:var(--muted); line-height:1.45; margin-top:3px; }
+  .rstep[data-state="done"] .idx{ background:var(--ok-wash); color:var(--ok-ink); }
+  .rstep[data-state="current"]{ border-color:var(--accent-border); background:var(--accent-wash); }
+  .rstep[data-state="current"] .idx{ background:var(--accent); color:#fff; }
+  .rstep[data-state="future"] .rt{ color:var(--muted); }
+  .rstep[data-state="future"] .rn{ color:var(--faint); }
+
+  /* ---------- terminal ---------- */
+  .termwrap{ min-width:0; }
+  .term{
+    border-radius:12px; overflow:hidden; box-shadow:var(--shadow-card);
+    border:1px solid var(--line-strong);
+    background:#15161c;
+  }
+  .term-bar{
+    height:36px; display:flex; align-items:center; gap:8px; padding:0 14px;
+    background:#1d1e26; border-bottom:1px solid rgba(255,255,255,.07);
+  }
+  .term-bar i{ width:12px; height:12px; border-radius:50%; }
+  .term-bar .r{ background:#ff5f57; } .term-bar .y{ background:#febc2e; } .term-bar .g{ background:#28c840; }
+  .term-bar span{
+    flex:1; text-align:center; font-size:.75rem; color:#8b8d98;
+    font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding-right:56px; /* balance the lights */
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .term-body{
+    height:480px; overflow-y:auto; padding:16px 18px 22px;
+    font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size:.8125rem; line-height:1.5; color:#e6e6ec;
+    white-space:pre-wrap; word-break:break-word;
+  }
+  .term-body::-webkit-scrollbar{ width:10px; }
+  .term-body::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.14); border-radius:5px; }
+
+  /* terminal semantic colors: fixed-dark, independent of page theme */
+  .term-body .cwd{ color:#8b8d98; }
+  .term-body .pp{ color:#6ab8ff; font-weight:700; }
+  .term-body .cm{ color:#8b8d98; font-style:italic; }
+  .term-body .cmd{ color:#f2f2f6; font-weight:600; }
+  .term-body .out b.ok{ color:#4cd97b; font-weight:700; }
+  .term-body .out b.err{ color:#ff7168; font-weight:700; }
+  .term-body .out .warn{ color:#f2c14e; }
+  .term-body .out .dim{ color:#8b8d98; }
+  .term-body .out .acc{ color:#6ab8ff; }
+  .term-body .out .q{ color:#d78cff; font-weight:700; }
+  .term-body .out b{ color:#fff; font-weight:700; }
+  .term-body .cursor{
+    display:inline-block; width:.55em; height:1.05em; vertical-align:-0.15em;
+    background:#e6e6ec; animation:blink 1s steps(1) infinite;
+  }
+  @keyframes blink{ 50%{ opacity:0; } }
+  .term-body .step{ display:block; }
+  .term-body .step .out{ display:block; margin:2px 0 0; }
+  .term-body .step + .step{ margin-top:14px; }
+  .term-body .out.reveal{ animation:rise .18s ease-out; }
+  @keyframes rise{ from{ opacity:0; transform:translateY(3px);} to{ opacity:1; transform:none;} }
+  @media (prefers-reduced-motion: reduce){
+    .term-body .out.reveal{ animation:none; }
+    .term-body .cursor{ animation:none; }
+  }
+
+  /* ---------- controls ---------- */
+  .controls{ display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .controls .spacer{ flex:1; }
+  .controls .count{ font-size:.8125rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .controls .kbd-hint{ font-size:.75rem; color:var(--faint); }
+  .controls kbd{
+    font-family:inherit; font-size:.7rem; border:1px solid var(--line-strong);
+    border-radius:5px; padding:0 5px; background:var(--btn-bg); color:var(--muted);
+  }
+  .btn{
+    appearance:none; font:inherit; font-size:.8125rem; cursor:pointer;
+    border:1px solid var(--line-strong); background:var(--btn-bg); color:var(--ink-2);
+    border-radius:8px; padding:6px 14px; box-shadow:var(--shadow-xs);
+  }
+  .btn:hover{ background:var(--btn-hover); }
+  .btn:disabled{ opacity:.45; cursor:default; }
+  .btn:disabled:hover{ background:var(--btn-bg); }
+  .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .btn.primary:hover{ filter:brightness(1.06); }
+  .btn.primary:disabled{ filter:none; }
+
+  /* ---------- reference (command tree) ---------- */
+  .reference{ display:none; }
+  .reference.show{ display:block; }
+  .ref-note{
+    background:var(--accent-wash); border:1px solid var(--accent-border);
+    border-radius:11px; padding:12px 16px; font-size:.8125rem; line-height:1.55;
+    color:var(--ink-2); margin-bottom:16px; max-width:64rem;
+  }
+  .ref-note b{ color:var(--accent-ink); }
+  .ref-grid{ display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; }
+  @media (max-width: 900px){ .ref-grid{ grid-template-columns:1fr; } }
+  .ref-sec{
+    background:var(--card-bg); border:1px solid var(--line-mid); border-radius:12px;
+    padding:14px 16px 8px; box-shadow:var(--shadow-xs);
+  }
+  .ref-sec h3{
+    margin:0 0 4px; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted);
+  }
+  .ref-sec .sec-sub{ margin:0 0 10px; font-size:.75rem; color:var(--faint); }
+  .ref-row{
+    display:grid; grid-template-columns:minmax(0,15rem) auto 1fr; gap:10px; align-items:baseline;
+    padding:8px 0; border-top:1px solid var(--line-soft);
+  }
+  .ref-row .rc{ font-size:.78rem; color:var(--ink-2); background:transparent; padding:0; }
+  .ref-row .rd{ font-size:.78rem; color:var(--muted); line-height:1.4; }
+  .badge{
+    font-size:.62rem; font-weight:700; letter-spacing:.05em; border-radius:99px;
+    padding:1.5px 8px; white-space:nowrap; align-self:center;
+  }
+  .badge.new{ background:var(--ok-wash); color:var(--ok-ink); border:1px solid var(--ok-border); }
+  .badge.ren{ background:var(--amber-wash); color:var(--amber-ink); border:1px solid var(--amber-border); }
+  .badge.kept{ background:var(--chip-bg); color:var(--chip-ink); border:1px solid var(--line-soft); }
+  .badge.cut{ background:var(--danger-wash); color:var(--danger-ink); border:1px solid var(--danger-border); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1><span class="mono">aka</span> <span class="lite">— CLI redesign walkthrough</span></h1>
+      <p class="sub">
+        The proposed pre-launch command surface, shown as the golden paths each persona
+        actually walks. Personas are ordered by how often their loops run. Pick a flow and
+        step through it; the terminal accumulates a real session. The <b>Interactivity</b>
+        toggle compares a flags-only “soft” surface against the prompt-driven “guided” one —
+        same command tree either way.
+      </p>
+    </div>
+    <div class="segwrap">
+      <div class="seg" role="group" aria-label="Interactivity">
+        <button id="modeSoft" aria-pressed="true">Soft CLI</button>
+        <button id="modeGuided" aria-pressed="false">Guided CLI</button>
+      </div>
+      <div class="seg" role="group" aria-label="Theme">
+        <button id="themeLight" aria-pressed="true">Light</button>
+        <button id="themeDark" aria-pressed="false">Dark</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="personas" id="personas" aria-label="Personas"></nav>
+  <p class="persona-blurb" id="personaBlurb"></p>
+  <nav class="flows" id="flows" aria-label="Flows"></nav>
+
+  <main class="stage" id="stage">
+    <aside class="rail" id="rail" aria-label="Steps"></aside>
+    <section class="termwrap">
+      <div class="term">
+        <div class="term-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span id="termTitle">zsh</span></div>
+        <div class="term-body" id="termBody"></div>
+      </div>
+      <div class="controls">
+        <button class="btn" id="restartBtn" title="Restart flow">&#8635; Restart</button>
+        <span class="kbd-hint"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>space</kbd> to step</span>
+        <div class="spacer"></div>
+        <span class="count" id="stepCount"></span>
+        <button class="btn" id="prevBtn">&larr; Back</button>
+        <button class="btn primary" id="nextBtn">Next &rarr;</button>
+      </div>
+    </section>
+  </main>
+
+  <section class="reference" id="reference">
+    <div class="ref-note">
+      <b>The keystone: one ambient context.</b> Every command resolves its broker the same way —
+      <code>--broker &lt;name-or-url&gt;</code> flag &rarr; <code>AKA_BROKER</code> env &rarr;
+      repo pin file (walk up from cwd, like <i>vercel link</i>) &rarr; the <code>aka use</code> default &rarr;
+      local auto-detect (<code>~/.aka</code>, then <code>~/.akaserver</code>). This deletes
+      <code>--root</code>/<code>--broker</code> from twenty command signatures and makes the hot path
+      work against remote brokers, which today are unreachable from <code>dsn</code>/<code>ssh</code>/<code>mcp</code>
+      (socket-only). Verbs for the daily loop, nouns for management, and everything privileged under one word:
+      <code>admin</code>. Interactivity is a dial, not a commitment: this tree reads as the <b>soft</b> level —
+      flags-only, scaffold errors instead of forms, print-by-default setup — and the guided upgrades (dashboard,
+      wizard add, setup that writes) can layer on later without renaming anything.
+    </div>
+    <div class="ref-grid" id="refGrid"></div>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+
+/* ---------------- data ---------------- */
+
+const PERSONAS = [
+  {
+    id:'team', icon:'\u{1F9D1}‍\u{1F4BB}', name:'Team dev', rank:'loops 1–3, 5',
+    desc:'Uses services provisioned on the team’s remote broker.',
+    blurb:'Joins once, onboards their agent once per repo, then lives in the hot loop. The launch-critical persona: today the hot-path commands are Unix-socket-only, so this person cannot use the CLI at all. In the redesign, login stores a context and every command honors it — they never see keys, tokens, or the operator plane.',
+    flows:[
+      {
+        id:'join', name:'Day one: join & onboard', cwd:'~/code/api-service', title:'raymond@laptop — zsh',
+        steps:[
+          {
+            title:'Join the team broker',
+            note:'One command replaces the out-of-band agent-key handoff, manage login, and AKA_* env vars. Pairing stays invite-gated over TCP — /v1/pair is still not open.',
+            cmds:[{ cmd:'aka login https://broker.corp.dev', out:
+`<span class="q">?</span> Invite code <span class="dim">(from your operator)</span>: <span class="dim">••••-••••-••••</span>
+<b class="ok">✓</b> Paired with <b>broker.corp.dev</b> — agent key stored in your Keychain
+<b class="ok">✓</b> Context <b>corp</b> saved and made current
+
+6 connections are available. Next: <span class="acc">aka ls</span>` }],
+            soft:{
+              note:'Zero prompts: the invite URL the operator hands over carries the code in its fragment, which is never sent to a server, so one pasted command does everything. A bare URL falls back to --invite <code> or stdin, never an interactive loop. Shipped as shown.',
+              cmds:[{ cmd:'aka login https://broker.corp.dev/join#akajoin_9f2d…c41a', out:
+`<b class="ok">✓</b> paired with https://broker.corp.dev — agent key stored in macOS Keychain
+<b class="ok">✓</b> context <b>corp</b> saved and made current
+<span class="dim">management commands still need their own token: \`aka admin login --broker https://broker.corp.dev\`</span>` }]
+            }
+          },
+          {
+            title:'See where you are',
+            note:'Bare aka is a dashboard, not a help wall: context, reachability, connections, and the next command.',
+            cmds:[{ cmd:'aka', out:
+`<b>Multitool</b> — context <b>corp</b> <span class="dim">(https://broker.corp.dev)</span>  <b class="ok">✓ reachable</b>
+
+  <span class="dim">NAME         KIND   ACCESS    ENDPOINT  HEALTH</span>
+  analytics    pg     enabled   —         <b class="ok">✓ ok</b>
+  billing      pg     <span class="warn">confirm</span>   —         <b class="ok">✓ ok</b>
+  github       api    enabled   issued    <b class="ok">✓ ok</b>
+  prod         ssh    enabled   —         <b class="ok">✓ ok</b>
+  staging-aws  cloud  enabled   —         <b class="ok">✓ ok</b>
+
+<span class="dim">Set up an agent:</span>   <span class="acc">aka setup claude-code</span>
+<span class="dim">Open a database:</span>   <span class="acc">aka run analytics -- psql</span>` }],
+            soft:{
+              note:'Bare aka stays a help tree — but grounded by a two-line live header and one NEXT hint. The probe is best-effort with a tight timeout, so help never blocks; unreachable degrades to “last seen 2h ago”, and ls/status remain the explicit views.',
+              cmds:[{ cmd:'aka', out:
+`<b>aka</b> — agent access for APIs, MCPs, databases, and servers
+<span class="dim">context</span> <b>corp</b> <span class="dim">(https://broker.corp.dev)</span> <b class="ok">✓ reachable</b> <span class="dim">· 6 connections ·</span> <span class="warn">1 pending approval</span>
+
+<span class="dim">USE A CONNECTION</span>
+  run &lt;conn&gt; -- &lt;cmd&gt;   Run a command with brokered credentials <span class="dim">(pg · ssh · cloud · api)</span>
+  env &lt;conn&gt;            Print scoped exports instead of running
+  ls                    Connections with access, endpoint, health
+  approvals             Pending confirmations <span class="dim">· approve &lt;id&gt; · deny &lt;id&gt;</span>
+
+<span class="dim">GET STARTED</span>
+  login [invite-url]    Join a broker
+  use [name]            Show or switch broker contexts
+  setup [client]        Paste-ready agent config <span class="dim">(--write applies it)</span>
+
+<span class="dim">MANAGE</span>    conn · secret · endpoint · sessions · activity
+<span class="dim">OPERATE</span>   serve · admin <span class="dim">(invite · agent-key · token · settings)</span>
+
+<span class="warn">NEXT</span>  <span class="acc">aka approvals</span> <span class="dim">— 1 request is waiting</span>
+<span class="dim">Run aka &lt;command&gt; --help for details.</span>` }]
+            }
+          },
+          {
+            title:'Onboard your agent',
+            note:'setup detects the client and writes config instead of printing it (--print keeps the old behavior). The repo pin means every agent working in this repo reaches the team broker automatically.',
+            cmds:[{ cmd:'aka setup claude-code', out:
+`<b class="ok">✓</b> Found Claude Code 2.1 <span class="dim">(claude in PATH)</span>
+<b class="ok">✓</b> Registered MCP server <b>multitool</b> <span class="dim">→ aka mcp --client claude-code</span>
+<b class="ok">✓</b> Wrote .claude/skills/multitool/SKILL.md
+<b class="ok">✓</b> Pinned context <b>corp</b> for this repo <span class="dim">(.aka — commit it so teammates inherit it)</span>
+
+Agents working in this repo now reach broker.corp.dev automatically.` }],
+            soft:{
+              note:'Print by default, --write to apply — the exact convention setup skill --write already uses today. Nothing touches your config without the flag, and the printed form stays paste-ready for docs and scripts.',
+              cmds:[
+                { cmd:'aka setup claude-code', out:
+`<span class="dim"># Claude Code — register the MCP server:</span>
+claude mcp add multitool -- aka mcp --client claude-code
+
+<span class="dim"># Repo-local agent skill:</span>
+aka setup skill --write        <span class="dim"># .claude/skills/multitool/SKILL.md</span>
+
+<span class="dim"># Pin this repo to context "corp" (commit .aka so teammates inherit it):</span>
+aka use --pin corp
+
+<span class="dim">Apply all three now:</span>  <span class="acc">aka setup claude-code --write</span>` },
+                { cmd:'aka setup claude-code --write', out:
+`<b class="ok">✓</b> Registered MCP server <b>multitool</b>
+<b class="ok">✓</b> Wrote .claude/skills/multitool/SKILL.md
+<b class="ok">✓</b> Pinned context <b>corp</b> for this repo <span class="dim">(.aka)</span>` }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        id:'daily', name:'Daily: use connections', cwd:'~/code/api-service', title:'raymond@laptop — zsh',
+        steps:[
+          {
+            title:'Open Postgres',
+            note:'One runner for every kind — run replaces dsn / ssh / cloud env. The PG* environment exists only for the child process; the ticket never touches argv.',
+            cmds:[{ cmd:'aka run analytics -- psql', out:
+`<b class="ok">✓</b> analytics <span class="dim">(pg)</span> — session opened <span class="dim">· ticket expires 60s · session ttl 1h</span>
+psql (16.3)
+Type "help" for help.
+
+<span class="acc">app=&gt;</span> select count(*) from events where day = current_date;
+ count
+-------
+ 48211
+(1 row)
+<span class="acc">app=&gt;</span> \\q` }]
+          },
+          {
+            title:'Call an API from a script',
+            note:'api-kind connections finally get a first-class hot path: env injects the endpoint address and secret. The real GitHub token stays in the vault; the broker swaps it in on the upstream leg.',
+            cmds:[
+              { cmd:'aka env github', out:
+`export AKA_URL="http://127.0.0.1:52014"
+export AKA_TOKEN="ake_9f2d…c41a"   <span class="dim"># endpoint secret — the real credential never leaves the broker</span>` },
+              { cmd:'curl -sH "Authorization: Bearer $AKA_TOKEN" "$AKA_URL/user/repos" | jq length', out:`14` }
+            ]
+          },
+          {
+            title:'Mint cloud credentials',
+            note:'Same verb again — the connection’s kind decides the dispatch. Short TTL is the bound; the long-lived cloud identity never prints.',
+            cmds:[{ cmd:'aka run staging-aws -- aws s3 ls', out:
+`<b class="ok">✓</b> staging-aws <span class="dim">(cloud/aws)</span> — temporary credentials minted <span class="dim">· expire in 15m</span>
+2026-05-11 09:12  corp-staging-assets
+2026-07-02 17:40  corp-staging-logs` }]
+          }
+        ]
+      },
+      {
+        id:'blocked', name:'Blocked → unblocked', cwd:'~/code/api-service', title:'raymond@laptop — zsh',
+        steps:[
+          {
+            title:'A confirm-mode connection holds',
+            note:'Confirmation is visible in-line with the request id, instead of a bare refusal — the wait, the approver, and the release all happen in one place.',
+            cmds:[{ cmd:'aka run billing -- psql', out:
+`<span class="warn">⏳</span> billing requires confirmation — request <b>apr_7f2c</b> is waiting on the broker’s approval surface…
+<b class="ok">✓</b> approved by operator <span class="dim">(passkey · 11s)</span>
+psql (16.3)
+<span class="acc">billing=&gt;</span> \\q` }]
+          },
+          {
+            title:'A refusal names the fix',
+            note:'Errors sell the next command. Kind-specific remote limits are stated honestly: an SSH agent socket is a same-machine capability, so a remote context cannot serve it.',
+            cmds:[{ cmd:'aka run prod -- ssh prod uptime', out:
+`<b class="err">✗</b> prod <span class="dim">(ssh)</span>: SSH opens are same-machine, and context <b>corp</b> is a remote broker.
+  <span class="dim">Run this on the broker host, or ask an operator to issue a direct endpoint:</span>
+  <span class="acc">aka endpoint prod --issue</span>` }]
+          },
+          {
+            title:'Disabled by policy',
+            note:'The 403 carries who disabled it, when, and the exact re-enable command — the diagnose loop stays inside the terminal.',
+            cmds:[{ cmd:'aka run analytics -- psql', out:
+`<b class="err">✗</b> analytics is disabled for agents <span class="dim">(403 denied_by_policy · disabled 4m ago by an operator)</span>
+  <span class="dim">Every agent’s calls are refused until it is re-enabled:</span>
+  <span class="acc">aka conn enable analytics</span>` }]
+          }
+        ]
+      }
+    ]
+  },
+
+  {
+    id:'setup', icon:'\u{1F527}', name:'Setup dev', rank:'loop 4',
+    desc:'Provisions secrets, connections, and endpoints.',
+    blurb:'Bursty: a setup week, then occasional changes. Compare the two interactivity levels above: guided mode collapses the secret-then-connection dance into one prompt-driven form; soft mode stays flags-only and teaches through a filled-in scaffold error instead. Policy toggles fold into update flags either way.',
+    flows:[
+      {
+        id:'addpg', name:'Add Postgres (interactive)', cwd:'~/infra', title:'raymond@laptop — zsh',
+        steps:[
+          {
+            title:'Prompt-driven add',
+            note:'No flags on a TTY → a form. Inline secret capture: the password is vaulted by reference (never argv), and the connection is tested before the command returns.',
+            cmds:[{ cmd:'aka conn add pg analytics', out:
+`<span class="q">?</span> Host: <b>db.internal.corp.dev</b>
+<span class="q">?</span> Port <span class="dim">(5432)</span>: <span class="dim">↵</span>
+<span class="q">?</span> Database: <b>app</b>
+<span class="q">?</span> User: <b>agent_ro</b>
+<span class="q">?</span> Password: <span class="dim">••••••••••••  → vaulted as ANALYTICS_PASSWORD</span>
+<span class="q">?</span> TLS <span class="dim">(verify-full)</span>: <span class="dim">↵</span>
+
+<b class="ok">✓</b> Secret ANALYTICS_PASSWORD added to the vault
+<b class="ok">✓</b> Connection <b>analytics</b> added <span class="dim">(enabled for agents)</span>
+<b class="ok">✓</b> Test: authenticated as agent_ro <span class="dim">(94 ms)</span>
+
+Use it:   <span class="acc">aka run analytics -- psql</span>
+Agents:   multitool_analytics_open <span class="dim">(announced to live MCP sessions)</span>` }],
+            soft:{
+              title:'Scaffold error, then script',
+              note:'No wizard: missing flags print a filled-in scaffold you edit and paste, in the current CLI’s teaching-error voice. The only prompts left anywhere in soft mode are hidden secret input and destructive confirms.',
+              cmds:[
+                { cmd:'aka conn add pg analytics', out:
+`<b class="err">error:</b> missing --host, --dbname, --user, --secret
+
+  A complete add looks like:
+
+    aka secret add ANALYTICS_PASSWORD &lt; password.txt
+    aka conn add pg analytics \\
+        --host db.internal.corp.dev --dbname app \\
+        --user agent_ro --secret ANALYTICS_PASSWORD
+
+  <span class="dim">The desktop app offers the same fields with a UI.</span>` },
+                { cmd:'aka secret add ANALYTICS_PASSWORD < password.txt', out:
+`<b class="ok">✓</b> Secret ANALYTICS_PASSWORD added <span class="dim">(28 bytes · trailing newline stripped)</span>` },
+                { cmd:'aka conn add pg analytics --host db.internal.corp.dev --dbname app --user agent_ro --secret ANALYTICS_PASSWORD', out:
+`<b class="ok">✓</b> Connection <b>analytics</b> added <span class="dim">(enabled for agents)</span>
+<b class="ok">✓</b> Test: authenticated as agent_ro <span class="dim">(94 ms)</span>
+
+Use it:   <span class="acc">aka run analytics -- psql</span>` }
+              ]
+            }
+          },
+          {
+            title:'Inspect what you made',
+            note:'One screen per connection: capability fields, policy, endpoint, provenance. Same fields the desktop app shows.',
+            cmds:[{ cmd:'aka conn show analytics', out:
+`<b>analytics</b> · pg · <b class="ok">enabled</b> · no endpoint
+  db.internal.corp.dev:5432 · db app · user agent_ro · tls verify-full
+  secret <b>ANALYTICS_PASSWORD</b> <span class="dim">(vault)</span> · added just now
+  policy: confirm <span class="dim">off</span> · statement audit <span class="dim">off</span>` }]
+          }
+        ]
+      },
+      {
+        id:'addapi', name:'Add an API + endpoint (scripted)', cwd:'~/infra', title:'raymond@laptop — zsh',
+        steps:[
+          {
+            title:'Vault the secret',
+            note:'The scripted form is unchanged from today’s design, which is right: stdin only, never argv, trailing newline stripped unless --raw.',
+            cmds:[{ cmd:'aka secret add GITHUB_TOKEN < token.txt', out:
+`<b class="ok">✓</b> Secret GITHUB_TOKEN added <span class="dim">(41 bytes · trailing newline stripped)</span>` }]
+          },
+          {
+            title:'Add the connection',
+            note:'Kind-scoped flags stay exactly as today — the add pg/ssh/api split showing only relevant fields is one of the current CLI’s best traits. --test-path makes the add self-verifying.',
+            cmds:[{ cmd:"aka conn add api github --host api.github.com --template 'Authorization: Bearer {{GITHUB_TOKEN}}' --test-path /user", out:
+`<b class="ok">✓</b> Connection <b>github</b> added <span class="dim">(enabled for agents)</span>
+<b class="ok">✓</b> Test: GET /user → 200 <span class="dim">(login: corp-bot)</span>` }]
+          },
+          {
+            title:'Issue a standing endpoint',
+            note:'endpoint moves to the top level — it has its own lifecycle (issue / renew / rotate / revoke), not a conn sub-flag. Renew keeps address + secret so client config never changes.',
+            cmds:[{ cmd:'aka endpoint github --issue', out:
+`<b class="ok">✓</b> Endpoint issued for <b>github</b> <span class="dim">(expires in 30 days · --renew keeps address + secret)</span>
+
+  URL      http://127.0.0.1:52014
+  Secret   ake_9f2d…c41a   <span class="warn">shown once — treat as a standing credential</span>
+
+Example:  <span class="acc">curl -H "Authorization: Bearer $AKA_TOKEN" "$AKA_URL/user/repos"</span>` }]
+          }
+        ]
+      },
+      {
+        id:'policy', name:'Policy & the kill switch', cwd:'~/infra', title:'raymond@laptop — zsh',
+        steps:[
+          {
+            title:'Turn on confirmation',
+            note:'confirm / response-credentials / audit-statements become flags on update instead of three top-level commands — the surface stops scaling linearly with every future policy.',
+            cmds:[{ cmd:'aka conn update billing --confirm', out:
+`<b class="ok">✓</b> billing now holds each session for user confirmation
+  <span class="dim">An attached approval surface must answer; with none, confirmed traffic fails closed.</span>` }]
+          },
+          {
+            title:'The kill switch',
+            note:'enable/disable stay their own verbs — they are the emergency lever and deserve the shortest path.',
+            cmds:[{ cmd:'aka conn disable analytics', out:
+`<b class="ok">✓</b> analytics disabled — new calls refused with 403 denied_by_policy
+  <span class="dim">Broker-owned sessions closed. An already-authenticated SSH login cannot be terminated.</span>` }]
+          },
+          {
+            title:'Rotate a secret',
+            note:'rotate (was replace) matches the vocabulary used everywhere else — keys rotate, tokens rotate, endpoints rotate, secrets rotate.',
+            cmds:[{ cmd:'aka secret rotate GITHUB_TOKEN < new-token.txt', out:
+`<b class="ok">✓</b> GITHUB_TOKEN replaced — 1 connection picks it up on next use` }]
+          }
+        ]
+      }
+    ]
+  },
+
+  {
+    id:'homebrew', icon:'\u{1F3E0}', name:'Homebrew dev', rank:'loops 1–3',
+    desc:'Desktop app + local broker; CLI is setup + run only.',
+    blurb:'The defining requirement is absence: the desktop app owns the broker (~/.aka), provisioning, and approvals, so this persona should never see contexts, keys, or serve. Local auto-detect means their whole CLI life is setup, run, and the occasional glance at the dashboard.',
+    flows:[
+      {
+        id:'firstrun', name:'First run', cwd:'~/code/side-project', title:'raymond@macbook — zsh',
+        steps:[
+          {
+            title:'Zero-config dashboard',
+            note:'The CLI auto-detects the desktop broker. No login, no context ceremony — "local" is simply where you already are.',
+            cmds:[{ cmd:'aka', out:
+`<b>Multitool</b> — context <b>local</b> <span class="dim">(desktop app · ~/.aka)</span>  <b class="ok">✓ running</b>
+
+  <span class="dim">NAME      KIND  ACCESS   HEALTH</span>
+  local-db  pg    <span class="warn">confirm</span>  <b class="ok">✓ ok</b>
+  openai    api   enabled  <b class="ok">✓ ok</b>
+
+<span class="dim">Set up an agent:</span>   <span class="acc">aka setup claude-code</span>` }],
+            soft:{
+              title:'Zero-config help, grounded',
+              note:'Same soft shape locally: the header line says the desktop app is running and the tree is identical everywhere — this persona still never sees contexts, keys, or serve.',
+              cmds:[{ cmd:'aka', out:
+`<b>aka</b> — agent access for APIs, MCPs, databases, and servers
+<span class="dim">context</span> <b>local</b> <span class="dim">(desktop app · ~/.aka)</span> <b class="ok">✓ running</b> <span class="dim">· 2 connections</span>
+
+<span class="dim">USE A CONNECTION</span>
+  run &lt;conn&gt; -- &lt;cmd&gt;   Run a command with brokered credentials <span class="dim">(pg · ssh · cloud · api)</span>
+  env &lt;conn&gt;            Print scoped exports instead of running
+  ls                    Connections with access, endpoint, health
+  approvals             Pending confirmations <span class="dim">· approve &lt;id&gt; · deny &lt;id&gt;</span>
+
+<span class="dim">GET STARTED</span>
+  login [invite-url]    Join a broker
+  use [name]            Show or switch broker contexts
+  setup [client]        Paste-ready agent config <span class="dim">(--write applies it)</span>
+
+<span class="dim">MANAGE</span>    conn · secret · endpoint · sessions · activity
+<span class="dim">OPERATE</span>   serve · admin <span class="dim">(invite · agent-key · token · settings)</span>
+
+<span class="warn">NEXT</span>  <span class="acc">aka setup claude-code</span> <span class="dim">— no agent configured in this repo</span>
+<span class="dim">Run aka &lt;command&gt; --help for details.</span>` }]
+            }
+          },
+          {
+            title:'Onboard the agent',
+            note:'Identical command to the team persona — the golden path does not fork by deployment shape. Connections stay managed in the app.',
+            cmds:[{ cmd:'aka setup claude-code', out:
+`<b class="ok">✓</b> Found Claude Code 2.1
+<b class="ok">✓</b> Registered MCP server <b>multitool</b> <span class="dim">→ aka mcp --client claude-code</span>
+<b class="ok">✓</b> Wrote .claude/skills/multitool/SKILL.md
+
+Connections stay managed in the Multitool app; agents use them from here.` }],
+            soft:{
+              note:'Print by default, --write to apply — identical convention to the team persona, and to today’s setup skill --write.',
+              cmds:[
+                { cmd:'aka setup claude-code', out:
+`<span class="dim"># Claude Code — register the MCP server:</span>
+claude mcp add multitool -- aka mcp --client claude-code
+
+<span class="dim"># Repo-local agent skill:</span>
+aka setup skill --write        <span class="dim"># .claude/skills/multitool/SKILL.md</span>
+
+<span class="dim">Apply both now:</span>  <span class="acc">aka setup claude-code --write</span>` },
+                { cmd:'aka setup claude-code --write', out:
+`<b class="ok">✓</b> Registered MCP server <b>multitool</b>
+<b class="ok">✓</b> Wrote .claude/skills/multitool/SKILL.md
+
+Connections stay managed in the Multitool app; agents use them from here.` }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        id:'dailyhb', name:'Daily, approvals in the menu bar', cwd:'~/code/side-project', title:'raymond@macbook — zsh',
+        steps:[
+          {
+            title:'Run with a menu-bar approval',
+            note:'The desktop app is the approval surface; the terminal shows the hold and the release. Same run verb as every other persona.',
+            cmds:[{ cmd:'aka run local-db -- psql', out:
+`<span class="warn">⏳</span> local-db asks for confirmation — check the <b>Multitool menu bar</b>…
+<b class="ok">✓</b> approved
+psql (16.3)
+<span class="acc">app=&gt;</span> \\dt
+        List of relations
+ schema |  name  | type  |  owner
+--------+--------+-------+---------
+ public | events | table | raymond
+ public | users  | table | raymond
+<span class="acc">app=&gt;</span> \\q` }]
+          },
+          {
+            title:'Glance at the trail',
+            note:'activity is the same command locally and remotely — local reads project the append-only log onto the remote schema, exactly as today.',
+            cmds:[{ cmd:'aka activity --limit 4', out:
+`12:04:11  approval     local-db  claude-code  <b class="ok">approved</b> <span class="dim">(menu bar)</span>
+12:04:12  pg session   local-db  claude-code  opened <span class="dim">· ticket tkt_ab12</span>
+12:09:44  api request  openai    claude-code  200 POST /v1/messages
+12:09:45  api request  openai    claude-code  200 POST /v1/messages` }]
+          }
+        ]
+      }
+    ]
+  },
+
+  {
+    id:'operator', icon:'\u{1F6E1}️', name:'Operator', rank:'loop 6',
+    desc:'Runs the broker; rotates, invites, audits.',
+    blurb:'One person per team, rarely. Everything privileged lives under one word — admin — so the two credential planes (agent key vs management token) are finally legible in the command tree itself. serve stays a verb, like vercel dev.',
+    flows:[
+      {
+        id:'standup', name:'Stand up & invite', cwd:'~', title:'ops@broker-host — zsh',
+        steps:[
+          {
+            title:'Run the broker',
+            note:'The serve banner is onboarding: it names the root, the listeners, where the one-use admin token landed, and the next command.',
+            cmds:[{ cmd:'aka serve', out:
+`<b>Multitool broker</b> · root ~/.akaserver
+  control    unix socket + tcp 127.0.0.1:4780
+  public     http://localhost:4780   <span class="dim">(put TLS in front for remote use)</span>
+  mcp host   on
+
+First start: one-use admin token written to ~/.akaserver/sock/manage-token
+Invite a teammate:  <span class="acc">aka admin invite</span>
+<span class="dim">Serving… (ctrl-c to stop)</span>` }]
+          },
+          {
+            title:'Mint an invite',
+            note:'The invite is the one protocol addition: invite-gated pairing over TCP. It makes aka login possible without handing the shared agent key out of band, while /v1/pair stays closed.',
+            cmds:[{ comment:'# in a second terminal on the broker host', cmd:'aka admin invite --label rae', out:
+`<b class="ok">✓</b> one-use invite created <span class="dim">(expires in 15 min)</span>
+https://broker.corp.dev/join#akajoin_9f2d…c41a
+
+<span class="dim">they run: aka login https://broker.corp.dev/join#akajoin_9f2d…c41a
+The invite is spent by the first redemption; /v1/pair stays closed over TCP.</span>` }]
+          },
+          {
+            title:'Set a policy default',
+            note:'settings moves under admin with the other management-token verbs — the placement itself documents that it is privileged.',
+            cmds:[{ cmd:'aka admin settings set --confirm-ssh-host-keys true', out:
+`<b class="ok">✓</b> confirm-ssh-host-keys → true <span class="dim">(first sight of a host key now asks before pinning)</span>` }]
+          }
+        ]
+      },
+      {
+        id:'rotate', name:'Rotate & audit', cwd:'~', title:'ops@broker-host — zsh',
+        steps:[
+          {
+            title:'The broad revocation lever',
+            note:'was aka key --rotate. Grouping it under admin makes the blast radius readable in the help tree, and the output states the honest limits.',
+            cmds:[{ cmd:'aka admin agent-key --rotate', out:
+`<b class="ok">✓</b> Agent key rotated
+  <span class="dim">Outstanding tickets and direct endpoints revoked; broker-owned sessions closed.</span>
+  <span class="dim">Agents re-pair on next use. Already-authenticated SSH cannot be terminated.</span>` }]
+          },
+          {
+            title:'Live sessions',
+            note:'sessions stays top-level — reading it is diagnosis (loop 2), even though closing is privileged.',
+            cmds:[
+              { cmd:'aka sessions', out:
+`  <span class="dim">ID        CONN       CLIENT       AGE   STATE</span>
+  sess_91   analytics  claude-code  12m   open
+  sess_a4   billing    codex        3m    open` },
+              { cmd:'aka sessions --close sess_a4', out:`<b class="ok">✓</b> sess_a4 closed` }
+            ]
+          },
+          {
+            title:'The trail',
+            note:'Rotation, opens, requests, and approvals interleave in one chronological trail, newest last — unchanged from today, which is right.',
+            cmds:[{ cmd:'aka activity --limit 5', out:
+`09:58:02  admin        —          ops          agent key rotated
+10:01:37  pg session   analytics  claude-code  opened <span class="dim">· ticket tkt_c9d2</span>
+10:02:11  api request  github     claude-code  200 GET /user/repos
+10:04:53  approval     billing    codex        <b class="ok">approved</b> <span class="dim">(remote inbox)</span>
+10:05:00  pg session   billing    codex        opened` }]
+          }
+        ]
+      }
+    ]
+  },
+
+  {
+    id:'ref', icon:'\u{1F5C2}️', name:'Command tree', rank:'reference', isRef:true,
+    desc:'The full proposed surface, with what changed.',
+    blurb:'The whole proposed surface at a glance. Badges mark what is new, what is renamed from today’s pre-launch CLI, what is kept verbatim, and what is cut. Runtime commands stay hidden from root help.'
+  }
+];
+
+const REF_SECTIONS = [
+  {
+    title:'Get started', sub:'First-run and joining — loop 5, once per dev.',
+    rows:[
+      ['aka', 'Help tree grounded by a live two-line header (context, reachability, pending count) and one NEXT hint. Best-effort probe, never blocks.', 'new', 'guided mode upgrades this to a full dashboard'],
+      ['aka login [invite-url]', 'Join a broker; the invite URL carries the code, so the soft path is zero-prompt. Stores the agent key and a named context. Local needs no login.', 'new', 'replaces key handoff; aka logout forgets it'],
+      ['aka use [name]', 'List or switch contexts (local · server · team brokers); --pin writes the repo pin.', 'new', ''],
+      ['aka setup [client]', 'Print paste-ready config for claude-code / codex / claude-desktop; --write applies it. Also skill + repo pin.', 'ren', 'was setup mcp/skill/instructions — keeps today’s --write convention']
+    ]
+  },
+  {
+    title:'Use', sub:'The hot loop (1–2) — many times a day, works against any context.',
+    rows:[
+      ['aka run <conn> -- <cmd>', 'One kind-dispatched runner: pg → PG* env, ssh → scoped agent + safe options, cloud → temp creds, api → AKA_URL/AKA_TOKEN.', 'new', 'replaces dsn, ssh, cloud env'],
+      ['aka env <conn>', 'Print exports for any kind.', 'new', 'was the no-command forms of dsn / cloud env / ssh'],
+      ['aka ls', 'Connections at a glance: kind, access, endpoint, health.', 'ren', 'was conn list; conn ls remains'],
+      ['aka approvals [--watch]', 'The request inbox; approve / deny become top-level verbs.', 'ren', 'was requests --approve/--deny; “requests” collides with HTTP vocabulary'],
+      ['aka activity', 'Audit trail, newest last. Same schema locally and remotely.', 'kept', ''],
+      ['aka sessions [--close <id>]', 'List or close live brokered sessions.', 'kept', '']
+    ]
+  },
+  {
+    title:'Manage', sub:'Provisioning (loop 4) — bursty, setup-time.',
+    rows:[
+      ['aka conn add pg|ssh|api|cloud <name>', 'Kind-scoped flags as today, plus an automatic test on add. Missing flags print a filled-in scaffold command, not a wizard.', 'kept', 'guided mode adds a prompt-driven form'],
+      ['aka conn show|update|rename|rm|test', 'Unchanged verbs; update gains --confirm, --response-credentials, --audit-statements.', 'kept', 'three bespoke policy commands fold in'],
+      ['aka conn enable|disable <name>', 'The kill switch keeps the shortest path.', 'kept', ''],
+      ['aka endpoint <conn> [--issue|--renew|--rotate|--revoke]', 'Direct endpoints get their own top-level lifecycle.', 'ren', 'was conn endpoint'],
+      ['aka secret add|ls|rotate|rm', 'Vault management; stdin only, never argv.', 'kept', 'rotate was replace']
+    ]
+  },
+  {
+    title:'Operate', sub:'Loop 6 — one person per team. Everything here needs the management token.',
+    rows:[
+      ['aka serve', 'Run a headless broker (own root, TCP by default). Stays a verb, like vercel dev.', 'kept', ''],
+      ['aka admin invite', 'One-use join URL a teammate redeems with aka login; socket-only, like passkey enrollment. The one protocol addition — shipped.', 'new', ''],
+      ['aka admin agent-key [--rotate]', 'The shared agent key: show or broad-revoke.', 'ren', 'was aka key'],
+      ['aka admin token [--rotate|--revoke]', 'The management token itself.', 'ren', 'was manage token'],
+      ['aka admin settings get|set', 'Broker settings.', 'ren', 'was settings'],
+      ['aka admin enroll', 'Passkey enrollment over the local socket.', 'ren', 'was manage enroll']
+    ]
+  },
+  {
+    title:'Runtime & plumbing', sub:'Hidden from root help — launched by configs, not people.',
+    rows:[
+      ['aka mcp', 'The stdio bridge a configured MCP client launches.', 'kept', ''],
+      ['aka ssh-agent <conn>', 'Agent socket for auth-required direct endpoints.', 'kept', ''],
+      ['aka completions', 'Shell completions.', 'kept', '']
+    ]
+  },
+  {
+    title:'Cut', sub:'Pre-launch is the moment to spend these renames — no compat aliases needed.',
+    rows:[
+      ['aka dsn / aka ssh / aka cloud env', 'Subsumed by run and env.', 'cut', ''],
+      ['aka conn confirm / response-credentials / audit-statements', 'Now flags on conn update.', 'cut', ''],
+      ['aka setup desktop', 'Becomes output of aka admin invite and the serve banner.', 'cut', ''],
+      ['aka manage legacy', 'A docs footnote, not a command.', 'cut', ''],
+      ['--root / --broker on every command', 'Replaced by the single context resolution chain.', 'cut', '']
+    ]
+  }
+];
+
+/* ---------------- state & rendering ---------------- */
+
+const $ = (id) => document.getElementById(id);
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let personaIdx = 0, flowIdx = 0, stepIdx = 0;
+let mode = 'soft'; // 'soft' (flags-only) | 'guided' (prompt-driven)
+let gen = 0; // cancels in-flight typing when navigation happens
+
+function persona(){ return PERSONAS[personaIdx]; }
+function flow(){ return persona().flows[flowIdx]; }
+function stepView(s){ return (mode === 'soft' && s.soft) ? Object.assign({}, s, s.soft) : s; }
+
+function renderPersonas(){
+  const nav = $('personas');
+  nav.innerHTML = '';
+  PERSONAS.forEach((p, i) => {
+    const b = document.createElement('button');
+    b.className = 'pcard' + (p.isRef ? ' ref' : '');
+    b.setAttribute('aria-pressed', String(i === personaIdx));
+    b.innerHTML = `<span class="rank">${p.rank}</span><span class="pico">${p.icon}</span>` +
+      `<span class="pname">${p.name}</span><span class="pdesc">${p.desc}</span>`;
+    b.addEventListener('click', () => { personaIdx = i; flowIdx = 0; stepIdx = 0; renderAll(); });
+    nav.appendChild(b);
+  });
+}
+
+function renderFlows(){
+  const nav = $('flows');
+  nav.innerHTML = '';
+  if (persona().isRef) return;
+  persona().flows.forEach((f, i) => {
+    const b = document.createElement('button');
+    b.className = 'fchip';
+    b.setAttribute('aria-pressed', String(i === flowIdx));
+    b.innerHTML = `<span class="n">${i + 1}</span>${f.name}`;
+    b.addEventListener('click', () => { flowIdx = i; stepIdx = 0; renderAll(); });
+    nav.appendChild(b);
+  });
+}
+
+function renderRail(){
+  const rail = $('rail');
+  rail.innerHTML = '';
+  flow().steps.forEach((raw, i) => {
+    const s = stepView(raw);
+    const b = document.createElement('button');
+    b.className = 'rstep';
+    b.dataset.state = i < stepIdx ? 'done' : i === stepIdx ? 'current' : 'future';
+    b.innerHTML = `<span class="idx">${i < stepIdx ? '✓' : i + 1}</span>` +
+      `<span><span class="rt">${s.title}</span><span class="rn">${s.note}</span></span>`;
+    b.addEventListener('click', () => goTo(i, false));
+    rail.appendChild(b);
+  });
+}
+
+function promptHTML(cwd){
+  return `<span class="cwd">${cwd}</span> <span class="pp">❯</span> `;
+}
+
+function stepNode(rawStep, cwd, opts){
+  // opts: {typing:false} renders instantly and returns the node.
+  const step = stepView(rawStep);
+  const node = document.createElement('div');
+  node.className = 'step';
+  step.cmds.forEach(c => {
+    if (c.comment){
+      const cm = document.createElement('div');
+      cm.className = 'cm';
+      cm.textContent = c.comment;
+      node.appendChild(cm);
+    }
+    const line = document.createElement('div');
+    line.innerHTML = promptHTML(cwd);
+    const cs = document.createElement('span');
+    cs.className = 'cmd';
+    cs.textContent = c.cmd;
+    line.appendChild(cs);
+    node.appendChild(line);
+    const out = document.createElement('div');
+    out.className = 'out';
+    out.innerHTML = c.out;
+    node.appendChild(out);
+  });
+  return node;
+}
+
+function scrollTerm(){
+  const body = $('termBody');
+  body.scrollTop = body.scrollHeight;
+}
+
+async function typeStep(rawStep, cwd, myGen){
+  const step = stepView(rawStep);
+  const body = $('termBody');
+  const node = document.createElement('div');
+  node.className = 'step';
+  body.appendChild(node);
+  for (const c of step.cmds){
+    if (gen !== myGen) return;
+    if (c.comment){
+      const cm = document.createElement('div');
+      cm.className = 'cm';
+      cm.textContent = c.comment;
+      node.appendChild(cm);
+    }
+    const line = document.createElement('div');
+    line.innerHTML = promptHTML(cwd);
+    const cs = document.createElement('span');
+    cs.className = 'cmd';
+    line.appendChild(cs);
+    const cur = document.createElement('span');
+    cur.className = 'cursor';
+    line.appendChild(cur);
+    node.appendChild(line);
+    scrollTerm();
+    for (let i = 0; i < c.cmd.length; i++){
+      if (gen !== myGen) return;
+      cs.textContent += c.cmd[i];
+      if (i % 3 === 0) scrollTerm();
+      await new Promise(r => setTimeout(r, 9));
+    }
+    await new Promise(r => setTimeout(r, 140));
+    if (gen !== myGen) return;
+    cur.remove();
+    const out = document.createElement('div');
+    out.className = 'out reveal';
+    out.innerHTML = c.out;
+    node.appendChild(out);
+    scrollTerm();
+    await new Promise(r => setTimeout(r, 120));
+  }
+}
+
+function renderTerminal(animateLast){
+  gen++;
+  const myGen = gen;
+  const f = flow();
+  const body = $('termBody');
+  $('termTitle').textContent = f.title;
+  body.innerHTML = '';
+  const upto = animateLast ? stepIdx : stepIdx + 1;
+  for (let i = 0; i < upto; i++){
+    body.appendChild(stepNode(f.steps[i], f.cwd));
+  }
+  scrollTerm();
+  if (animateLast){
+    typeStep(f.steps[stepIdx], f.cwd, myGen);
+  }
+}
+
+function renderControls(){
+  const n = flow().steps.length;
+  $('stepCount').textContent = `Step ${stepIdx + 1} of ${n}`;
+  $('prevBtn').disabled = stepIdx === 0;
+  $('nextBtn').disabled = stepIdx >= n - 1;
+}
+
+function goTo(i, animate){
+  const n = flow().steps.length;
+  const clamped = Math.max(0, Math.min(n - 1, i));
+  const forwardByOne = clamped === stepIdx + 1;
+  stepIdx = clamped;
+  renderRail();
+  renderControls();
+  renderTerminal(animate && forwardByOne && !reduceMotion);
+}
+
+function renderReference(){
+  const grid = $('refGrid');
+  if (grid.childElementCount) return;
+  const badgeName = { new:'NEW', ren:'RENAMED', kept:'KEPT', cut:'CUT' };
+  REF_SECTIONS.forEach(sec => {
+    const el = document.createElement('div');
+    el.className = 'ref-sec';
+    let html = `<h3>${sec.title}</h3><p class="sec-sub">${sec.sub}</p>`;
+    sec.rows.forEach(([cmd, desc, kind, extra]) => {
+      html += `<div class="ref-row"><span class="rc mono">${cmd}</span>` +
+        `<span class="badge ${kind}" ${extra ? `title="${extra}"` : ''}>${badgeName[kind]}</span>` +
+        `<span class="rd">${desc}${extra ? ` <i style="color:var(--faint);font-style:normal">— ${extra}</i>` : ''}</span></div>`;
+    });
+    el.innerHTML = html;
+    grid.appendChild(el);
+  });
+}
+
+function renderAll(){
+  renderPersonas();
+  $('personaBlurb').textContent = persona().blurb;
+  const isRef = !!persona().isRef;
+  $('stage').style.display = isRef ? 'none' : '';
+  $('flows').style.display = isRef ? 'none' : '';
+  $('reference').classList.toggle('show', isRef);
+  if (isRef){ renderReference(); return; }
+  renderFlows();
+  renderRail();
+  renderControls();
+  renderTerminal(false);
+}
+
+/* ---------------- wiring ---------------- */
+
+$('nextBtn').addEventListener('click', () => goTo(stepIdx + 1, true));
+$('prevBtn').addEventListener('click', () => goTo(stepIdx - 1, false));
+$('restartBtn').addEventListener('click', () => goTo(0, false));
+
+document.addEventListener('keydown', (e) => {
+  if (persona().isRef) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight' || e.key === ' '){ e.preventDefault(); goTo(stepIdx + 1, true); }
+  if (e.key === 'ArrowLeft'){ e.preventDefault(); goTo(stepIdx - 1, false); }
+});
+
+function setMode(m){
+  mode = m;
+  $('modeSoft').setAttribute('aria-pressed', String(m === 'soft'));
+  $('modeGuided').setAttribute('aria-pressed', String(m === 'guided'));
+  if (!persona().isRef){ renderRail(); renderControls(); renderTerminal(false); }
+}
+$('modeSoft').addEventListener('click', () => setMode('soft'));
+$('modeGuided').addEventListener('click', () => setMode('guided'));
+
+function setTheme(t){
+  document.documentElement.dataset.theme = t;
+  $('themeLight').setAttribute('aria-pressed', String(t === 'light'));
+  $('themeDark').setAttribute('aria-pressed', String(t === 'dark'));
+}
+$('themeLight').addEventListener('click', () => setTheme('light'));
+$('themeDark').addEventListener('click', () => setTheme('dark'));
+if (window.matchMedia('(prefers-color-scheme: dark)').matches) setTheme('dark');
+
+renderAll();
+</script>
+</body>
+</html>

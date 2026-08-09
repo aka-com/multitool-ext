@@ -69,6 +69,15 @@ const ENROLLMENT_LIFETIME: ChronoDuration = ChronoDuration::minutes(15);
 /// while; this bounds how long the server remembers offering it.
 const CHALLENGE_LIFETIME: ChronoDuration = ChronoDuration::minutes(5);
 
+/// How long an agent-plane invite stays redeemable. Same reasoning as
+/// enrollment: long enough to paste into a teammate's terminal, short
+/// enough that a forgotten one is not a standing key dispenser.
+const INVITE_LIFETIME: ChronoDuration = ChronoDuration::minutes(15);
+
+/// Outstanding invites kept at once, so an operator scripting `admin
+/// invite` in a loop cannot grow the sealed file without bound.
+const MAX_INVITES: usize = 32;
+
 /// Superseded refresh-token hashes kept per device for reuse detection. A
 /// token more than this many rotations old counts as unknown rather than as
 /// theft — the safe direction, since we already refuse unknown tokens.
@@ -99,6 +108,7 @@ pub const REFRESH_PREFIX: &str = "akaref_";
 pub const ACCESS_PREFIX: &str = "akaacc_";
 pub const AUTOMATION_PREFIX: &str = "akaauto_";
 pub const ENROLLMENT_PREFIX: &str = "akaenroll_";
+pub const INVITE_PREFIX: &str = "akajoin_";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -138,6 +148,9 @@ pub enum AuthError {
     /// One variant covers both: distinguishing them would tell a caller whether
     /// guessing is worth continuing.
     EnrollmentRefused,
+    /// No such invite, or it expired, or it was already redeemed. One
+    /// variant for the same reason as `EnrollmentRefused`.
+    InviteRefused,
     /// A ceremony failed. The message is deliberately coarse — the detailed
     /// reason goes to the log, not to the caller.
     Ceremony(&'static str),
@@ -154,12 +167,17 @@ impl AuthError {
     pub fn detail(&self) -> String {
         match self {
             Self::NotEnrolled => {
-                "no passkey is enrolled on this broker yet; run `aka manage enroll` \
+                "no passkey is enrolled on this broker yet; run `aka admin enroll` \
                  on the broker host to open enrollment"
                     .into()
             }
             Self::EnrollmentRefused => {
                 "enrollment is not open, or that is not the secret it issued".into()
+            }
+            Self::InviteRefused => {
+                "that invite is unknown, has expired, or has already been \
+                 redeemed; ask the operator for a fresh `aka admin invite`"
+                    .into()
             }
             Self::Ceremony(what) => format!("the passkey ceremony could not be completed: {what}"),
             Self::Invalid(what) => format!("{what} is not valid, has expired, or has been used"),
@@ -290,6 +308,24 @@ struct Enrollment {
     expires_at: DateTime<Utc>,
 }
 
+/// A one-use invitation to fetch this broker's shared agent key.
+///
+/// The agent plane has exactly one key and pairing hands it out
+/// unauthenticated, which is only acceptable behind the 0600 socket. An
+/// invite is what makes the same handout safe over the network: the
+/// operator mints it deliberately, it dies in minutes, and it is spent by
+/// the first redemption. It carries no identity — the key it hands back is
+/// the same shared key every other agent holds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Invite {
+    code_hash: String,
+    /// Recorded on the redemption's audit entry, so a key handout can be
+    /// traced to the invite an operator meant to issue.
+    label: Option<String>,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
 /// Everything that survives a restart.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct AuthState {
@@ -305,6 +341,8 @@ struct AuthState {
     automation: Vec<AutomationToken>,
     #[serde(default)]
     enrollment: Option<Enrollment>,
+    #[serde(default)]
+    invites: Vec<Invite>,
 }
 
 /* ------------------------------ ephemera -------------------------------- */
@@ -533,6 +571,83 @@ impl AuthStore {
             return Err(AuthError::EnrollmentRefused);
         }
         Ok(())
+    }
+
+    /* ------------------------------ invites ----------------------------- */
+
+    /// Mint a one-use agent-plane invite and return the code.
+    ///
+    /// Gated by the management token at the route, which is what makes this
+    /// an operator act rather than an open key dispenser. Expired invites
+    /// are swept here so the sealed file does not accumulate them.
+    pub fn open_invite(&self, label: Option<String>) -> AuthResult<Zeroizing<String>> {
+        let code = mint(INVITE_PREFIX);
+        let now = Utc::now();
+        let mut state = self.locked();
+        state.invites.retain(|invite| invite.expires_at > now);
+        if state.invites.len() >= MAX_INVITES {
+            return Err(AuthError::Invalid("too many outstanding invites"));
+        }
+        state.invites.push(Invite {
+            code_hash: digest(&code),
+            label,
+            created_at: now,
+            expires_at: now + INVITE_LIFETIME,
+        });
+        self.persist(&state)?;
+        Ok(code)
+    }
+
+    /// Spend an invite, returning its label for the audit entry.
+    ///
+    /// One-use by construction: the entry is removed before the caller is
+    /// handed anything, inside the same lock, so two simultaneous
+    /// redemptions cannot both win.
+    pub fn redeem_invite(&self, code: &str) -> AuthResult<Option<String>> {
+        let now = Utc::now();
+        let mut state = self.locked();
+        state.invites.retain(|invite| invite.expires_at > now);
+        let Some(offered) = shaped(code, INVITE_PREFIX) else {
+            return Err(AuthError::InviteRefused);
+        };
+        let Some(position) = state
+            .invites
+            .iter()
+            .position(|invite| invite.code_hash == offered)
+        else {
+            // Persist the sweep even on refusal: expired invites are dead
+            // either way, and a probe should not keep them alive.
+            self.persist(&state)?;
+            return Err(AuthError::InviteRefused);
+        };
+        let invite = state.invites.remove(position);
+        self.persist(&state)?;
+        Ok(invite.label)
+    }
+
+    /// Outstanding (unexpired) invites, newest last, for `admin invite --list`.
+    pub fn invites(&self) -> Vec<(Option<String>, DateTime<Utc>, DateTime<Utc>)> {
+        let now = Utc::now();
+        self.locked()
+            .invites
+            .iter()
+            .filter(|invite| invite.expires_at > now)
+            .map(|invite| (invite.label.clone(), invite.created_at, invite.expires_at))
+            .collect()
+    }
+
+    /// Drop every outstanding invite (`admin invite --cancel`).
+    pub fn cancel_invites(&self) -> AuthResult<usize> {
+        let now = Utc::now();
+        let mut state = self.locked();
+        let before = state
+            .invites
+            .iter()
+            .filter(|invite| invite.expires_at > now)
+            .count();
+        state.invites.clear();
+        self.persist(&state)?;
+        Ok(before)
     }
 
     /* ------------------------------ accounts ---------------------------- */

@@ -32,7 +32,7 @@ pub struct CloudSession {
     /// RFC3339 expiry of the minted material.
     pub expires_at: String,
     pub expires_in_seconds: u64,
-    /// Shell exports (`KEY=value` lines) for `eval "$(aka cloud env …)"`.
+    /// Shell exports (`KEY=value` lines) for `eval "$(aka env …)"`.
     pub env: Vec<(String, String)>,
     /// Provider-specific payload (AWS process JSON fields, etc.).
     pub credentials: serde_json::Value,
@@ -209,7 +209,7 @@ const PUSHED_SESSION_CEILING: chrono::TimeDelta =
 
 /// Whether a name is a plain shell/POSIX environment variable name.
 ///
-/// The documented way to use a session is `eval "$(aka cloud env …)"`,
+/// The documented way to use a session is `eval "$(aka env …)"`,
 /// which makes every exported name shell source. Values are quoted at the
 /// print site; a name cannot be, so it has to be a name and nothing else —
 /// otherwise `x; curl … | sh` is an export line. Broker-minted sessions only
@@ -1453,7 +1453,7 @@ region = us-west-2
             assert!(!is_env_var_name(bad), "{bad}");
         }
 
-        // `aka cloud env` output is eval'd, so a pushed session that
+        // `aka env` output is eval'd, so a pushed session that
         // exports a name-shaped-like-a-command is refused on arrival rather
         // than at the shell.
         let sessions = PushedSessions::default();

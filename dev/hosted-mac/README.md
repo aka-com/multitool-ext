@@ -23,8 +23,8 @@ Then:
 
 ```sh
 # Serve under the headless default root (~/.akaserver: data/ + sock/).
-# --listen adds the TCP control plane (loopback here; see below),
-# --public-url is what remote clients will reach it at through your proxy.
+# TCP defaults to 127.0.0.1:4780; this explicit --listen documents the proxy
+# target. --public-url is what remote clients reach through that proxy.
 # Override the root with --root or AKA_SERVER_ROOT; never shares the desktop
 # app's production store (~/.aka), so both can run on one Mac.
 aka serve --listen 127.0.0.1:4780 --public-url https://broker.example.dev
@@ -84,9 +84,9 @@ see [`com.aka.multitool.serve.plist`](com.aka.multitool.serve.plist) in this dir
 
 ## 2. TLS in front
 
-The TCP listener is plain HTTP by design. For same-machine testing,
-`--listen 127.0.0.1:4780` needs nothing else. Across machines, put one of
-these in front and use its address as `--public-url`:
+The TCP listener is plain HTTP by design. For same-machine testing, bare
+`aka serve` uses `127.0.0.1:4780` and `http://localhost:4780`. Across machines,
+put one of these in front and use its address as `--public-url`:
 
 - your hosting service's TLS proxy, forwarding to the broker Mac's port;
 - a tunnel (Tailscale between your machines is the least setup: then

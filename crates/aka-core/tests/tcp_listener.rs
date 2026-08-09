@@ -574,3 +574,86 @@ async fn a_loopback_data_plane_needs_no_acknowledgement() {
     .expect("loopback is fine");
     drop(handle);
 }
+
+/// An invite is what makes handing the shared agent key over the network
+/// safe: `/v1/pair` stays closed on TCP, `/v1/join` opens only for a code an
+/// operator minted on the host, and the code dies on first use.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invite_is_one_use_and_is_the_only_way_to_join_over_tcp() {
+    let h = harness(Some("https://broker.example.dev")).await;
+    let client = reqwest::Client::new();
+
+    let join = |body: Value| {
+        let client = client.clone();
+        let base = h.base.clone();
+        async move {
+            let response = client
+                .post(format!("{base}/v1/join"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status().as_u16();
+            (status, response.json::<Value>().await.unwrap())
+        }
+    };
+
+    // Minting is a host-local act: the route lives on the socket router, so
+    // it is not reachable over TCP at all.
+    let response = client
+        .post(format!("{}/v1/auth/invites", h.base))
+        .header("authorization", format!("Bearer {}", h.manage_token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status().as_u16(),
+        404,
+        "minting must not be reachable over the network"
+    );
+
+    let code = h.broker.auth.open_invite(Some("teammate".into())).unwrap();
+    assert!(code.starts_with("akajoin_"));
+    assert_eq!(h.broker.auth.invites().len(), 1);
+
+    // Redemption hands back the same shared key every agent holds, plus the
+    // address a client should record for this broker.
+    let (status, body) = join(json!({ "invite": code.as_str(), "agent_name": "teammate" })).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["token"].as_str().unwrap(),
+        h.broker.identity.token(&h.broker.workspace)
+    );
+    assert_eq!(body["agent"], "teammate");
+    assert_eq!(body["public_url"], "https://broker.example.dev");
+
+    // The key it handed out actually works on the agent plane.
+    let (status, whoami) = get_json(
+        &format!("{}/v1/whoami", h.base),
+        Some(h.broker.identity.token(&h.broker.workspace).as_str()),
+    )
+    .await;
+    assert_eq!(status, 200, "{whoami}");
+
+    // Spent: replaying the same code is refused, and the store no longer
+    // lists it. A malformed code is refused identically, so a prober learns
+    // nothing about which guess was closer.
+    for code in [code.as_str(), "not-an-invite"] {
+        let (status, body) = join(json!({ "invite": code, "agent_name": "teammate" })).await;
+        assert_eq!(status, 403, "{body}");
+        assert_eq!(body["reason"], "pairing_failed", "{body}");
+    }
+    assert!(h.broker.auth.invites().is_empty());
+
+    // Redemption spends the *pairing* budget, so guessing cannot get a
+    // second allowance by switching endpoints. Three attempts per five
+    // seconds is the shared default, and this is the fourth.
+    let (status, body) = join(json!({ "invite": "akajoin_dead", "agent_name": "teammate" })).await;
+    assert_eq!(status, 429, "{body}");
+    assert_eq!(body["reason"], "pairing_rate_limited", "{body}");
+
+    // Cancellation voids outstanding invites without touching the key.
+    h.broker.auth.open_invite(None).unwrap();
+    assert_eq!(h.broker.auth.cancel_invites().unwrap(), 1);
+    assert!(h.broker.auth.invites().is_empty());
+}

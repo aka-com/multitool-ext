@@ -13,13 +13,24 @@
 //! back out as newline-delimited JSON on stdout. Authorization stays where
 //! it was: the MCP host resolves the key against the broker on every call.
 
-use std::path::Path;
 use std::time::Duration;
 
+#[cfg(test)]
 use aka_core::paths::Paths;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::client::{shared_key, unix_http};
+use crate::client::{shared_key, unix_http, Agent};
+
+/// The bearer key for this bridge's transport. Locally it is re-read (or
+/// re-paired) on every call, which is what makes a key rotation recoverable
+/// without restarting the client. Remotely there is no file to re-read: the
+/// key came from redeeming an invite, so a rotation means `aka login` again.
+async fn agent_key(agent: &Agent, label: Option<&str>) -> Result<String, String> {
+    match agent {
+        Agent::Local(paths) => shared_key(paths, label).await,
+        Agent::Remote { key, .. } => Ok(key.clone()),
+    }
+}
 
 /// How long to wait for the broker (and its MCP host) to appear before
 /// giving up, and how often to re-probe while waiting.
@@ -29,16 +40,33 @@ const DISCOVER_INTERVAL: Duration = Duration::from_secs(2);
 /* ------------------------------ discovery --------------------------------- */
 
 /// The broker's discovery manifest.
-async fn manifest(socket: &Path) -> std::io::Result<serde_json::Value> {
-    let (status, body) = unix_http(
-        socket,
-        "GET",
-        "/.well-known/agent-broker.json",
-        None,
-        None,
-        None,
-    )
-    .await?;
+async fn manifest(agent: &Agent) -> std::io::Result<serde_json::Value> {
+    let (status, body) = match agent {
+        Agent::Local(paths) => {
+            unix_http(
+                &paths.socket_file(),
+                "GET",
+                "/.well-known/agent-broker.json",
+                None,
+                None,
+                None,
+            )
+            .await?
+        }
+        Agent::Remote { base, .. } => {
+            // The manifest is unauthenticated on both transports, and its
+            // TCP form advertises an `mcp_url` pointing at the broker's own
+            // `/mcp` reverse proxy — the address a remote client can dial.
+            let response = reqwest::Client::new()
+                .get(format!("{base}/.well-known/agent-broker.json"))
+                .send()
+                .await
+                .map_err(std::io::Error::other)?;
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(std::io::Error::other)?;
+            (status, body)
+        }
+    };
     if status != 200 {
         return Err(std::io::Error::other(format!(
             "manifest fetch failed with HTTP {status}"
@@ -59,13 +87,13 @@ fn agent_protocol_warning(manifest: &serde_json::Value) -> Option<String> {
 }
 
 /// Wait for the broker's manifest to advertise a running MCP host.
-async fn discover_mcp_url(socket: &Path) -> Result<String, String> {
+async fn discover_mcp_url(agent: &Agent) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + DISCOVER_TIMEOUT;
     let mut reported_waiting = false;
     let mut reported_no_mcp = false;
     let mut reported_protocol_skew = false;
     loop {
-        match manifest(socket).await {
+        match manifest(agent).await {
             Ok(manifest) => {
                 if !reported_protocol_skew {
                     if let Some(warning) = agent_protocol_warning(&manifest) {
@@ -87,7 +115,7 @@ async fn discover_mcp_url(socket: &Path) -> Result<String, String> {
             Err(_) if !reported_waiting => {
                 eprintln!(
                     "aka mcp: waiting for the Multitool broker at {}",
-                    socket.display()
+                    agent.describe()
                 );
                 reported_waiting = true;
             }
@@ -188,7 +216,7 @@ struct SessionState {
 
 struct Bridge {
     http: reqwest::Client,
-    paths: Paths,
+    agent: Agent,
     label: Option<String>,
     state: std::sync::Mutex<SessionState>,
     /// Held across a whole recovery so two calls that both hit an expired
@@ -257,8 +285,14 @@ impl Bridge {
     /// all mean the same thing — the session is unattested, which is a state
     /// the UI renders rather than an error worth failing the handshake over.
     async fn attestation_ticket(&self) -> Option<String> {
+        // Socket-only by construction: a TCP peer is the operator's proxy,
+        // so there is nothing about this process to attest and the broker
+        // refuses the route. An unattested session is a state the UI renders.
+        let Agent::Local(paths) = &self.agent else {
+            return None;
+        };
         let (status, body) = crate::client::unix_http(
-            &self.paths.socket_file(),
+            &paths.socket_file(),
             "POST",
             "/v1/attest",
             Some("{}"),
@@ -398,14 +432,14 @@ impl Bridge {
 
     /// Refresh the shared key from the token file (rotation rewrote it).
     async fn refresh_token(&self) -> Result<(), String> {
-        let token = shared_key(&self.paths, self.label.as_deref()).await?;
+        let token = agent_key(&self.agent, self.label.as_deref()).await?;
         self.state.lock().unwrap().token = token;
         Ok(())
     }
 
     /// Re-discover the MCP host (a broker restart moves the port).
     async fn rediscover(&self) -> Result<(), String> {
-        let url = discover_mcp_url(&self.paths.socket_file()).await?;
+        let url = discover_mcp_url(&self.agent).await?;
         self.state.lock().unwrap().mcp_url = url;
         Ok(())
     }
@@ -807,13 +841,12 @@ fn forward_server_message(
 }
 
 /// Run the bridge until stdin closes (the MCP client hanging up).
-pub async fn run(paths: Paths, label: Option<String>) -> Result<(), String> {
-    let socket = paths.socket_file();
-    let mcp_url = discover_mcp_url(&socket).await?;
-    let token = shared_key(&paths, label.as_deref()).await?;
+pub async fn run(agent: Agent, label: Option<String>) -> Result<(), String> {
+    let mcp_url = discover_mcp_url(&agent).await?;
+    let token = agent_key(&agent, label.as_deref()).await?;
     let bridge = std::sync::Arc::new(Bridge {
         http: reqwest::Client::new(),
-        paths,
+        agent,
         label,
         state: std::sync::Mutex::new(SessionState {
             mcp_url,
@@ -1152,7 +1185,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bridge = Bridge {
             http: reqwest::Client::new(),
-            paths: Paths::under(dir.path()),
+            agent: Agent::Local(Paths::under(dir.path())),
             label: Some("test-client".into()),
             state: std::sync::Mutex::new(SessionState {
                 mcp_url: format!("http://127.0.0.1:{port}/mcp"),
@@ -1251,7 +1284,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bridge = Bridge {
             http: reqwest::Client::new(),
-            paths: Paths::under(dir.path()),
+            agent: Agent::Local(Paths::under(dir.path())),
             label: None,
             state: std::sync::Mutex::new(SessionState {
                 mcp_url: format!("http://127.0.0.1:{port}/mcp"),
@@ -1341,7 +1374,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bridge = Bridge {
             http: reqwest::Client::new(),
-            paths: Paths::under(dir.path()),
+            agent: Agent::Local(Paths::under(dir.path())),
             label: None,
             state: std::sync::Mutex::new(SessionState {
                 mcp_url: format!("http://127.0.0.1:{port}/mcp"),
@@ -1430,7 +1463,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bridge = Arc::new(Bridge {
             http: reqwest::Client::new(),
-            paths: Paths::under(dir.path()),
+            agent: Agent::Local(Paths::under(dir.path())),
             label: None,
             state: std::sync::Mutex::new(SessionState {
                 mcp_url: format!("http://127.0.0.1:{port}/mcp"),

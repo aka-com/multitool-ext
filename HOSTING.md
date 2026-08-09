@@ -69,7 +69,7 @@ Management tokens are stored in a plaintext 0600 file on non-macOS clients;
 prefer `AKA_MANAGE_TOKEN` in CI. The default management-token lifetime is 30
 days. A never-managed broker writes one bounded first-start credential to its
 owner-only socket directory (`<root>/sock/manage-token`).
-`aka manage token --root <root>` consumes it to perform the first
+`aka admin token --root <root>` consumes it to perform the first
 authenticated online rotation; subsequent rotations require the still current
 saved or environment token and do not stop the broker.
 

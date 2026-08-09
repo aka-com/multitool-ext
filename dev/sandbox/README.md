@@ -229,9 +229,10 @@ reviewing a new upstream release. The walkthrough above adds each
 service through Multitool Desktop; the same checks run headless on Linux
 (where the desktop app does not build) by seeding a throwaway root with
 `aka conn add --root …` (the MCP connection needs `--mcp-path /mcp`),
-starting `aka serve --root …`, and driving the broker over its Unix
-socket the way an agent would. Bare `serve` would use `~/.akaserver` instead
-of the production desktop store.
+starting `aka serve --root … --no-listen`, and driving the broker over its
+Unix socket the way an agent would. `--no-listen` keeps concurrent tests from
+contending for the default TCP port; bare `serve` would use `~/.akaserver`
+instead of the production desktop store.
 
 Do not mount the repository, home directory, or real credentials into
 these containers.

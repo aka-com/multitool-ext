@@ -672,6 +672,7 @@ pub fn router_with(
         .route("/.well-known/agent-broker.json", get(get_manifest))
         .route("/instructions", get(get_instructions))
         .route("/v1/pair", post(post_pair))
+        .route("/v1/join", post(post_join))
         .route("/v1/attest", post(post_attest))
         .route("/v1/connections", get(get_connections))
         .route("/v1/whoami", get(get_whoami))
@@ -934,6 +935,7 @@ async fn get_manifest(State(state): State<AppState>) -> Response {
         &state.broker.config,
         &state.broker.paths,
         state.broker.mcp_host_url(),
+        state.broker.public_url().as_deref(),
     ))
     .into_response()
 }
@@ -1026,6 +1028,87 @@ async fn post_pair(State(state): State<AppState>, ApiJson(body): ApiJson<PairBod
         .into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct JoinBody {
+    /// The one-use code from `aka admin invite`.
+    invite: String,
+    agent_name: String,
+}
+
+/// `POST /v1/join`: redeem a one-use invite for the shared agent key.
+///
+/// This is pairing's network-safe sibling. `/v1/pair` is refused on TCP
+/// because an unauthenticated key dispenser is only acceptable behind the
+/// 0600 socket; an invite supplies the missing gate — an operator minted it
+/// deliberately with the management token, it expires in minutes, and it is
+/// spent by the first redemption. What comes back is the same shared key
+/// every agent holds, so this grants no identity and no authority beyond
+/// what the operator already decided to hand out.
+async fn post_join(State(state): State<AppState>, ApiJson(body): ApiJson<JoinBody>) -> Response {
+    let broker = &state.broker;
+    // Share the pairing limiter: both routes dispense the same key, so a
+    // guesser must not get a second budget by switching endpoints.
+    if let Err(wait) = broker.pairing_limiter.check() {
+        return err_rate_limited(ErrorReason::PairingRateLimited, wait);
+    }
+    let name = body.agent_name.trim().to_string();
+    if !validate_agent_name(&name) {
+        return err_detail(
+            StatusCode::BAD_REQUEST,
+            ErrorReason::InvalidAgentName,
+            "1-64 chars of [A-Za-z0-9._-]",
+        );
+    }
+    let label = match broker.auth.redeem_invite(body.invite.trim()) {
+        Ok(label) => label,
+        Err(error) => {
+            broker.audit.append(
+                AuditEntry::new(
+                    AuditKind::Denied,
+                    format!("Refused an invite redemption from {name}"),
+                )
+                .agent(name.clone())
+                .outcome("invite_refused"),
+            );
+            return err_detail(
+                StatusCode::FORBIDDEN,
+                ErrorReason::PairingFailed,
+                error.detail(),
+            );
+        }
+    };
+    broker.identity.touch(&broker.workspace).await;
+    broker.audit.append(
+        AuditEntry::new(
+            AuditKind::Paired,
+            match &label {
+                Some(label) => format!("Agent joined with invite {label}: {name}"),
+                None => format!("Agent joined with an invite: {name}"),
+            },
+        )
+        .agent(name.clone())
+        .outcome("joined"),
+    );
+    broker.events.agents_changed();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "token": broker.identity.token(&broker.workspace),
+            "client_id": broker.identity.client_id(&broker.workspace),
+            "agent": name,
+            "expires_after_days": broker.config.token_ttl.as_secs() / 86400,
+            "store_at": broker.paths.token_display(),
+            // The address the joining client should record for this broker.
+            // Absent on the socket, where the caller already knows it.
+            "public_url": match &state.transport {
+                Transport::Tcp { public_url } => public_url.as_ref().map(|url| json!(url.as_ref())),
+                Transport::Uds => None,
+            },
+        })),
+    )
+        .into_response()
+}
+
 /* ------------------------------ attestation ------------------------------- */
 
 /// Hand the caller a ticket carrying whatever the OS proved about it.
@@ -1072,15 +1155,14 @@ async fn get_connections(State(state): State<AppState>, authed: Authed) -> Respo
         return err_rate_limited(ErrorReason::RateLimited, wait);
     }
     // The one authenticated endpoint that bypasses the access check by
-    // design, an agent must see what exists (and what is enabled).
-    // Audited.
-    broker.audit.append(
-        AuditEntry::new(
-            AuditKind::Listed,
-            format!("{} listed connections", authed.client),
-        )
-        .agent(authed.client.clone()),
-    );
+    // design: an agent must see what exists (and what is enabled).
+    //
+    // Deliberately not audited. Reading the catalog grants nothing and
+    // reveals nothing the caller's key does not already entitle it to, and
+    // agents poll it — the MCP host refreshes on every catalog change, and
+    // `aka run`/`aka env` resolve a connection's kind through it — so an
+    // entry per read buried the calls that actually reach an upstream. The
+    // durable record covers use, not looking.
     let mut recent_ssh_refusals = std::collections::HashMap::new();
     for entry in broker.audit.recent(200) {
         if entry.kind != AuditKind::Denied
@@ -2937,7 +3019,7 @@ async fn post_cloud_session(
                             "env": env_object,
                             "credentials": session.credentials,
                             "example": format!(
-                                "eval \"$(aka cloud env {})\"",
+                                "eval \"$(aka env {})\"",
                                 session.connection
                             ),
                         }),

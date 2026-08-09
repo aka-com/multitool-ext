@@ -222,7 +222,7 @@ async fn authenticate(server: &mut UnixStream, secret: &str) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "the endpoint refused this secret — reissue the endpoint \
-             (`aka conn endpoint <name> --issue`) if it was rotated",
+             (`aka endpoint <name> --issue`) if it was rotated",
         ));
     }
     Ok(())

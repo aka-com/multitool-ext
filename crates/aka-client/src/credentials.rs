@@ -11,7 +11,7 @@
 //! uses (see `aka_core::keychain`), so a signed build reads its stored token
 //! without an ACL dialog. Unlike a secret value a token is re-obtainable, so
 //! a build that cannot reach that keychain quietly falls back to the login
-//! keychain and, finding nothing, asks for `aka manage login` again.
+//! keychain and, finding nothing, asks for `aka admin login` again.
 
 use std::path::PathBuf;
 
@@ -172,6 +172,13 @@ fn grant_key(url: &str) -> String {
     format!("device-grant\u{1f}{}", url.trim_end_matches('/'))
 }
 
+/// Namespace a remote broker's shared agent key, for the same reason
+/// [`grant_key`] exists: it is a different plane's credential from the
+/// management token and must be separately storable and removable.
+fn agent_key_key(url: &str) -> String {
+    format!("agent-key\u{1f}{}", url.trim_end_matches('/'))
+}
+
 impl TokenStore {
     /// Store the rotating refresh token for a passkey device grant.
     ///
@@ -185,6 +192,21 @@ impl TokenStore {
     pub fn load_grant(&self, url: &str) -> Option<Zeroizing<String>> {
         self.load(&grant_key(url))
     }
+
+    /// Store a remote broker's shared agent key, as handed back by
+    /// redeeming an invite. This is the agent plane's bearer token: it
+    /// authorizes using connections, not managing the broker.
+    pub fn save_agent_key(&self, url: &str, key: &str) -> Result<(), String> {
+        self.save(&agent_key_key(url), key)
+    }
+
+    pub fn load_agent_key(&self, url: &str) -> Option<Zeroizing<String>> {
+        self.load(&agent_key_key(url))
+    }
+
+    pub fn delete_agent_key(&self, url: &str) -> Result<(), String> {
+        self.delete(&agent_key_key(url))
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +218,17 @@ mod tests {
         // Two credentials for one broker, separately revocable.
         assert_ne!(key_for("https://a"), key_for(&grant_key("https://a")));
         assert_eq!(grant_key("https://a/"), grant_key("https://a"));
+    }
+
+    #[test]
+    fn the_agent_key_has_its_own_slot_on_every_plane() {
+        // Three planes, one broker: the agent key must not collide with the
+        // management token or the device grant, so logging out of one does
+        // not silently disarm another.
+        for other in [key_for("https://a"), key_for(&grant_key("https://a"))] {
+            assert_ne!(key_for(&agent_key_key("https://a")), other);
+        }
+        assert_eq!(agent_key_key("https://a/"), agent_key_key("https://a"));
     }
 
     #[test]

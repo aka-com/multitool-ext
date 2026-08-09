@@ -5,8 +5,9 @@
 //! parameter, not a display string: whoever chooses it chooses which site's
 //! passkeys unlock this broker.
 //!
-//! So it is chosen once, by the operator, through `serve --public-url` — the
-//! same URL discovery already advertises — and never inferred from a request.
+//! So it comes from `serve`'s configured public URL (localhost by default,
+//! overridable with `--public-url`) — the same URL discovery already advertises
+//! — and is never inferred from a request.
 //! There is deliberately no constructor taking a `Host` header: a proxy that
 //! forwards an attacker-chosen `Host` would otherwise let that attacker run a
 //! ceremony against an RP id of their choosing and register a passkey the
@@ -36,7 +37,8 @@ impl OriginError {
     pub fn detail(&self) -> String {
         match self {
             Self::NotConfigured => "passkey sign-in needs the URL people reach this broker at; \
-                 start it with `aka serve --listen … --public-url https://broker.example`"
+                 bare `aka serve` supplies a localhost URL, or configure \
+                 `--listen … --public-url https://broker.example`"
                 .into(),
             Self::Malformed(url) => format!(
                 "{url:?} is not an origin; --public-url takes a scheme, host, \

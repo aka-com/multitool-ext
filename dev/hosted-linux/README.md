@@ -3,8 +3,10 @@
 The broker runs headless on Linux the same way it does on a Mac
 (`aka serve`), with one difference: **secrets are sealed by an encrypted
 vault** instead of the macOS Keychain, so you must provide a master key.
-Bare `serve` defaults to `~/.akaserver` (override with `--root` or
-`AKA_SERVER_ROOT`); production images pin `--root /var/lib/aka` explicitly.
+Bare `serve` defaults to `~/.akaserver`, TCP `127.0.0.1:4780`, and public URL
+`http://localhost:4780` (override the root with `--root` or `AKA_SERVER_ROOT`);
+production images pin `--root /var/lib/aka` and a reachable listener
+explicitly.
 Everything else — the manage API, the `akamgr_` token, TCP control plane,
 relayed OAuth, data-plane advertise — works identically. Manage it from
 Multitool Desktop exactly as you would a hosted Mac.

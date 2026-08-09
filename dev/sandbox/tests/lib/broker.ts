@@ -2,10 +2,10 @@
 //
 // The desktop app is macOS-only, so this suite drives what the sandbox
 // README calls the headless path: `aka manage token` mints a management
-// credential offline, `aka serve --root <tmp>` runs the broker with its
-// state under a throwaway directory, and the tests then speak the two wire
-// planes an agent and the app speak — the control plane over the Unix
-// socket, and the manage plane at /v1/manage.
+// credential offline, `aka serve --root <tmp> --no-listen` runs the broker
+// with its state under a throwaway directory, and the tests then speak the
+// two wire planes an agent and the app speak — the control plane over the
+// Unix socket, and the manage plane at /v1/manage.
 //
 // Each test file gets its own broker (its own store, identity, audit log,
 // rate-limit buckets and approval state) so files can run in parallel and a
@@ -229,7 +229,9 @@ export class Broker {
   ): Promise<Broker> {
     const binary = multitoolBinary();
     const socketPath = join(root, 'sock/broker.sock');
-    const args = ['serve', '--root', root];
+    // Test files run brokers concurrently. Keep each one on its root-scoped
+    // Unix socket instead of making every process contend for TCP port 4780.
+    const args = ['serve', '--root', root, '--no-listen'];
     if (options.mcp === false) args.push('--no-mcp');
     const child = spawn(binary, args, {
       cwd: repoRoot,

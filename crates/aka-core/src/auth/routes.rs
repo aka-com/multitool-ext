@@ -57,6 +57,7 @@ fn auth_error(error_value: AuthError) -> Response {
     let (status, reason) = match &error_value {
         AuthError::NotEnrolled => (StatusCode::CONFLICT, "not_enrolled"),
         AuthError::EnrollmentRefused => (StatusCode::FORBIDDEN, "enrollment_refused"),
+        AuthError::InviteRefused => (StatusCode::FORBIDDEN, "invite_refused"),
         AuthError::Ceremony(_) => (StatusCode::UNAUTHORIZED, "ceremony_failed"),
         AuthError::Invalid(_) => (StatusCode::UNAUTHORIZED, "invalid_credential"),
         AuthError::RefreshReuse => (StatusCode::UNAUTHORIZED, "refresh_token_reused"),
@@ -170,10 +171,82 @@ fn same_origin(headers: &HeaderMap, origin: &PublicOrigin) -> Option<Response> {
 /// The mirror image of [`router`]: neither surface is reachable from where
 /// the other lives.
 pub fn local_router() -> Router<AppState> {
-    Router::new().route(
-        "/v1/auth/enrollment",
-        post(open_enrollment).delete(close_enrollment),
-    )
+    Router::new()
+        .route(
+            "/v1/auth/enrollment",
+            post(open_enrollment).delete(close_enrollment),
+        )
+        .route(
+            "/v1/auth/invites",
+            get(list_invites).post(open_invite).delete(cancel_invites),
+        )
+}
+
+#[derive(serde::Deserialize, Default)]
+struct InviteQuery {
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// Mint a one-use agent-plane invite.
+///
+/// Socket-only for the same reason enrollment is: minting a credential that
+/// hands out the shared key decides who gets to use this broker's
+/// connections, so it takes local access to the host rather than a
+/// credential someone could carry. Redemption (`POST /v1/join`) is the half
+/// that must work over the network.
+async fn open_invite(
+    State(state): State<AppState>,
+    Query(query): Query<InviteQuery>,
+) -> Response {
+    let label = query
+        .label
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty());
+    match state.broker.auth.open_invite(label.clone()) {
+        Ok(code) => {
+            state.broker.audit_sign_in(
+                crate::audit::AuditKind::Passkey,
+                &match &label {
+                    Some(label) => format!("Agent invite created: {label}"),
+                    None => "Agent invite created".to_string(),
+                },
+                "on the broker host",
+            );
+            let url = state
+                .broker
+                .public_origin()
+                .ok()
+                .map(|origin| origin.url(""));
+            Json(json!({
+                "invite": code.as_str(),
+                "public_url": url,
+                "expires_in_seconds": 15 * 60,
+            }))
+            .into_response()
+        }
+        Err(error_value) => auth_error(error_value),
+    }
+}
+
+async fn list_invites(State(state): State<AppState>) -> Response {
+    let invites: Vec<_> = state
+        .broker
+        .auth
+        .invites()
+        .into_iter()
+        .map(|(label, created_at, expires_at)| {
+            json!({ "label": label, "created_at": created_at, "expires_at": expires_at })
+        })
+        .collect();
+    Json(json!({ "invites": invites })).into_response()
+}
+
+async fn cancel_invites(State(state): State<AppState>) -> Response {
+    match state.broker.auth.cancel_invites() {
+        Ok(cancelled) => Json(json!({ "cancelled": cancelled })).into_response(),
+        Err(error_value) => auth_error(error_value),
+    }
 }
 
 async fn open_enrollment(State(state): State<AppState>) -> Response {
@@ -647,7 +720,7 @@ async fn authorize_page(
             StatusCode::CONFLICT,
             page(
                 "<h1>No passkey is enrolled</h1><p class=detail>Run \
-                 <code>aka manage enroll</code> on the broker host, then \
+                 <code>aka admin enroll</code> on the broker host, then \
                  open the link it prints.</p>",
                 &nonce,
             ),

@@ -339,7 +339,7 @@ fn resolve_for_store(
 ///
 /// There is no store marker to consult and nothing to fail loudly over: a
 /// binary that cannot reach the data-protection keychain falls back, finds
-/// nothing there, and costs the user one `aka manage login`. Losing a secret
+/// nothing there, and costs the user one `aka admin login`. Losing a secret
 /// value that way would be unrecoverable, which is why [`resolve`] refuses
 /// instead.
 pub fn best_effort<A: KeychainApi + ?Sized>(api: &A) -> Keychain {

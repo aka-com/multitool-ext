@@ -4860,7 +4860,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
     const setup = state.remoteSetup;
     const setupInstructions =
       '# To start a remote instance, run this behind a TLS proxy or tunnel:\n'
-      + 'aka serve --listen 0.0.0.0:4780\nmultitool manage token';
+      + 'aka serve --listen 0.0.0.0:4780\naka manage token';
     const sameBroker = setup.url.trim() === ''
       || setup.url.trim().replace(/\/+$/, '') === (state.broker.url ?? '');
     const hasSaved = state.broker.has_saved_token && sameBroker;

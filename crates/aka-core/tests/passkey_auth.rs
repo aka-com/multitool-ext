@@ -1050,7 +1050,7 @@ async fn the_authorize_page_says_so_when_nothing_is_enrolled() {
     let (status, body, _) = get(&h.base, &format!("/authorize?{}", authorize_query(&[]))).await;
     assert_eq!(status, 409);
     let html = body.as_str().unwrap();
-    assert!(html.contains("aka manage enroll"), "{html}");
+    assert!(html.contains("aka admin enroll"), "{html}");
 }
 
 #[tokio::test]

@@ -3381,3 +3381,44 @@ async fn a_streamed_answer_still_carries_what_the_broker_attached_after_it() {
     let relayed: Value = serde_json::from_slice(&sse_body_bytes(&frames)).unwrap();
     assert_eq!(relayed["result"]["resultType"], "input_required");
 }
+
+/// Reading the catalog is not use, and agents poll it — the MCP host
+/// refreshes on every change and `aka run`/`aka env` resolve a connection's
+/// kind through it. Auditing each read buried the calls that actually reach
+/// an upstream, so the durable record covers use, not looking.
+#[tokio::test]
+async fn listing_connections_writes_no_audit_entry() {
+    let mut h = harness(BrokerConfig::default()).await;
+    let token = h.pair("claude-code").await;
+    let auth = format!("Bearer {token}");
+    let before = h.broker.audit.recent(200).len();
+
+    for _ in 0..3 {
+        let (status, _) = uds_request(
+            &h.socket,
+            "GET",
+            "/v1/connections",
+            &[
+                ("authorization", &auth),
+                ("x-multitool-client", "claude-code"),
+            ],
+            None,
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+
+    let entries = h.broker.audit.recent(200);
+    assert_eq!(
+        entries.len(),
+        before,
+        "listing must not append: {:?}",
+        entries
+            .iter()
+            .map(|entry| (entry.kind, entry.text.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(!entries
+        .iter()
+        .any(|entry| matches!(entry.kind, aka_core::audit::AuditKind::Listed)));
+}

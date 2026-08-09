@@ -14,25 +14,26 @@ use comfy_table::{
 };
 
 const ROOT_GROUPS: &[(&str, &[&str])] = &[
-    ("AGENT", &["skill", "instructions", "mcp"]),
-    ("OPEN", &["dsn", "ssh", "cloud", "ssh-agent"]),
-    ("VAULT", &["secret", "conn"]),
+    ("USE A CONNECTION", &["run", "env", "ls"]),
+    ("GET STARTED", &["status", "setup", "login", "logout", "use"]),
+    ("ADD & MANAGE", &["conn", "secret", "endpoint"]),
     (
-        "BROKER",
-        &[
-            "serve", "status", "sessions", "requests", "settings", "key", "activity", "manage",
-        ],
+        "APPROVALS & AUDIT",
+        &["approvals", "approve", "deny", "sessions", "activity"],
     ),
-    ("SHELL", &["completions"]),
+    ("OPERATOR", &["serve", "admin"]),
+    ("RUNTIME", &["mcp", "ssh-agent", "cloud", "completions"]),
 ];
 
 const ROOT_WORKFLOWS: &[(&str, &str)] = &[
-    ("Set up an agent", "aka skill --write"),
-    ("Connect an MCP client", "aka mcp"),
-    ("Run a headless broker", "aka serve [--listen …]"),
-    ("Open Postgres", "eval \"$(aka dsn <conn>)\" && psql"),
-    ("Open SSH", "export SSH_AUTH_SOCK=\"$(aka ssh <conn>)\""),
-    ("Open a cloud CLI", "eval \"$(aka cloud env <conn>)\""),
+    ("Install the agent skill", "aka setup skill --write"),
+    ("Configure an MCP client", "aka setup <client>"),
+    ("Run a headless broker", "aka serve"),
+    ("Add a connection", "aka conn add pg --help"),
+    ("Open Postgres", "aka run <conn> -- psql"),
+    ("Open SSH", "aka run <conn> -- ssh <destination>"),
+    ("Open a cloud CLI", "aka run <conn> -- <cmd>"),
+    ("Print scoped exports", "aka env <conn>"),
 ];
 
 fn terminal_width() -> u16 {
@@ -227,12 +228,13 @@ fn literal(color: bool, text: impl Display) -> String {
     bold_cyan(color, text)
 }
 
-fn command_about(command: &Command) -> String {
-    command
-        .get_long_about()
-        .or_else(|| command.get_about())
-        .map(ToString::to_string)
-        .unwrap_or_default()
+fn command_about(command: &Command, long: bool) -> String {
+    let about = if long {
+        command.get_long_about().or_else(|| command.get_about())
+    } else {
+        command.get_about().or_else(|| command.get_long_about())
+    };
+    about.map(ToString::to_string).unwrap_or_default()
 }
 
 fn command_summary(command: &Command) -> String {
@@ -278,12 +280,13 @@ fn arg_label(arg: &Arg) -> String {
     label
 }
 
-fn arg_help(arg: &Arg) -> String {
-    let mut help = arg
-        .get_long_help()
-        .or_else(|| arg.get_help())
-        .map(ToString::to_string)
-        .unwrap_or_default();
+fn arg_help(arg: &Arg, long: bool) -> String {
+    let help = if long {
+        arg.get_long_help().or_else(|| arg.get_help())
+    } else {
+        arg.get_help().or_else(|| arg.get_long_help())
+    };
+    let mut help = help.map(ToString::to_string).unwrap_or_default();
     if !matches!(
         arg.get_action(),
         clap::ArgAction::SetTrue
@@ -327,23 +330,74 @@ fn render_usage(command: &Command, color: bool) -> String {
     format!("{} {}", heading(color, "USAGE"), literal(color, usage))
 }
 
+fn help_command_label(path: &[String]) -> String {
+    let key = path.join(" ");
+    let leaf = path.last().map(String::as_str).unwrap_or_default();
+    match key.as_str() {
+        "run" => "run <conn> -- <cmd>".into(),
+        "env" => "env <conn>".into(),
+        "setup" => "setup [<client>]".into(),
+        "login" => "login <url>".into(),
+        "logout" => "logout [<context>]".into(),
+        "use" => "use [<context>]".into(),
+        "endpoint" => "endpoint <conn>".into(),
+        "approve" => "approve <id>".into(),
+        "deny" => "deny <id>".into(),
+        "ssh-agent" => "ssh-agent <conn>".into(),
+        "completions" => "completions <shell>".into(),
+        "conn add api" | "conn add pg" | "conn add ssh" | "conn add cloud aws"
+        | "conn add cloud azure" | "conn add cloud gcp" => format!("{leaf} <name>"),
+        "conn show" => "show <conn>".into(),
+        "conn update" => "update [<conn>]".into(),
+        "conn update api" | "conn update pg" | "conn update ssh" => {
+            format!("{leaf} <conn>")
+        }
+        "conn rename" => "rename <conn> <new>".into(),
+        "conn rm" => "rm <conn>".into(),
+        "conn enable" => "enable <conn>".into(),
+        "conn disable" => "disable <conn>".into(),
+        "conn test" => "test <conn>".into(),
+        "secret add" => "add <name>".into(),
+        "secret rename" => "rename <name> <new>".into(),
+        "secret rotate" => "rotate <name>".into(),
+        "secret rm" => "rm <name>".into(),
+        "cloud creds" | "cloud install" => format!("{leaf} <conn>"),
+        _ => leaf.into(),
+    }
+}
+
+fn append_command_tree_rows(
+    rows: &mut Vec<Vec<String>>,
+    command: &Command,
+    path: &mut Vec<String>,
+    depth: usize,
+    color: bool,
+) {
+    path.push(command.get_name().to_string());
+    let label = format!("{}{}", "  ".repeat(depth), help_command_label(path));
+    rows.push(vec![literal(color, label), command_summary(command)]);
+    for child in command
+        .get_subcommands()
+        .filter(|child| child.get_name() != "help" && !child.is_hide_set())
+    {
+        append_command_tree_rows(rows, child, path, depth + 1, color);
+    }
+    path.pop();
+}
+
 fn render_root_commands(command: &Command, color: bool) -> String {
     let mut output = String::new();
     let mut seen = std::collections::HashSet::new();
     for (group, names) in ROOT_GROUPS {
-        let rows = names
-            .iter()
-            .filter_map(|name| {
-                let subcommand = command
-                    .get_subcommands()
-                    .find(|candidate| candidate.get_name() == *name)?;
-                seen.insert(*name);
-                Some(vec![
-                    literal(color, subcommand.get_name()),
-                    command_summary(subcommand),
-                ])
-            })
-            .collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        for subcommand in names.iter().filter_map(|name| {
+            command
+                .get_subcommands()
+                .find(|candidate| candidate.get_name() == *name)
+        }) {
+            seen.insert(subcommand.get_name());
+            append_command_tree_rows(&mut rows, subcommand, &mut Vec::new(), 0, color);
+        }
         if !rows.is_empty() {
             output.push_str(&format!(
                 "\n{}\n{}\n",
@@ -355,11 +409,14 @@ fn render_root_commands(command: &Command, color: bool) -> String {
 
     let other = command
         .get_subcommands()
-        .filter(|subcommand| subcommand.get_name() != "help")
+        .filter(|subcommand| subcommand.get_name() != "help" && !subcommand.is_hide_set())
         .filter(|subcommand| !seen.contains(subcommand.get_name()))
         .map(|subcommand| {
             vec![
-                literal(color, subcommand.get_name()),
+                literal(
+                    color,
+                    help_command_label(&[subcommand.get_name().to_string()]),
+                ),
                 command_summary(subcommand),
             ]
         })
@@ -392,17 +449,22 @@ fn render_subcommands(command: &Command, color: bool) -> String {
     }
 }
 
-fn render_args(command: &Command, color: bool) -> String {
+fn render_args(command: &Command, color: bool, long: bool) -> String {
     let positionals = command
         .get_positionals()
-        .filter(|arg| !arg.is_hide_set() && !arg.is_hide_long_help_set())
-        .map(|arg| vec![literal(color, arg_label(arg)), arg_help(arg)])
+        .filter(|arg| !arg.is_hide_set() && (!long || !arg.is_hide_long_help_set()))
+        .map(|arg| vec![literal(color, arg_label(arg)), arg_help(arg, long)])
         .collect::<Vec<_>>();
+    let streaming_command = matches!(
+        command.get_bin_name(),
+        Some("aka serve" | "aka mcp" | "aka ssh-agent" | "aka completions")
+    );
     let options = command
         .get_arguments()
         .filter(|arg| !arg.is_positional())
-        .filter(|arg| !arg.is_hide_set() && !arg.is_hide_long_help_set())
-        .map(|arg| vec![literal(color, arg_label(arg)), arg_help(arg)])
+        .filter(|arg| arg.get_id() != "json" || !streaming_command)
+        .filter(|arg| !arg.is_hide_set() && (!long || !arg.is_hide_long_help_set()))
+        .map(|arg| vec![literal(color, arg_label(arg)), arg_help(arg, long)])
         .collect::<Vec<_>>();
 
     let mut output = String::new();
@@ -423,7 +485,7 @@ fn render_args(command: &Command, color: bool) -> String {
     output
 }
 
-fn render_help(command: &Command, color: bool, root: bool) -> String {
+fn render_help(command: &Command, color: bool, root: bool, long: bool) -> String {
     let title = if root {
         match command.get_version() {
             Some(version) => format!("aka {version}"),
@@ -436,7 +498,7 @@ fn render_help(command: &Command, color: bool, root: bool) -> String {
             .unwrap_or_else(|| command.get_name().to_string())
     };
     let mut output = format!("{}\n", bold_green(color, title));
-    let about = command_about(command);
+    let about = command_about(command, long);
     if !about.is_empty() {
         output.push_str(&format!("{about}\n"));
     }
@@ -448,9 +510,25 @@ fn render_help(command: &Command, color: bool, root: bool) -> String {
     } else {
         output.push_str(&render_subcommands(command, color));
     }
-    output.push_str(&render_args(command, color));
+    output.push_str(&render_args(command, color, long));
 
-    if root {
+    if root && !long {
+        let examples = [
+            ("Postgres", "aka run <conn> -- psql"),
+            ("SSH", "aka run <conn> -- ssh <destination>"),
+            ("Cloud CLI", "aka run <conn> -- aws sts get-caller-identity"),
+        ];
+        let rows = examples
+            .iter()
+            .map(|(name, invocation)| vec![name.to_string(), literal(color, invocation)])
+            .collect::<Vec<_>>();
+        output.push_str(&format!(
+            "\n{}\n{}\n{}\n",
+            heading(color, "EXAMPLES"),
+            " Put your command after `--` to run it with short-lived credentials:",
+            help_table(rows)
+        ));
+    } else if root {
         let rows = ROOT_WORKFLOWS
             .iter()
             .map(|(name, invocation)| vec![name.to_string(), literal(color, invocation)])
@@ -460,37 +538,40 @@ fn render_help(command: &Command, color: bool, root: bool) -> String {
             heading(color, "COMMON WORKFLOWS"),
             help_table(rows)
         ));
-        output.push_str(&dim(
-            color,
-            "Run `aka <command> --help` for command-specific options.",
-        ));
-        output.push('\n');
     } else if let Some(after) = command
         .get_after_long_help()
         .or_else(|| command.get_after_help())
     {
         output.push('\n');
-        output.push_str(&after.to_string());
-        output.push('\n');
+        for line in after.to_string().lines() {
+            // After-help blocks carry their own section titles (e.g.
+            // EXAMPLES); style them like the generated headings.
+            if line == "EXAMPLES" {
+                output.push_str(&heading(color, line));
+            } else {
+                output.push_str(line);
+            }
+            output.push('\n');
+        }
     }
     output
 }
 
-fn install_help_recursive(command: &mut Command, color: bool, root: bool) {
+fn install_help_recursive(command: &mut Command, color: bool, root: bool, long: bool) {
     for subcommand in command.get_subcommands_mut() {
         if subcommand.get_name() != "help" {
-            install_help_recursive(subcommand, color, false);
+            install_help_recursive(subcommand, color, false, long);
         }
     }
-    let help = render_help(command, color, root);
+    let help = render_help(command, color, root, long);
     *command = command.clone().override_help(help);
 }
 
 /// Replace clap's help printer while retaining clap's parser, validation,
 /// suggestions, exit codes, and command metadata as the source of truth.
-pub fn install_help(command: &mut Command, color: bool) {
+pub fn install_help(command: &mut Command, color: bool, long: bool) {
     command.build();
-    install_help_recursive(command, color, true);
+    install_help_recursive(command, color, true, long);
 }
 
 #[cfg(test)]

@@ -35,9 +35,11 @@ test('the control socket is private to its owner', async () => {
 });
 
 test('a second broker refuses to serve the same state', async () => {
-  const result = await run(multitoolBinary(), ['serve', '--root', broker.root, '--no-mcp'], {
-    timeoutMs: 30_000,
-  });
+  const result = await run(
+    multitoolBinary(),
+    ['serve', '--root', broker.root, '--no-listen', '--no-mcp'],
+    { timeoutMs: 30_000 },
+  );
   assert.notEqual(result.code, 0, 'the lease is held by the running broker');
   assert.match(result.stderr, /already listening|already running|lease|lock/i);
 });

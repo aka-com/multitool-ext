@@ -136,6 +136,63 @@ fn connection() -> Value {
 }
 
 #[test]
+fn bare_cli_prints_short_help_successfully_and_long_help_keeps_operator_commands() {
+    let bare = Command::new(env!("CARGO_BIN_EXE_aka")).output().unwrap();
+    assert_success(&bare);
+    assert!(bare.stderr.is_empty());
+    let bare_help = String::from_utf8(bare.stdout).unwrap();
+    assert!(bare_help.contains("USE A CONNECTION"));
+    assert!(bare_help.contains("GET STARTED"));
+    assert!(
+        bare_help.find("USE A CONNECTION") < bare_help.find("GET STARTED"),
+        "connection commands should come first: {bare_help}"
+    );
+    assert!(bare_help.contains("run <conn> -- <cmd>"));
+    assert!(bare_help.contains("env <conn>"));
+    assert!(bare_help.contains("aka run <conn> -- psql"));
+    assert!(
+        bare_help.contains("Put your command after `--` to run it with short-lived credentials:")
+    );
+    assert!(bare_help.contains("  skill"), "{bare_help}");
+    assert!(bare_help.contains("    api <name>"), "{bare_help}");
+    assert!(bare_help.contains("      aws <name>"), "{bare_help}");
+    assert!(bare_help.contains("OPERATOR"));
+    assert!(bare_help.contains("RUNTIME"));
+    assert!(!bare_help.contains("ADVANCED"));
+    assert!(bare_help.contains("completions <shell>"));
+    assert!(!bare_help.contains("Run `aka <command> --help`"));
+    // Bare `aka` frames the help with a best-effort live status line.
+    assert!(bare_help.contains("broker"), "{bare_help}");
+    assert!(!bare_help.contains("run a headless broker — or open the Multitool app"));
+
+    let short = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .arg("-h")
+        .output()
+        .unwrap();
+    assert_success(&short);
+    let short_help = String::from_utf8(short.stdout).unwrap();
+    assert!(
+        bare_help.contains(short_help.trim_end()),
+        "bare aka embeds the short help verbatim"
+    );
+    assert!(!short_help.contains("NEXT"), "-h stays a pure help page");
+
+    let long = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_success(&long);
+    let long_help = String::from_utf8(long.stdout).unwrap();
+    assert!(long_help.contains("OPERATOR"));
+    assert!(long_help.contains("RUNTIME"));
+    assert!(!long_help.contains("ADVANCED"));
+    assert!(long_help.contains("COMMON WORKFLOWS"));
+    assert!(long_help.contains("aka setup <client>"));
+    assert!(!long_help.contains("Run `aka <command> --help`"));
+    assert!(!long_help.contains("\nOTHER\n"));
+}
+
+#[test]
 fn status_is_machine_readable_and_classifies_a_missing_broker() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("data")).unwrap();
@@ -207,21 +264,104 @@ fn remote_status_surfaces_structured_recent_ssh_refusals() {
 }
 
 #[test]
-fn json_mutations_are_rejected_instead_of_silently_ignoring_the_flag() {
+fn json_mutations_return_a_structured_success_envelope() {
     let root = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
-        .args([
-            "--json",
-            "secret",
-            "rm",
-            "unused",
-            "--root",
-            root.path().to_str().unwrap(),
-        ])
+    let (url, _, handle) = stub(vec![
+        whoami(),
+        Reply {
+            method: "POST",
+            path: "/v1/manage/secrets",
+            body: Value::Null,
+        },
+    ]);
+    let output = run(
+        &["--json", "secret", "add", "TOKEN"],
+        root.path(),
+        Some(&url),
+        Some("value\n"),
+    );
+    assert_success(&output);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        json!({
+            "ok": true,
+            "action": "secret.add",
+            "result": { "name": "TOKEN" }
+        })
+    );
+    handle.join().unwrap();
+}
+
+#[test]
+fn json_wraps_bounded_documents_and_is_rejected_for_streaming_commands() {
+    let instructions = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["--json", "setup", "instructions"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--json is not supported"));
+    assert_success(&instructions);
+    let body: Value = serde_json::from_slice(&instructions.stdout).unwrap();
+    assert!(body["content"]
+        .as_str()
+        .is_some_and(|content| content.contains("Multitool: broker instructions")));
+
+    let mcp = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["--json", "mcp"])
+        .output()
+        .unwrap();
+    assert_eq!(mcp.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&mcp.stderr).contains("--json is not supported"));
+
+    let help = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["mcp", "--help"])
+        .output()
+        .unwrap();
+    assert_success(&help);
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("--json"));
+}
+
+#[test]
+fn setup_generates_paste_ready_mcp_client_configuration() {
+    let codex = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["setup", "codex"])
+        .output()
+        .unwrap();
+    assert_success(&codex);
+    assert_eq!(
+        String::from_utf8(codex.stdout).unwrap(),
+        "[mcp_servers.multitool]\ncommand = \"aka\"\nargs = [\"mcp\", \"--client\", \"codex\"]\n"
+    );
+
+    let claude = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["--json", "setup", "claude-code"])
+        .output()
+        .unwrap();
+    assert_success(&claude);
+    let body: Value = serde_json::from_slice(&claude.stdout).unwrap();
+    assert_eq!(body["client"], "claude-code");
+    assert_eq!(body["target"], "Claude Code CLI");
+    assert_eq!(body["command"], "aka");
+    assert_eq!(body["args"], json!(["mcp", "--client", "claude-code"]));
+    assert_eq!(
+        body["content"],
+        "claude mcp add multitool -- aka mcp --client claude-code\n"
+    );
+
+    let help = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["setup", "--help"])
+        .output()
+        .unwrap();
+    assert_success(&help);
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(help.contains("skill"));
+    assert!(help.contains("instructions"));
+    assert!(help.contains("claude-code"));
+
+    let bare_setup = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .arg("setup")
+        .output()
+        .unwrap();
+    assert_eq!(bare_setup.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bare_setup.stderr).contains("claude-code"));
 }
 
 #[test]
@@ -284,14 +424,14 @@ fn hosted_instructions_and_skills_fetch_authoritative_agent_setup() {
     };
 
     let (url, instruction_requests, instruction_handle) = stub(replies());
-    let output = run(&["instructions"], root.path(), Some(&url), None);
+    let output = run(&["setup", "instructions"], root.path(), Some(&url), None);
     assert_success(&output);
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), setup);
     instruction_handle.join().unwrap();
     assert_eq!(instruction_requests.lock().unwrap().len(), 2);
 
     let (url, skill_requests, skill_handle) = stub(replies());
-    let output = run(&["skill"], root.path(), Some(&url), None);
+    let output = run(&["setup", "skill"], root.path(), Some(&url), None);
     assert_success(&output);
     let skill = String::from_utf8_lossy(&output.stdout);
     assert!(skill.starts_with("---\nname: multitool"), "{skill}");
@@ -315,7 +455,7 @@ fn broker_url_environment_rotates_the_current_management_token_online() {
     }]);
     let output = Command::new(env!("CARGO_BIN_EXE_aka"))
         .args([
-            "manage",
+            "admin",
             "token",
             "--ttl-days",
             "30",
@@ -359,7 +499,7 @@ fn broker_url_environment_applies_to_agent_key_reads() {
         },
     ]);
     let output = Command::new(env!("CARGO_BIN_EXE_aka"))
-        .args(["--json", "key", "--root", root.path().to_str().unwrap()])
+        .args(["--json", "admin", "agent-key", "--root", root.path().to_str().unwrap()])
         .env("AKA_MANAGE_TOKEN", "akamgr_test")
         .env("AKA_BROKER_URL", &url)
         .output()
@@ -389,7 +529,7 @@ fn visibility_commands_project_sessions_requests_settings_and_connection_detail(
             "7",
         ),
         (
-            vec!["--json", "requests"],
+            vec!["--json", "approvals"],
             Reply {
                 method: "GET",
                 path: "/v1/manage/requests",
@@ -403,7 +543,7 @@ fn visibility_commands_project_sessions_requests_settings_and_connection_detail(
             "pending",
         ),
         (
-            vec!["--json", "settings", "get"],
+            vec!["--json", "admin", "settings", "get"],
             Reply {
                 method: "GET",
                 path: "/v1/manage/settings",
@@ -482,7 +622,7 @@ fn requests_can_approve_a_pending_confirmation_with_a_surface_lease() {
         },
     ]);
     let output = run(
-        &["--json", "requests", "--approve", request_id],
+        &["--json", "approve", request_id],
         root.path(),
         Some(&url),
         None,
@@ -542,6 +682,7 @@ fn session_close_and_setting_updates_use_the_existing_management_contracts() {
     let output = run(
         &[
             "--json",
+            "admin",
             "settings",
             "set",
             "--menu-bar-hides-dock",
@@ -582,7 +723,14 @@ fn conn_update_sends_a_sparse_patch_instead_of_reconstructing_configuration() {
         },
     ]);
     let output = run(
-        &["conn", "update", "github", "--host", "api2.github.com"],
+        &[
+            "conn",
+            "update",
+            "api",
+            "github",
+            "--host",
+            "api2.github.com",
+        ],
         root.path(),
         Some(&url),
         None,
@@ -653,6 +801,7 @@ fn remote_commands_fail_with_auth_exit_code_before_network_without_a_token() {
     let output = Command::new(env!("CARGO_BIN_EXE_aka"))
         .env_remove("AKA_MANAGE_TOKEN")
         .args([
+            "admin",
             "settings",
             "get",
             "--broker",
@@ -664,4 +813,278 @@ fn remote_commands_fail_with_auth_exit_code_before_network_without_a_token() {
         .unwrap();
     assert_eq!(output.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&output.stderr).contains("no management token"));
+}
+
+/// `aka login` speaks the join protocol: the invite rides in the URL
+/// fragment, the client label becomes the agent name, and a refusal is an
+/// authentication failure that stores nothing.
+#[test]
+fn login_redeems_an_invite_over_the_join_endpoint() {
+    let home = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = requests.clone();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&stream);
+        captured.lock().unwrap().push(request);
+        let body = json!({
+            "reason": "pairing_failed",
+            "detail": "that invite is unknown, has expired, or has already been redeemed",
+        })
+        .to_string();
+        write!(
+            stream,
+            "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["login", &format!("{url}/join#akajoin_abc123")])
+        .args(["--client", "ci-runner"])
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env_remove("AKA_BROKER")
+        .output()
+        .unwrap();
+    handle.join().unwrap();
+
+    // A refused invite is an authentication failure, not a generic error.
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refused the invite"), "{stderr}");
+    assert!(stderr.contains("already been redeemed"), "{stderr}");
+
+    let request = requests.lock().unwrap()[0].clone();
+    assert!(
+        request.starts_with("POST /v1/join HTTP/1.1"),
+        "the fragment must not reach the server as a path: {request}"
+    );
+    let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["invite"], "akajoin_abc123", "the fragment carries it");
+    assert_eq!(body["agent_name"], "ci-runner");
+
+    // Nothing is recorded until a join succeeds.
+    assert!(!home.path().join(".config/aka/contexts.json").exists());
+}
+
+/// The hot path works against a remote broker: the context supplies the
+/// address, the stored agent key authenticates, and `env` renders the same
+/// PG* exports it renders locally.
+#[test]
+fn run_and_env_reach_a_remote_broker_with_the_agent_key() {
+    let home = tempfile::tempdir().unwrap();
+    let (url, requests, handle) = stub(vec![
+        Reply {
+            method: "GET",
+            path: "/v1/connections",
+            body: json!([{
+                "name": "analytics", "type": "pg", "target": "db.internal:5432/app",
+                "endpoint": "/v1/pg/open", "wired": true, "confirm": false
+            }]),
+        },
+        Reply {
+            method: "POST",
+            path: "/v1/pg/open",
+            body: json!({
+                "dsn": "postgres://ticket@127.0.0.1:5599/app?sslmode=disable",
+                "ticket": "tkt_remote",
+                "expires_in_seconds": 60
+            }),
+        },
+    ]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["env", "analytics", "--client", "ci-runner"])
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env("AKA_BROKER", &url)
+        .env("AKA_AGENT_KEY", "aka_remote_key")
+        .env_remove("AKA_BROKER_URL")
+        .env_remove("AKA_MANAGE_TOKEN")
+        .output()
+        .unwrap();
+    handle.join().unwrap();
+    assert_success(&output);
+
+    let exports = String::from_utf8(output.stdout).unwrap();
+    assert!(exports.contains("export PGHOST='127.0.0.1'"), "{exports}");
+    assert!(exports.contains("export PGDATABASE='app'"), "{exports}");
+    assert!(
+        exports.contains("export PGPASSWORD='tkt_remote'"),
+        "the ticket rides in PGPASSWORD, not argv: {exports}"
+    );
+
+    // Both legs carried the stored agent key and the client label.
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests.iter() {
+        assert!(
+            request.contains("authorization: Bearer aka_remote_key")
+                || request.contains("Authorization: Bearer aka_remote_key"),
+            "{request}"
+        );
+        assert!(
+            request.to_lowercase().contains("x-multitool-client: ci-runner"),
+            "{request}"
+        );
+    }
+    assert!(requests[1].contains(r#""connection":"analytics""#));
+}
+
+/// A remote broker refuses same-machine capabilities with
+/// `not_served_remotely`; the CLI turns that into the kind's actual remote
+/// story rather than passing the raw reason through.
+#[test]
+fn a_remote_broker_explains_which_capabilities_are_same_machine() {
+    let home = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        // The catalog, then the refusal the broker gives for an SSH open.
+        for (code, body) in [
+            (
+                200,
+                json!([{ "name": "prod", "type": "ssh", "target": "prod.internal",
+                         "endpoint": "/v1/ssh/open", "wired": true, "confirm": false }]),
+            ),
+            (
+                404,
+                json!({ "reason": "not_served_remotely",
+                        "detail": "ssh opens are not served remotely" }),
+            ),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&stream);
+            let body = body.to_string();
+            let phrase = if code == 200 { "OK" } else { "Not Found" };
+            write!(
+                stream,
+                "HTTP/1.1 {code} {phrase}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        }
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["run", "prod", "--", "ssh", "prod"])
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env("AKA_BROKER", &url)
+        .env("AKA_AGENT_KEY", "aka_remote_key")
+        .env_remove("AKA_BROKER_URL")
+        .output()
+        .unwrap();
+    handle.join().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not serve this capability over the network"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("SSH sessions are never served over the network"),
+        "the refusal must name this kind's remote story: {stderr}"
+    );
+}
+
+/// The first thing a teammate does after `aka login` is look at the
+/// catalog, and at that point they hold only the agent key. `ls` must not
+/// demand a management token for that.
+#[test]
+fn ls_falls_back_to_the_agent_catalog_without_a_management_token() {
+    let home = tempfile::tempdir().unwrap();
+    let (url, requests, handle) = stub(vec![Reply {
+        method: "GET",
+        path: "/v1/connections",
+        body: json!([
+            { "name": "analytics", "type": "pg", "target": "db.internal:5432/app",
+              "endpoint": "/v1/pg/open", "wired": true, "confirm": false },
+            { "name": "billing", "type": "pg", "target": "db.internal:5432/bill",
+              "endpoint": "/v1/pg/open", "wired": false, "confirm": true },
+        ]),
+    }]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .arg("ls")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env("AKA_BROKER", &url)
+        .env("AKA_AGENT_KEY", "aka_remote_key")
+        .env_remove("AKA_BROKER_URL")
+        .env_remove("AKA_MANAGE_TOKEN")
+        .output()
+        .unwrap();
+    handle.join().unwrap();
+    assert_success(&output);
+
+    let table = String::from_utf8(output.stdout).unwrap();
+    assert!(table.contains("analytics"), "{table}");
+    assert!(table.contains("enabled"), "{table}");
+    assert!(table.contains("disabled"), "billing is off: {table}");
+    assert!(table.contains("confirm: on"), "{table}");
+    // The narrower view says so rather than pretending to be the full one.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("agent view"), "{stderr}");
+
+    assert!(requests.lock().unwrap()[0].contains("Bearer aka_remote_key"));
+}
+
+/// `setup <client> --write` applies what the printed form describes, reports
+/// each step separately, and stays one JSON envelope.
+#[test]
+fn setup_write_applies_the_skill_and_pin_and_emits_one_envelope() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let aka = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_aka"))
+            .args(args)
+            .current_dir(repo.path())
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join(".config"))
+            .env_remove("AKA_BROKER")
+            .env_remove("AKA_BROKER_URL")
+            .output()
+            .unwrap()
+    };
+
+    // With no context, the pin step is skipped and says so rather than
+    // claiming agents are pointed anywhere.
+    let output = aka(&["setup", "codex", "--write"]);
+    assert_success(&output);
+    assert!(repo.path().join(".claude/skills/multitool/SKILL.md").exists());
+    assert!(!repo.path().join(".aka").exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no broker context pinned"), "{stderr}");
+
+    // With one, the repo is pinned to it.
+    assert_success(&aka(&["use", "corp", "--broker", "https://broker.example.dev"]));
+    let output = aka(&["setup", "codex", "--write"]);
+    assert_success(&output);
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join(".aka")).unwrap().trim(),
+        "corp"
+    );
+
+    // One mutation, one envelope — a nested skill write must not emit its own.
+    let output = aka(&["--json", "setup", "codex", "--write"]);
+    assert_success(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let objects: Vec<Value> = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(objects.len(), 1, "{stdout}");
+    assert_eq!(objects[0]["action"], "setup.write");
+    let steps = objects[0]["result"]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 3);
+    assert!(steps.iter().any(|s| s["step"] == "skill" && s["applied"] == true));
 }

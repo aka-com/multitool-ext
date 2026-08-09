@@ -447,10 +447,10 @@ fn legacy(state: &AppState, parts: &Parts, token: String) -> Result<ManagePrinci
             }
             let detail = if error == crate::identity::TokenError::Expired {
                 "the management token has expired; issue a fresh one on the \
-                 broker host with `aka manage token`"
+                 broker host with `aka admin token`"
             } else {
                 "manage routes require this broker's management token \
-                 (issue one on the broker host with `aka manage token`)"
+                 (issue one on the broker host with `aka admin token`)"
             };
             Err(refuse(
                 StatusCode::UNAUTHORIZED,

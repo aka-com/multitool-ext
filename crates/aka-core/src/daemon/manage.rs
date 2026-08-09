@@ -4,7 +4,7 @@
 //! drive a [`LocalBackend`] so a remote shell exercises exactly the code
 //! path an in-process shell does. Authorization is the management token
 //! (`akamgr_…`) — a credential distinct from the agent key, closed until
-//! `aka manage token` issues one. Agent keys never authenticate here and
+//! `aka admin token` issues one. Agent keys never authenticate here and
 //! the manage token never authenticates the agent plane.
 //!
 //! Failures cross the wire as the `aka-api` [`ManageError`] serialization,

@@ -229,6 +229,9 @@ pub enum AuditKind {
     ApprovalTimeout,
     /// Retained for older logs; nothing emits this.
     Abandoned,
+    /// Retained for older logs; nothing emits this. Reading the connection
+    /// catalog is not audited: it grants nothing, agents poll it, and an
+    /// entry per read buried the calls that reach an upstream.
     Listed,
     // Wirings (and their standing-rule ancestors, retained for older logs)
     Wired,

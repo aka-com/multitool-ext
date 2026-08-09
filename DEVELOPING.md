@@ -58,10 +58,10 @@ pnpm run sandbox:test   # drive real brokers against them
 ```
 
 Each test file in `dev/sandbox/tests/` starts its own headless
-`aka serve --root <tmp>` (never the desktop production store; bare
-`serve` defaults to `~/.akaserver`) and exercises real connections,
-including control socket, manage plane, Postgres proxy, SSH agent
-socket, MCP host, against the sandbox's HTTP, MCP, Postgres, and SSH
+`aka serve --root <tmp> --no-listen` (never the desktop production store;
+bare `serve` defaults to `~/.akaserver` and TCP port 4780) and exercises real
+connections, including control socket, manage plane, Postgres proxy, SSH
+agent socket, MCP host, against the sandbox's HTTP, MCP, Postgres, and SSH
 services. See dev/sandbox/README.md.
 
 ### Frontend-only mode
