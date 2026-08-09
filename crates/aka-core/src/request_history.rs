@@ -326,6 +326,8 @@ mod tests {
             unit: ApprovalUnit::Request,
             target: "https://api.github.com".into(),
             agent: "codex".into(),
+            identity: crate::attest::AgentIdentity::Unattested,
+            run_scoped: false,
             summary: "GET /user".into(),
             detail: None,
             credential_names: vec!["GITHUB_KEY".into()],

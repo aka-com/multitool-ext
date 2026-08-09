@@ -14,6 +14,8 @@ export function activityIdentity(entry: ActivityEntry): string {
     entry.text,
     entry.detail ?? null,
     entry.agent ?? null,
+    entry.identity ?? null,
+    entry.session ?? null,
     entry.connection ?? null,
     entry.duration_ms ?? null,
     entry.approver ?? null,

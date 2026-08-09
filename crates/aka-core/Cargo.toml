@@ -53,6 +53,10 @@ signature = { workspace = true }
 
 webauthn-rs = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# Peer credentials and the process-table reads behind `attest`.
+libc = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Security.framework directly, rather than the `keyring` crate: only the raw
 # SecItem API exposes `kSecUseDataProtectionKeychain`, which is what keeps

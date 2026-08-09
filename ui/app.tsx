@@ -9,7 +9,7 @@
 import { invoke, isNativeHost, listen, mode } from '/src/bridge';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
-  StrictMode, useEffect, useLayoutEffect, useRef, useState,
+  Fragment, StrictMode, useEffect, useLayoutEffect, useRef, useState,
 } from 'react';
 import type {
   DragEvent as ReactDragEvent,
@@ -93,12 +93,14 @@ import { virtualListWindow } from '/src/virtual-list';
 import { placeAnchoredMenu } from '/src/menu-position';
 import { decodeQrImage } from '/src/qr-image';
 import {
+  agentNaming,
   approvalActionLabel,
-  approvalAgentName,
   approvalPermissionSummary,
   approvalToolName,
   approvalWantsLine,
+  approvalWindowLabel,
 } from '/src/approval-presentation';
+import type { AgentNaming } from '/src/approval-presentation';
 import type {
   ActivityEntry,
   ActivityPage,
@@ -1009,30 +1011,25 @@ function positionOpenMenus(): void {
   if (state.activityAgentMenuOpen) positionActivityAgentMenu();
 }
 
-/**
- * What one prompt is asking about, in the words of the connection's own
- * plane. Postgres cannot be confirmed per statement — the proxy splices
- * bytes once connected — so it asks per session, and saying so is what
- * makes "Approve" mean something specific.
- */
-/**
- * Attribution for a prompt or history row. The broker's direct-endpoint
- * planes report the literal agent label `endpoint` — an audit-stable wire
- * value, not prose — so spell that one out instead of rendering
- * "endpoint wants to send a request". Every other label is the agent's
- * self-reported name, shown as sent.
- */
-function agentLabel(agent: string): string {
-  return agent === 'endpoint'
-    ? 'A direct endpoint client'
-    : `Agent reported as “${agent}”`;
+/** The first few characters of a broker-minted run handle: enough to tell two
+ * runs apart in a list, short enough to sit in a chip. Mirrors
+ * `approvals::short_run`. */
+function shortRun(scope: string): string {
+  return [...scope].filter((c) => c !== '-').slice(0, 4).join('');
 }
 
-/** The compact request cards use the bare self-reported agent name in
- * their context line; the review sheets keep the fuller "Agent reported
- * as …" framing. */
-function shortAgent(agent: string): string {
-  return agent === 'endpoint' ? 'endpoint client' : agent;
+/** A verified program's name, followed by a check the way a verified account
+ * carries one. The check is a sibling element, never part of the name string.
+ * The OS-attested text is still bidi-isolated because verification says who
+ * signed it, not that its display name has layout-safe characters. */
+function VerifiedName({ naming }: { naming: AgentNaming }) {
+  if (!naming.verified) return <>{naming.lead}</>;
+  return (
+    <>
+      <span className="untrusted-identity" dir="auto">{naming.program ?? naming.lead}</span>
+      <span className="vcheck" aria-label="verified by macOS" role="img"><Icon markup={ICONS.check} /></span>
+    </>
+  );
 }
 
 /** A broker that predates the `required` flag omits it entirely, and the UI
@@ -1047,13 +1044,13 @@ function LiveSessions({ extraClass = '' }: { extraClass?: string }): ReactNode {
       <div className="live-list">
         {state.sessions.map((session) => {
           const type = TYPES[session.type];
-          const who = session.agent
-            ? `${session.agent} → ${session.connection}`
-            : session.connection;
           return (
             <div key={session.id} className="live-row">
               <span className={`badge ${type.cls}`}>{type.label}</span>
-              <div className="live-txt"><div className="c-name">{who}</div>
+              <div className="live-txt"><div className="c-name">
+                {session.agent ? <>{agentNaming(null, session.agent).lead}{' → '}</> : null}
+                <span className="untrusted-identity" dir="auto">{session.connection}</span>
+              </div>
                 <div className="s-sub" title={session.detail}>{session.detail}</div>
               </div>
               <button className="btn sm" data-act="close-session-ask"
@@ -1096,7 +1093,7 @@ function RequestsBanner(): ReactNode {
   const ask = !single ? null
     : single.kind === 'approval'
       ? approvalWantsLine(single.approval)
-      : `${shortAgent(single.elicitation.agent)} asks: ${single.elicitation.prompt}`;
+      : `${agentNaming(null, single.elicitation.agent).lead} asks: ${single.elicitation.prompt}`;
   const detail = ask
     ? remaining ? `${ask} · ${deadlineOutcome} in ${remaining.label}` : ask
     : remaining
@@ -1111,9 +1108,10 @@ function RequestsBanner(): ReactNode {
         <Icon markup={state.approvals.length ? ICONS.shieldAlert : ICONS.bell} />
       </span>
       <span className="request-banner-copy"><b>{label}</b>
+        {/* The line can still contain an upstream's question verbatim, so it
+            keeps its bidi isolation — but no longer a name the caller chose. */}
         <span className={ask ? 'untrusted-identity' : undefined}
-          dir={ask ? 'auto' : undefined}
-          title={ask ? 'Agent names are self-reported' : undefined}>{detail}</span></span>
+          dir={ask ? 'auto' : undefined}>{detail}</span></span>
       <span className="request-banner-cta">Review</span>
     </button>
   );
@@ -1194,9 +1192,9 @@ function WaitingRequests(): ReactNode {
                 <span className="request-card-body">
                   <span className="sr-only">Approval: </span>
                   <b className="request-ask untrusted-identity" dir="auto">{approval.summary}</b>
-                  <span className="request-context untrusted-identity" dir="auto"
-                    title="Agent names are self-reported">
-                    {shortAgent(approval.agent)} → {approval.connection} · {approval.target}
+                  <span className="request-context untrusted-identity" dir="auto">
+                    <VerifiedName naming={agentNaming(approval.identity, approval.agent)} />
+                    {' → '}{approval.connection} · {approval.target}
                     {approval.waiting > 1 ? ` · ${approval.waiting} calls waiting` : null}
                   </span>
                 </span>
@@ -1221,9 +1219,9 @@ function WaitingRequests(): ReactNode {
               <span className="request-card-body">
                 <span className="sr-only">Question: </span>
                 <b className="request-ask untrusted-identity" dir="auto">{request.prompt}</b>
-                <span className="request-context untrusted-identity" dir="auto"
-                  title="Agent names are self-reported">
-                  {shortAgent(request.agent)} → {request.connection} · paused on {request.tool}
+                <span className="request-context untrusted-identity" dir="auto">
+                  {agentNaming(null, request.agent).lead}
+                  {' → '}{request.connection} · paused on {request.tool}
                 </span>
               </span>
               <span className="request-card-side">
@@ -3093,21 +3091,23 @@ function ConnectionSecretsSection({ connection: c }: {
               hover overlay on the mask: with the value on its own line
               there is nothing for an overlay to sit on. Copy is the native
               pasteboard path, so the web build offers reveal alone. */}
-          {isNativeHost()
-            ? <button className={`icon-btn cd-secret-act ${copying ? 'is-copying' : ''}`}
-                data-act="copy-secret" data-id={secret.id}
-                title={copying ? 'Copying…' : copied ? 'Copied' : 'Copy value'}
-                aria-label={`Copy the value of ${secret.name}`}>
-                <Icon markup={copied ? ICONS.check : ICONS.copy} />
-              </button>
-            : null}
-          <button className="icon-btn cd-secret-act"
-            data-act={revealed === undefined ? 'reveal-secret' : 'unreveal-secret'}
-            data-id={secret.id}
-            title={revealed === undefined ? 'Reveal value' : 'Hide value'}
-            aria-label={`${revealed === undefined ? 'Reveal' : 'Hide'} the value of ${secret.name}`}>
-            <Icon markup={revealed === undefined ? ICONS.eye : ICONS.eyeOff} />
-          </button>
+          <span className="cd-secret-actions">
+            {isNativeHost()
+              ? <button className={`icon-btn cd-secret-act ${copying ? 'is-copying' : ''}`}
+                  data-act="copy-secret" data-id={secret.id}
+                  title={copying ? 'Copying…' : copied ? 'Copied' : 'Copy value'}
+                  aria-label={`Copy the value of ${secret.name}`}>
+                  <Icon markup={copied ? ICONS.check : ICONS.copy} />
+                </button>
+              : null}
+            <button className="icon-btn cd-secret-act"
+              data-act={revealed === undefined ? 'reveal-secret' : 'unreveal-secret'}
+              data-id={secret.id}
+              title={revealed === undefined ? 'Reveal value' : 'Hide value'}
+              aria-label={`${revealed === undefined ? 'Reveal' : 'Hide'} the value of ${secret.name}`}>
+              <Icon markup={revealed === undefined ? ICONS.eye : ICONS.eyeOff} />
+            </button>
+          </span>
         </div>;
       })}
     </div>
@@ -4137,7 +4137,8 @@ function ActivityRow({ entry }: { entry: ActivityEntry }): ReactNode {
   // for a separately scannable tool column; the menu-bar row already names
   // the tool in its message and needs that width for the message itself.
   const remotePeer = entry.surface === 'remote' ? (entry.approver || 'local socket') : null;
-  const hasChips = Boolean(entry.agent) || typeof entry.duration_ms === 'number'
+  const hasChips = Boolean(entry.agent || entry.identity || entry.session)
+    || typeof entry.duration_ms === 'number'
     || entry.confirmation === 'management_token' || Boolean(remotePeer);
   return (
     <div className="act-row">
@@ -4153,9 +4154,27 @@ function ActivityRow({ entry }: { entry: ActivityEntry }): ReactNode {
         {entry.detail ? <div className="act-detail">{entry.detail}</div> : null}
         {hasChips && (
           <div className="act-chips">
-            {entry.agent
-              ? <span className="act-chip untrusted-identity" dir="auto"
-                  title="Self-reported agent label">reported as “{entry.agent}”</span>
+            {/* A verified program names itself; everything else falls back to
+                the broker-minted run handle, which the caller cannot choose.
+                Two rows sharing a handle are one run even when neither can be
+                named — which is what keeps the log followable without ever
+                repeating a claim the caller made about itself. */}
+            {entry.identity?.kind === 'verified'
+              ? <span className="act-chip act-chip-verified">
+                  <span className="untrusted-identity" dir="auto">{entry.identity.program}</span>
+                  <span className="vcheck" aria-label="verified" role="img"><Icon markup={ICONS.check} /></span>
+                </span>
+              : entry.identity?.kind === 'verified_signer'
+                ? <span className="act-chip act-chip-verified">
+                    <span className="untrusted-identity" dir="auto">{entry.identity.signer}</span>
+                    <span className="vcheck" aria-label="verified" role="img"><Icon markup={ICONS.check} /></span>
+                  </span>
+              : entry.agent
+                ? <span className="act-chip">unverified agent</span>
+                : null}
+            {entry.session
+              ? <span className="act-chip act-chip-session"
+                  title="Broker-assigned run handle">session {shortRun(entry.session)}</span>
               : null}
             {typeof entry.duration_ms === 'number'
               ? <span className="act-chip act-chip-time" title="Duration">{entry.duration_ms} ms</span> : null}
@@ -4199,7 +4218,7 @@ function activityKey(entry: ActivityEntry, seen: Map<string, number>): string {
 function activityRowEstimate(entry: ActivityEntry): number {
   let height = 34;
   if (entry.detail) height += 19;
-  if (entry.agent || typeof entry.duration_ms === 'number'
+  if (entry.agent || entry.identity || entry.session || typeof entry.duration_ms === 'number'
     || entry.confirmation === 'management_token'
     || entry.surface === 'remote') height += 21;
   return height;
@@ -4350,17 +4369,53 @@ function ActivityList({ entries }: { entries: ActivityEntry[] }): ReactNode {
   );
 }
 
-/* Agent filter chips overflow into a select past this many agents. */
-const AGENT_CHIP_LIMIT = 5;
+interface ActivityAttributionOption {
+  key: string;
+  label: string;
+  group: 'verified' | 'session' | 'legacy';
+  count: number;
+}
 
-/** How often each agent appears in the loaded window; drives which chips
- * stay visible when the row overflows. */
-function countAgents(agents: Array<string | null | undefined>): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const agent of agents) {
-    if (agent) counts.set(agent, (counts.get(agent) ?? 0) + 1);
+/** A filter identity the broker, rather than the caller, controls. */
+function activityAttribution(entry: ActivityEntry): Omit<ActivityAttributionOption, 'count'> | null {
+  switch (entry.identity?.kind) {
+    case 'verified':
+      return {
+        key: `program:${entry.identity.team_id}:${entry.identity.identifier}`,
+        label: entry.identity.program,
+        group: 'verified',
+      };
+    case 'verified_signer':
+      return {
+        key: `signer:${entry.identity.team_id}`,
+        label: `${entry.identity.signer} (unnamed)`,
+        group: 'verified',
+      };
+    default:
+      if (entry.session) {
+        return {
+          key: `session:${entry.session}`,
+          label: `session ${shortRun(entry.session)}`,
+          group: 'session',
+        };
+      }
+      return entry.agent
+        ? { key: 'legacy:unverified', label: 'Unverified activity', group: 'legacy' }
+        : null;
   }
-  return counts;
+}
+
+function activityAttributionOptions(entries: ActivityEntry[]): ActivityAttributionOption[] {
+  const options = new Map<string, ActivityAttributionOption>();
+  for (const entry of entries) {
+    const attribution = activityAttribution(entry);
+    if (!attribution) continue;
+    const current = options.get(attribution.key);
+    if (current) current.count += 1;
+    else options.set(attribution.key, { ...attribution, count: 1 });
+  }
+  return [...options.values()].sort((a, b) =>
+    a.group.localeCompare(b.group) || b.count - a.count || a.label.localeCompare(b.label));
 }
 
 /** The activity entries the current filters keep. */
@@ -4370,11 +4425,11 @@ function filteredActivity(): ActivityEntry[] {
     if (state.activityAlertsOnly && entry.tone !== 'danger' && entry.tone !== 'warning') {
       return false;
     }
-    if (state.activityAgent && entry.agent !== state.activityAgent) return false;
+    if (state.activityAgent && activityAttribution(entry)?.key !== state.activityAgent) return false;
     if (!needle) return true;
     return entry.text.toLowerCase().includes(needle)
       || (entry.detail || '').toLowerCase().includes(needle)
-      || (entry.agent || '').toLowerCase().includes(needle)
+      || (activityAttribution(entry)?.label || '').toLowerCase().includes(needle)
       || (entry.connection || '').toLowerCase().includes(needle);
   });
 }
@@ -4411,21 +4466,26 @@ async function loadOlderActivity(): Promise<void> {
   }
 }
 
-/** The agent filter: one agent at a time, or "All agents" — a pill-shaped
- * menu rather than a chip per agent, which grew past the filter row as soon
- * as a few agents had connected. The names are self-reported, so they stay
- * in the untrusted-identity treatment wherever they appear. */
-function ActivityAgentFilter({ agents }: { agents: string[] }): ReactNode {
+/** The activity filter groups entries only by attested programs or
+ * broker-minted run handles. Self-reported labels remain in the audit record
+ * but never become user-facing attribution. */
+function ActivityAgentFilter({ options }: { options: ActivityAttributionOption[] }): ReactNode {
   const open = state.activityAgentMenuOpen;
   const selected = state.activityAgent;
+  const selectedOption = options.find((option) => option.key === selected);
+  const groups = [
+    ['verified', 'Verified programs'],
+    ['session', 'Unverified sessions'],
+    ['legacy', 'Older unverified activity'],
+  ] as const;
   return (
     <div className={`act-filter-select ${open ? 'open' : ''}`}>
       <button className={`seg-btn act-filter act-filter-trigger ${selected ? 'on' : ''}`}
         data-act="act-filter-agent-menu" aria-haspopup="listbox" aria-expanded={open}
-        title="Only show activity from one agent (self-reported label)">
+        title="Only show activity from one verified program or session">
         <span className="act-filter-key">Agent:</span>
-        {selected
-          ? <span className="untrusted-identity" dir="auto">{selected}</span>
+        {selectedOption
+          ? <span>{selectedOption.label}</span>
           : <span>All</span>}
         <span className="act-filter-chev" aria-hidden="true">
           <Icon markup={ICONS.chevronDown} />
@@ -4439,13 +4499,22 @@ function ActivityAgentFilter({ agents }: { agents: string[] }): ReactNode {
                   aria-selected={!selected} data-act="act-filter-agent" data-value="">
                   All agents
                 </button>
-                {agents.map((agent) => (
-                  <button key={agent} className={`menu-item ${selected === agent ? 'on' : ''}`}
-                    role="option" aria-selected={selected === agent}
-                    data-act="act-filter-agent" data-value={agent}>
-                    <span className="untrusted-identity" dir="auto">{agent}</span>
-                  </button>
-                ))}
+                {groups.map(([group, heading]) => {
+                  const groupOptions = options.filter((option) => option.group === group);
+                  if (!groupOptions.length) return null;
+                  return <Fragment key={group}>
+                    <div className="act-filter-menu-heading">{heading}</div>
+                    {groupOptions.map((option) => (
+                      <button key={option.key}
+                        className={`menu-item ${selected === option.key ? 'on' : ''}`}
+                        role="option" aria-selected={selected === option.key}
+                        data-act="act-filter-agent" data-value={option.key}>
+                        <span>{option.label}</span>
+                        <span className="act-filter-option-count">{option.count}</span>
+                      </button>
+                    ))}
+                  </Fragment>;
+                })}
               </div>
             </div>,
             overlays(),
@@ -4473,8 +4542,7 @@ function ActivityView(): ReactNode {
       </>
     );
   }
-  // Agents seen in the loaded window, offered one at a time in the picker.
-  const agents = [...new Set(state.activity.map((entry) => entry.agent).filter(Boolean))] as string[];
+  const attributionOptions = activityAttributionOptions(state.activity);
   const entries = filteredActivity();
   const hasOlder = state.activityNextBefore !== null;
   return (
@@ -4489,7 +4557,7 @@ function ActivityView(): ReactNode {
         <button className={`seg-btn act-filter ${state.activityAlertsOnly ? 'on' : ''}`}
           data-act="act-filter-alerts" aria-pressed={state.activityAlertsOnly}
           title="Only show warnings and errors">Alerts</button>
-        {agents.length ? <ActivityAgentFilter agents={agents} /> : null}
+        {attributionOptions.length ? <ActivityAgentFilter options={attributionOptions} /> : null}
       </div>
       {entries.length
         ? <ActivityList entries={entries} />
@@ -5095,7 +5163,7 @@ function MainWindow(): ReactNode {
             {takeover
               ? <div className="content broker-takeover"><BrokerPane kind={takeover} /></div>
               : <>
-                  {!splitHead && (
+                  {!splitHead && state.tab !== 'start' && (
                     <div className="dw-head">
                       <div className="dw-head-title">
                         <h2>{pageTitle}</h2>
@@ -5691,14 +5759,12 @@ function CloseSessionConfirm(): ReactNode {
   const confirm = state.confirm;
   if (!confirm || confirm.kind !== 'close-session') return null;
   const session = state.sessions.find((candidate) => candidate.id === confirm.id);
-  const who = session
-    ? (session.agent
-      ? `${session.agent} → ${session.connection}`
-      : session.connection)
-    : 'this session';
   return (
     <>
-      <h3 id="close-session-title">Close {who}?</h3>
+      <h3 id="close-session-title">Close {session
+        ? <>{session.agent ? <>{agentNaming(null, session.agent).lead}{' → '}</> : null}
+            <span className="untrusted-identity" dir="auto">{session.connection}</span></>
+        : 'this session'}?</h3>
       <p>The agent’s live connection will drop immediately.
         {session?.detail ? ` ${session.detail}` : ''}</p>
       <div className="sheet-actions">
@@ -5886,7 +5952,7 @@ function ElicitationSheet(): ReactNode {
     <>
       <div className="elicit-dlg-ico"><Icon markup={ICONS.bell} /></div>
       <h3 id="elicit-title" className="elicit-dlg-title untrusted-identity" dir="auto">
-        {agentLabel(request.agent)} says {request.connection} asked for input
+        {agentNaming(null, request.agent).lead} says {request.connection} asked for input
       </h3>
       {/* Third-party text: rendered verbatim and inert. */}
       <div className="elicit-dlg-question untrusted-identity" dir="auto">{request.prompt}</div>
@@ -6006,6 +6072,7 @@ function ApprovalSheet(): ReactNode {
     );
   }
   const minutes = Math.max(1, Math.round(approval.window_secs / 60));
+  const naming = agentNaming(approval.identity, approval.agent);
   const answering = state.approvalAnswering !== null;
   const hostKeyDecision = approval.unit === 'host_key'
     && Boolean(approval.host_key_fingerprint);
@@ -6045,10 +6112,14 @@ function ApprovalSheet(): ReactNode {
   return (
     <>
       <div className="elicit-dlg-ico"><Icon markup={ICONS.triangleAlert} /></div>
+      {/* The caller's own label never appears here. It is a string it chose,
+          and this is the sentence a user reads while deciding whether to trust
+          it — so the headline names the program only when the OS did. */}
       <h3 id="approval-title" className="elicit-dlg-title">
-        Allow <span className="untrusted-identity" dir="auto">
-          “{approvalAgentName(approval.agent)}”
-        </span> to use <span className="untrusted-identity" dir="auto">
+        Allow {naming.verified
+          ? <VerifiedName naming={naming} />
+          : <span className="anon">{naming.mid}</span>} to use{' '}
+        <span className="untrusted-identity" dir="auto">
           {approvalToolName(approval.connection)}
         </span>?
       </h3>
@@ -6058,8 +6129,15 @@ function ApprovalSheet(): ReactNode {
       <dl className="approval-facts">
         <div>
           <dt>Agent</dt>
-          <dd className="untrusted-identity" dir="auto">
-            {approvalAgentName(approval.agent)}
+          <dd>
+            {naming.verified
+              ? <><VerifiedName naming={naming} />
+                  <span className="approval-fact-note">
+                    {naming.program
+                      ? ` · verified by macOS`
+                      : ' · program name unavailable'}
+                  </span></>
+              : 'Not verified'}
           </dd>
         </div>
         <div>
@@ -6125,10 +6203,13 @@ function ApprovalSheet(): ReactNode {
           : null}
         <button className="btn primary" data-act="approval-approve-window"
           data-id={approval.id} disabled={answering}>
+          {/* A window on an attested caller binds to that one run; on an
+              unattested one it covers whatever next sends the same label, and
+              the button must not imply more than it delivers. */}
           {answering
             ? 'Answering…'
             : hostKeyDecision ? 'Trust and pin'
-            : `Approve for ${minutes} minute${minutes === 1 ? '' : 's'}`}
+            : approvalWindowLabel(approval, minutes)}
         </button>
       </div>
     </>
@@ -6383,15 +6464,15 @@ function AddCredentialAction(): ReactNode {
     );
   }
   // A tool is a different kind of thing from a credential — it is the only
-  // entry that opens the catalog rather than a form — so it sits below a
-  // rule instead of being listed as a third credential type.
+  // entry that opens the catalog rather than a form — so it leads the menu
+  // and a rule separates it from the two credential types.
   const addTool = (
     <>
-      <div className="cred-opt-rule"></div>
       <button type="button" className="cred-opt" role="option"
         data-act="open-add-palette" aria-haspopup="dialog">
-        <span className="cred-opt-col"><span className="cred-name">Add tool</span></span>
+        <span className="cred-opt-col"><span className="cred-name">Add agent tool</span></span>
       </button>
+      <div className="cred-opt-rule"></div>
     </>
   );
   const open = state.formMenuOpen === 'add-credential-menu';
@@ -6407,7 +6488,8 @@ function AddCredentialAction(): ReactNode {
       {open
         ? createPortal(
             <div className="cred-menu add-credential-menu" role="listbox"
-              aria-label="Credential type">
+              aria-label="What to add">
+              {addTool}
               <button type="button" className="cred-opt" role="option"
                 data-act="open-add-secret" data-kind="password">
                 <span className="cred-opt-col"><span className="cred-name">Add password</span></span>
@@ -6416,7 +6498,6 @@ function AddCredentialAction(): ReactNode {
                 data-act="open-add-secret" data-kind="secret">
                 <span className="cred-opt-col"><span className="cred-name">Add secret</span></span>
               </button>
-              {addTool}
             </div>,
             overlays(),
           )
@@ -12071,7 +12152,7 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         break;
       }
       if (await answerElicitation(id, true, values)) {
-        toast(`📨 Sent to ${request.connection}. ${request.agent} can resume`);
+        toast(`📨 Sent to ${request.connection}. ${agentNaming(null, request.agent).lead} can resume`);
         closeSheet();
         await Promise.all([
           load('elicitations', 'list_elicitations'),
@@ -12109,14 +12190,18 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'approval-deny': {
       const approval = state.approvals.find((a) => a.id === id);
       await answerApproval(id, 'deny',
-        `🚫 Refused. Told ${approval?.agent ?? 'the agent'} the call was denied`);
+        `🚫 Refused. Told ${approval
+          ? agentNaming(approval.identity, approval.agent).mid
+          : 'the agent'} the call was denied`);
       break;
     }
 
     case 'elicit-refuse': {
       const request = state.elicitations.find((r) => r.id === id);
       if (await answerElicitation(id, false)) {
-        toast(`🚫 Refused. Told ${request?.agent ?? 'the agent'} no (no reasons shared)`);
+        toast(`🚫 Refused. Told ${request
+          ? agentNaming(null, request.agent).mid
+          : 'the agent'} no (no reasons shared)`);
         closeSheet();
         await Promise.all([
           load('elicitations', 'list_elicitations'),
@@ -12894,7 +12979,7 @@ async function boot() {
     const { agent, service } = ev.payload;
     state.tab = 'connections';
     state.toolSearch = service;
-    toast(`🤖 ${agent} asked to connect “${service}”`);
+    toast(`🤖 ${agentNaming(null, agent).lead} asked to connect “${service}”`);
     render();
   });
   // This precise event means the log was cleared, so retaining the previous

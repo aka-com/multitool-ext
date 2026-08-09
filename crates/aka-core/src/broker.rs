@@ -267,6 +267,9 @@ pub struct Broker {
     /// activity log or the shell's attention. Keyed on the self-reported
     /// client label. Never leaves memory.
     connect_request_debounce: Mutex<std::collections::HashMap<(String, String), Instant>>,
+    /// Carries an attested agent identity from the control socket to the MCP
+    /// host, which serves loopback TCP and so has no peer to inspect.
+    pub attestation_tickets: Arc<crate::attest::AttestationTickets>,
     /// Rejected credentials are security telemetry, but an automated stale
     /// client must not amplify the append-only activity log without bound.
     /// Keys include plane, transport, peer, and failure reason.
@@ -522,6 +525,7 @@ impl Broker {
             mcp_auth: crate::mcp_auth::McpAuthSessions::default(),
             manage_oauth: Mutex::new(HashMap::new()),
             connect_request_debounce: Mutex::new(std::collections::HashMap::new()),
+            attestation_tickets: Arc::new(crate::attest::AttestationTickets::default()),
             auth_failure_debounce: Mutex::new(HashMap::new()),
             public_url: Mutex::new(None),
             data_plane_bind: std::sync::OnceLock::new(),

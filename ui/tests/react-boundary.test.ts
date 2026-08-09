@@ -463,6 +463,20 @@ test('the Agent Tools section keeps its long label quiet', async () => {
   // Quieter than --muted: the scope is context for the name, not a second label.
   assert.match(context, /color: var\(--faint\)/);
   assert.match(context, /font-weight: 400/);
+  assert.match(context, /text-align: right/);
+
+  const heading = styles.match(/\.agent-tools-sec-h\{([^}]*)\}/)?.[1];
+  assert.ok(heading);
+  assert.match(heading, /justify-content: space-between/);
+});
+
+test('agent-tool secret actions use the compact trailing action spacing', async () => {
+  const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+  const actions = styles.match(/\.cd-secret-actions \{([^}]*)\}/)?.[1];
+
+  assert.ok(actions);
+  assert.match(actions, /gap: 5px/);
+  assert.match(actions, /margin-right: -4px/);
 });
 
 test('password and secret add dialogs are vertically centered', async () => {
@@ -923,8 +937,13 @@ test('approval questions are app-authored while prompt values stay bidi-isolated
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 
-  assert.match(app, /Allow <span className="untrusted-identity" dir="auto">/);
-  assert.match(app, /approvalToolName\(approval\.connection\)/);
+  // The agent's own label is no longer rendered anywhere in the sheet: the
+  // headline names the program only when the OS verified it, and otherwise
+  // says "this agent". The connection name is still user-controlled text, so
+  // it keeps its isolation.
+  assert.match(app, /Allow \{naming\.verified/);
+  assert.doesNotMatch(app, /approvalAgentName/);
+  assert.match(app, /<span className="untrusted-identity" dir="auto">\s*\{approvalToolName\(approval\.connection\)\}/);
   assert.match(app, /aria-expanded=\{open\} aria-controls="approval-raw-request"/);
   assert.match(app, /className="approval-summary untrusted-identity" dir="auto"/);
   assert.doesNotMatch(app, /Refused automatically in \{timeLeft\(approval\.expires_at\)\}/);

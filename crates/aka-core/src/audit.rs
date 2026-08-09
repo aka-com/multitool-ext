@@ -127,6 +127,18 @@ pub struct AuditEntry {
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// What the OS proved about the agent, as opposed to `agent`, which is
+    /// what the agent called itself. Absent on entries written before
+    /// attestation existed and on every caller nothing could be proven about,
+    /// which the app renders as an unnamed agent rather than as a gap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::attest::AgentIdentity>,
+    /// The run this entry belongs to — a broker-minted handle, so unlike
+    /// `agent` it cannot be chosen by the caller. This is what makes a log of
+    /// unattested callers still followable: entries sharing a session are one
+    /// run even when none of them can be named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -389,6 +401,8 @@ impl AuditEntry {
             text: text.into(),
             detail: None,
             agent: None,
+            identity: None,
+            session: None,
             connection: None,
             outcome: None,
             rule_id: None,
@@ -430,6 +444,22 @@ impl AuditEntry {
     }
     pub fn agent(mut self, a: impl Into<String>) -> Self {
         self.agent = Some(a.into());
+        self
+    }
+    /// Record what the OS proved about the caller, and which run it was.
+    ///
+    /// Kept beside [`Self::agent`] rather than replacing it: the self-reported
+    /// label is still worth having in a forensic record, it just stops being
+    /// the thing the app shows.
+    pub fn attested(
+        mut self,
+        identity: &crate::attest::AgentIdentity,
+        scope: Option<&str>,
+    ) -> Self {
+        if identity.is_attested() {
+            self.identity = Some(identity.clone());
+        }
+        self.session = scope.map(str::to_string);
         self
     }
     pub fn connection(mut self, c: impl Into<String>) -> Self {

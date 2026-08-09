@@ -30,6 +30,8 @@ test('activity identity includes attribution and event metadata', () => {
 
   for (const changed of [
     { ...base, agent: 'agent-b' },
+    { ...base, identity: { kind: 'unattested' as const } },
+    { ...base, session: 'run-b' },
     { ...base, connection: 'tool-b' },
     { ...base, tone: 'warning' },
     { ...base, duration_ms: 13 },
@@ -43,8 +45,20 @@ test('activity identity includes attribution and event metadata', () => {
 
 test('activity identity treats absent optional metadata consistently', () => {
   assert.equal(
-    activityIdentity({ ...base, agent: undefined, duration_ms: undefined }),
-    activityIdentity({ ...base, agent: null, duration_ms: null }),
+    activityIdentity({
+      ...base,
+      agent: undefined,
+      identity: undefined,
+      session: undefined,
+      duration_ms: undefined,
+    }),
+    activityIdentity({
+      ...base,
+      agent: null,
+      identity: null,
+      session: null,
+      duration_ms: null,
+    }),
   );
 });
 

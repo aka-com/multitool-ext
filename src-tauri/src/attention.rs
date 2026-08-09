@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aka_api::{ApprovalDto, ApprovalSnapshotDto, ElicitationDto};
+use aka_api::{AgentIdentityDto, ApprovalDto, ApprovalSnapshotDto, ElicitationDto};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter as _, Manager as _};
 #[cfg(not(target_os = "macos"))]
@@ -217,6 +217,7 @@ pub enum NotificationAlertStyle {
 struct RequestSummary {
     id: String,
     agent: String,
+    identity: Option<AgentIdentityDto>,
     connection: String,
     deadline: Option<Instant>,
 }
@@ -226,6 +227,7 @@ impl From<ApprovalDto> for RequestSummary {
         Self {
             id: approval.id,
             agent: approval.agent,
+            identity: approval.identity,
             connection: approval.connection,
             deadline: deadline_from_now(approval.expires_in_secs),
         }
@@ -1275,7 +1277,7 @@ fn expiration_delivery_plan(
     };
     let body = if settings.show_context && requests.len() == 1 {
         let request = &requests[0];
-        let agent = agent_display(&request.agent, "An agent");
+        let agent = agent_display(request, "An agent");
         let connection = notification_label(&request.connection, "a tool");
         format!(
             "{agent} was refused access to {connection} because no decision arrived in time. Open Multitool for details."
@@ -1328,7 +1330,7 @@ fn request_delivery_plan(
     };
     let body = if settings.show_context && requests.len() == 1 {
         let request = &requests[0];
-        let agent = agent_display(&request.agent, "An agent");
+        let agent = agent_display(request, "An agent");
         let connection = notification_label(&request.connection, "a tool");
         format!(
             "{} is waiting to use {}. Open Multitool to review.",
@@ -2136,15 +2138,20 @@ fn configure_notification_identity(
     Ok(())
 }
 
-/// The broker's direct-endpoint planes attribute their traffic to the
-/// literal agent label `endpoint` — an audit-stable wire value, not prose.
-/// Spell that one out for the humans reading a notification; every other
-/// label is untrusted agent text and goes through [`notification_label`].
-fn agent_display(agent: &str, fallback: &str) -> String {
-    if agent == "endpoint" {
-        "A direct endpoint client".into()
-    } else {
-        notification_label(agent, fallback)
+/// Notifications follow the same rule as the app: use only an OS-attested
+/// name, or a broker-owned transport label for direct endpoints. Everything
+/// else is the generic fallback, never the caller-selected label.
+fn agent_display(request: &RequestSummary, fallback: &str) -> String {
+    match request.identity.as_ref() {
+        Some(AgentIdentityDto::Verified { program, .. }) => notification_label(program, fallback),
+        Some(AgentIdentityDto::VerifiedSigner { signer, .. }) => format!(
+            "An agent from {}",
+            notification_label(signer, "a verified signer")
+        ),
+        Some(AgentIdentityDto::Unattested) | None if request.agent == "endpoint" => {
+            "A direct endpoint client".into()
+        }
+        Some(AgentIdentityDto::Unattested) | None => fallback.into(),
     }
 }
 
@@ -2351,9 +2358,8 @@ fn elicitation_delivery_plan(
     }
     let title = "Multitool needs your input".to_string();
     let body = if settings.show_context {
-        let agent = notification_label(&pending.agent, "An agent");
         let connection = notification_label(&pending.connection, "a tool");
-        format!("{connection} needs input. {agent} is paused. Open Multitool to respond.")
+        format!("{connection} needs input. An agent is paused. Open Multitool to respond.")
     } else {
         "A connected service asked for input. Open Multitool to respond.".to_string()
     };
@@ -2487,6 +2493,8 @@ mod tests {
             unit: Some("request".into()),
             target: "https://api.github.com".into(),
             agent: agent.into(),
+            identity: None,
+            run_scoped: None,
             summary: "GET /user".into(),
             detail: None,
             credential_names: vec!["github-token".into()],
@@ -2685,12 +2693,30 @@ mod tests {
             contextual,
             DeliveryPlan::Notify(NotificationContent {
                 title: "Multitool needs your approval".into(),
-                body: "codex agent is waiting to use github. Open Multitool to review.".into(),
+                body: "An agent is waiting to use github. Open Multitool to review.".into(),
                 play_sound: true,
                 time_sensitive: false,
                 action: Some(NotificationAction::Review),
             })
         );
+
+        let mut verified = approval("verified", "Claude Code ✓");
+        verified.identity = Some(AgentIdentityDto::Verified {
+            program: "Claude Desktop".into(),
+            signer: "Anthropic, PBC".into(),
+            team_id: "Q6L2SF6YDW".into(),
+            identifier: "com.anthropic.claude-desktop".into(),
+        });
+        assert!(matches!(
+            request_delivery_plan(
+                &[RequestSummary::from(verified)],
+                1,
+                settings(NotificationMode::Always, true),
+                false,
+            ),
+            DeliveryPlan::Notify(NotificationContent { body, .. })
+                if body.starts_with("Claude Desktop is waiting")
+        ));
 
         let private = request_delivery_plan(
             std::slice::from_ref(&request),
@@ -2763,7 +2789,7 @@ mod tests {
             expiration_delivery_plan(&[one], settings(NotificationMode::Always, true), false)
                 .unwrap();
         assert_eq!(single.title, "A Multitool request expired");
-        assert!(single.body.contains("codex was refused access to github"));
+        assert!(single.body.contains("An agent was refused access to github"));
         assert_eq!(single.action, Some(NotificationAction::ViewDetails));
         assert!(expiration_delivery_plan(
             &pending.requests,
@@ -2844,7 +2870,7 @@ mod tests {
             elicitation_delivery_plan(&elicitation, settings(NotificationMode::Always, true), true,),
             DeliveryPlan::Notify(NotificationContent {
                 title: "Multitool needs your input".into(),
-                body: "postgres needs input. codex is paused. Open Multitool to respond.".into(),
+                body: "postgres needs input. An agent is paused. Open Multitool to respond.".into(),
                 play_sound: true,
                 time_sensitive: false,
                 action: Some(NotificationAction::Respond),

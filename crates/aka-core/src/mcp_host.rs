@@ -119,9 +119,54 @@ struct BrokerResponse {
     retry_after: Option<String>,
 }
 
+/// Who is calling, in the two forms the host needs: the label they chose for
+/// the activity log, and what the OS proved for the decision surfaces.
+///
+/// Carried as one value rather than two parameters so the pair cannot drift —
+/// a code path that threaded the label but dropped the identity would silently
+/// downgrade an attested session to anonymous, which is precisely the failure
+/// this feature exists to remove.
+#[derive(Clone, Debug)]
+struct Caller {
+    /// Self-reported `X-Multitool-Client`. Attribution only.
+    label: String,
+    identity: crate::attest::AgentIdentity,
+    /// The MCP session id: the run an approval window binds to.
+    scope: Option<String>,
+}
+
+impl Caller {
+    /// Every broker call the host makes is on behalf of a live session, so
+    /// this is the only constructor: there is no path that would legitimately
+    /// drop the identity and still be acting for an agent.
+    /// `session_id` is `Option` to keep an absent id from becoming an empty
+    /// scope string: every session sharing `""` would share one approval
+    /// window, which is the opposite of what run-keying is for. Without an id
+    /// there is no run to bind to, so the window falls back to the label.
+    fn for_session(
+        label: impl Into<String>,
+        session_id: Option<&str>,
+        session: &Session,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            identity: session.identity.clone(),
+            scope: session_id.map(str::to_string),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Session {
     client_id: uuid::Uuid,
+    /// What the OS proved about the program on the other end, redeemed once
+    /// from an attestation ticket at `initialize` and owned by the session
+    /// from then on.
+    ///
+    /// Resolved once rather than per request because it cannot change: a
+    /// process cannot swap its parent mid-session, so re-checking would cost
+    /// signature verifications to learn the same answer.
+    identity: crate::attest::AgentIdentity,
     protocol_version: String,
     initialized: bool,
     last_seen: Instant,
@@ -595,6 +640,11 @@ async fn handle(State(state): State<HostState>, request: Request<Body>) -> Respo
     }
 
     if let Some(session) = session {
+        // The session owns the identity: it was resolved once, at `initialize`,
+        // from a ticket minted where the peer process was visible. Everything
+        // this request does inherits it rather than re-deriving it from a
+        // header the caller controls.
+        let caller = Caller::for_session(label, session_id, &session);
         if let Some(version) = parts
             .headers
             .get("mcp-protocol-version")
@@ -616,7 +666,7 @@ async fn handle(State(state): State<HostState>, request: Request<Body>) -> Respo
             session,
             body,
             token,
-            label,
+            &caller,
         )
         .await;
     }
@@ -629,10 +679,24 @@ async fn handle(State(state): State<HostState>, request: Request<Body>) -> Respo
             id,
         );
     }
-    initialize(&state, verified.client_id, body)
+    // The ticket was minted on the control socket, where this caller's peer
+    // process was visible. Redeeming consumes it, so a second caller replaying
+    // the same string gets nothing.
+    let identity = parts
+        .headers
+        .get(crate::attest::ATTESTATION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(|ticket| state.broker.attestation_tickets.redeem(ticket))
+        .unwrap_or_default();
+    initialize(&state, verified.client_id, identity, body)
 }
 
-fn initialize(state: &HostState, client_id: uuid::Uuid, request: Value) -> Response {
+fn initialize(
+    state: &HostState,
+    client_id: uuid::Uuid,
+    identity: crate::attest::AgentIdentity,
+    request: Value,
+) -> Response {
     let requested = request
         .pointer("/params/protocolVersion")
         .and_then(Value::as_str)
@@ -648,6 +712,7 @@ fn initialize(state: &HostState, client_id: uuid::Uuid, request: Value) -> Respo
         session_id.clone(),
         Session {
             client_id,
+            identity,
             protocol_version: protocol_version.to_string(),
             initialized: false,
             last_seen: Instant::now(),
@@ -726,7 +791,7 @@ async fn handle_session(
     session: Session,
     request: Value,
     token: &str,
-    label: &str,
+    caller: &Caller,
 ) -> Response {
     let method = request.get("method").and_then(Value::as_str);
     if method == Some("notifications/initialized") {
@@ -740,7 +805,7 @@ async fn handle_session(
                 session_id,
                 request_id,
                 token.to_string(),
-                label.to_string(),
+                caller.clone(),
             );
         }
         return StatusCode::ACCEPTED.into_response();
@@ -762,49 +827,49 @@ async fn handle_session(
         match method {
             Some("tools/list") => {
                 list_tools(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("tools/call") => {
                 call_tool(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("resources/list") => {
                 list_resources(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("resources/templates/list") => {
                 list_resource_templates(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("resources/read") => {
                 read_resource(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("prompts/list") => {
                 list_prompts(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("prompts/get") => {
                 get_prompt(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
             Some("completion/complete") => {
                 complete(
-                    state, session_id, client_id, &session, token, label, &request,
+                    state, session_id, client_id, &session, token, caller, &request,
                 )
                 .await
             }
@@ -862,7 +927,7 @@ fn cancel_active_request(
     session_id: &str,
     request_id: &Value,
     token: String,
-    label: String,
+    caller: Caller,
 ) {
     let Some(key) = request_key(session_id, request_id) else {
         return;
@@ -884,13 +949,13 @@ fn cancel_active_request(
     let state = state.clone();
     tokio::spawn(async move {
         for upstream in upstreams {
-            forward_upstream_cancellation(&state, &token, &label, &upstream).await;
+            forward_upstream_cancellation(&state, &token, &caller, &upstream).await;
         }
         for elicitation in elicitations {
             let _ = broker_call(
                 &state,
                 &token,
-                &label,
+                &caller,
                 http::Method::POST,
                 "/v1/elicit/cancel",
                 Some(json!({
@@ -906,7 +971,7 @@ fn cancel_active_request(
 async fn broker_call(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     method: http::Method,
     path: &str,
     body: Option<Value>,
@@ -915,7 +980,7 @@ async fn broker_call(
         .method(method)
         .uri(path)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(crate::daemon::CLIENT_LABEL_HEADER, label)
+        .header(crate::daemon::CLIENT_LABEL_HEADER, caller.label.as_str())
         .header(header::ACCEPT, "application/json");
     let body = match body {
         Some(body) => {
@@ -924,7 +989,18 @@ async fn broker_call(
         }
         None => Body::empty(),
     };
-    let request = builder.body(body).map_err(|error| error.to_string())?;
+    let mut request = builder.body(body).map_err(|error| error.to_string())?;
+    // This dispatch is in-process, so the daemon router has no socket peer to
+    // inspect — the session's own identity, redeemed from an attestation
+    // ticket at `initialize`, is the authoritative answer for everything it
+    // does. An extension cannot be set from the wire, so this can only ever
+    // carry what the host resolved.
+    request
+        .extensions_mut()
+        .insert(crate::daemon::ForwardedIdentity(
+            caller.identity.clone(),
+            caller.scope.clone(),
+        ));
     let response = crate::daemon::router(state.broker.clone())
         .oneshot(request)
         .await
@@ -997,7 +1073,7 @@ fn clear_elicitation_cancellation(state: &HostState, correlation_token: &str) {
 async fn forward_upstream_cancellation(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     upstream: &UpstreamCancellation,
 ) {
     let mut headers = Map::from_iter([
@@ -1038,7 +1114,7 @@ async fn forward_upstream_cancellation(
     let _ = broker_call(
         state,
         token,
-        label,
+        caller,
         http::Method::POST,
         "/v1/http",
         Some(call.clone()),
@@ -1050,7 +1126,7 @@ async fn forward_upstream_cancellation(
         let _ = broker_call(
             state,
             token,
-            label,
+            caller,
             http::Method::POST,
             "/v1/http",
             Some(call),
@@ -1062,12 +1138,12 @@ async fn forward_upstream_cancellation(
 async fn connections(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
 ) -> Result<Vec<BrokerConnection>, String> {
     let response = broker_call(
         state,
         token,
-        label,
+        caller,
         http::Method::GET,
         "/v1/connections",
         None,
@@ -1445,11 +1521,11 @@ async fn list_tools(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let mut tools = vec![status_tool_definition(), connect_tool_definition()];
-    let listed = connections(state, token, label).await;
+    let listed = connections(state, token, caller).await;
     let native = match &listed {
         Ok(connections) => {
             let native = native_tools(
@@ -1478,7 +1554,7 @@ async fn list_tools(
         client_id,
         session,
         token,
-        label,
+        caller,
         listed.as_deref().ok(),
         native.iter().map(|(name, _)| name.as_str()),
     )
@@ -1518,7 +1594,7 @@ async fn call_tool(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let requested_name = request.pointer("/params/name").and_then(Value::as_str);
@@ -1533,20 +1609,20 @@ async fn call_tool(
         .unwrap_or_default();
     let result = match name {
         Some("multitool_status") => {
-            status_result(state, session_id, client_id, session, token, label).await
+            status_result(state, session_id, client_id, session, token, caller).await
         }
-        Some("multitool_connect") => connect_result(state, token, label, &arguments).await,
+        Some("multitool_connect") => connect_result(state, token, caller, &arguments).await,
         Some("multitool_search_tools") if session.protocol_catalog.discovered => {
             search_upstream_tools(&session.protocol_catalog, &arguments)
         }
         Some("multitool_call_tool") if session.protocol_catalog.discovered => {
-            call_search_only_tool(state, token, label, &session.protocol_catalog, &arguments).await
+            call_search_only_tool(state, token, caller, &session.protocol_catalog, &arguments).await
         }
         Some(name) if session.protocol_catalog.tools.contains_key(name) => {
             call_upstream_tool(
                 state,
                 token,
-                label,
+                caller,
                 session.protocol_catalog.tools.get(name).unwrap(),
                 arguments,
             )
@@ -1556,7 +1632,7 @@ async fn call_tool(
             native_result(
                 state,
                 token,
-                label,
+                caller,
                 name,
                 arguments,
                 session.native_tools.get(name).cloned(),
@@ -1570,17 +1646,17 @@ async fn call_tool(
             // that because it built the whole surface at session open. Rebuild
             // the surfaces once, then dispatch against what came back.
             let (native, catalog) =
-                refreshed_surfaces(state, session_id, client_id, session, token, label).await;
+                refreshed_surfaces(state, session_id, client_id, session, token, caller).await;
             match name {
                 "multitool_search_tools" => search_upstream_tools(&catalog, &arguments),
                 "multitool_call_tool" => {
-                    call_search_only_tool(state, token, label, &catalog, &arguments).await
+                    call_search_only_tool(state, token, caller, &catalog, &arguments).await
                 }
                 name if catalog.tools.contains_key(name) => {
                     call_upstream_tool(
                         state,
                         token,
-                        label,
+                        caller,
                         catalog.tools.get(name).unwrap(),
                         arguments,
                     )
@@ -1590,7 +1666,7 @@ async fn call_tool(
                     native_result(
                         state,
                         token,
-                        label,
+                        caller,
                         name,
                         arguments,
                         native.get(name).cloned(),
@@ -1619,9 +1695,9 @@ async fn refreshed_surfaces(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
 ) -> (HashMap<String, BrokerConnection>, ProtocolCatalog) {
-    let listed = connections(state, token, label).await;
+    let listed = connections(state, token, caller).await;
     let native = match &listed {
         Ok(connections) => {
             let native = native_tools(
@@ -1645,7 +1721,7 @@ async fn refreshed_surfaces(
         client_id,
         session,
         token,
-        label,
+        caller,
         listed.as_deref().ok(),
         native.iter().map(|(name, _)| name.as_str()),
     )
@@ -1659,9 +1735,9 @@ async fn status_result(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
 ) -> Value {
-    match connections(state, token, label).await {
+    match connections(state, token, caller).await {
         Ok(connections) => {
             let registered = native_tools(
                 &connections,
@@ -1676,7 +1752,7 @@ async fn status_result(
                 client_id,
                 session,
                 token,
-                label,
+                caller,
                 Some(&connections),
                 registered.iter().map(|(name, _)| name.as_str()),
             )
@@ -1711,7 +1787,7 @@ async fn status_result(
                 })
                 .collect();
             let mut status = Map::new();
-            status.insert("agent".into(), Value::String(label.to_string()));
+            status.insert("agent".into(), Value::String(caller.label.clone()));
             status.insert("tools".into(), Value::Array(tools));
             if registered.is_empty() && protocol.tools.is_empty() {
                 status.insert(
@@ -1755,7 +1831,7 @@ async fn status_result(
             tool_text(Value::Object(status))
         }
         Err(error) => tool_text(json!({
-            "agent": label,
+            "agent": caller.label,
             "tools": [],
             "errors": [{"scope": "broker", "error": error}],
             "hint": "Multitool could not list connections. Reconnect after the broker is reachable.",
@@ -1766,7 +1842,7 @@ async fn status_result(
 async fn connect_result(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     arguments: &Map<String, Value>,
 ) -> Value {
     let Some(service) = arguments.get("service").and_then(Value::as_str) else {
@@ -1775,7 +1851,7 @@ async fn connect_result(
     let response = broker_call(
         state,
         token,
-        label,
+        caller,
         http::Method::POST,
         "/v1/connect-requests",
         Some(json!({"service": service})),
@@ -1885,7 +1961,7 @@ fn search_upstream_tools(catalog: &ProtocolCatalog, arguments: &Map<String, Valu
 async fn call_search_only_tool(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     catalog: &ProtocolCatalog,
     arguments: &Map<String, Value>,
 ) -> Value {
@@ -1902,13 +1978,13 @@ async fn call_search_only_tool(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    call_upstream_tool(state, token, label, binding, call_arguments).await
+    call_upstream_tool(state, token, caller, binding, call_arguments).await
 }
 
 async fn native_result(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     name: &str,
     arguments: Map<String, Value>,
     connection: Option<BrokerConnection>,
@@ -1921,7 +1997,7 @@ async fn native_result(
     let response = broker_call(
         state,
         token,
-        label,
+        caller,
         http::Method::POST,
         &connection.endpoint,
         Some(Value::Object(body)),
@@ -2116,7 +2192,7 @@ fn broker_failure(response: &BrokerResponse) -> String {
 struct UpstreamClient<'a> {
     state: &'a HostState,
     token: &'a str,
-    label: &'a str,
+    caller: &'a Caller,
     connection: &'a BrokerConnection,
     next_id: u64,
     session_id: Option<String>,
@@ -2129,13 +2205,13 @@ impl<'a> UpstreamClient<'a> {
     fn new(
         state: &'a HostState,
         token: &'a str,
-        label: &'a str,
+        caller: &'a Caller,
         connection: &'a BrokerConnection,
     ) -> Self {
         Self {
             state,
             token,
-            label,
+            caller,
             connection,
             next_id: 1,
             session_id: None,
@@ -2193,7 +2269,7 @@ impl<'a> UpstreamClient<'a> {
         let response = broker_call(
             self.state,
             self.token,
-            self.label,
+            self.caller,
             http::Method::POST,
             "/v1/http",
             Some(call),
@@ -2417,10 +2493,10 @@ struct RawDiscovery {
 async fn discover_connection(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     connection: &BrokerConnection,
 ) -> Result<RawDiscovery, String> {
-    let mut client = UpstreamClient::new(state, token, label, connection);
+    let mut client = UpstreamClient::new(state, token, caller, connection);
     let result = async {
         client.initialize().await?;
         let capabilities = client.capabilities.clone();
@@ -2469,7 +2545,7 @@ async fn discover_connection(
 async fn discover_connection_bounded(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     connection: &BrokerConnection,
 ) -> Result<RawDiscovery, String> {
     let deadline = std::env::var("MULTITOOL_DISCOVERY_DEADLINE_MS")
@@ -2481,7 +2557,7 @@ async fn discover_connection_bounded(
     for attempt in 0..2 {
         match tokio::time::timeout(
             Duration::from_millis(deadline),
-            discover_connection(state, token, label, connection),
+            discover_connection(state, token, caller, connection),
         )
         .await
         {
@@ -2631,7 +2707,7 @@ async fn ensure_protocol_catalog(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     listed: Option<&[BrokerConnection]>,
     native_names: impl Iterator<Item = &str>,
 ) -> ProtocolCatalog {
@@ -2716,7 +2792,7 @@ async fn ensure_protocol_catalog(
     let discoveries = futures::future::join_all(
         upstreams
             .iter()
-            .map(|connection| discover_connection_bounded(state, token, label, connection)),
+            .map(|connection| discover_connection_bounded(state, token, caller, connection)),
     )
     .await;
     for (connection, discovery) in upstreams.into_iter().zip(discoveries) {
@@ -2954,14 +3030,14 @@ async fn ensure_protocol_catalog(
 async fn call_upstream_tool(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     binding: &UpstreamToolBinding,
     arguments: Map<String, Value>,
 ) -> Value {
     match upstream_operation(
         state,
         token,
-        label,
+        caller,
         &binding.connection,
         "tools/call",
         json!({"name": binding.upstream_name, "arguments": arguments}),
@@ -3190,7 +3266,7 @@ fn sanitize_completion_result(value: Value) -> Value {
 async fn upstream_operation(
     state: &HostState,
     token: &str,
-    label: &str,
+    caller: &Caller,
     connection: &BrokerConnection,
     method: &str,
     params: Value,
@@ -3206,7 +3282,7 @@ async fn upstream_operation(
         let remaining = TOTAL_BUDGET
             .checked_sub(started.elapsed())
             .ok_or_else(|| "the MCP input flow exceeded its 8 minute time budget".to_string())?;
-        let mut client = UpstreamClient::new(state, token, label, connection);
+        let mut client = UpstreamClient::new(state, token, caller, connection);
         let mut round_params = base.clone();
         if let Some(responses) = &input_responses {
             round_params.insert("inputResponses".into(), Value::Object(responses.clone()));
@@ -3269,7 +3345,7 @@ async fn upstream_operation(
                     broker_call(
                         state,
                         token,
-                        label,
+                        caller,
                         http::Method::POST,
                         "/v1/elicit",
                         Some(json!({
@@ -3310,12 +3386,12 @@ async fn protocol_catalog_for_request(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
 ) -> ProtocolCatalog {
     if session.protocol_catalog.discovered {
         return session.protocol_catalog.clone();
     }
-    let listed = connections(state, token, label).await.ok();
+    let listed = connections(state, token, caller).await.ok();
     let native = listed
         .as_deref()
         .map(|connections| native_tools(connections, std::iter::empty()))
@@ -3326,7 +3402,7 @@ async fn protocol_catalog_for_request(
         client_id,
         session,
         token,
-        label,
+        caller,
         listed.as_deref(),
         native.iter().map(|(name, _)| name.as_str()),
     )
@@ -3346,11 +3422,11 @@ async fn list_resources(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let catalog =
-        protocol_catalog_for_request(state, session_id, client_id, session, token, label).await;
+        protocol_catalog_for_request(state, session_id, client_id, session, token, caller).await;
     state.sessions.note_catalog(
         session_id,
         client_id,
@@ -3373,11 +3449,11 @@ async fn list_resource_templates(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let catalog =
-        protocol_catalog_for_request(state, session_id, client_id, session, token, label).await;
+        protocol_catalog_for_request(state, session_id, client_id, session, token, caller).await;
     state.sessions.note_catalog(
         session_id,
         client_id,
@@ -3400,7 +3476,7 @@ async fn read_resource(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let uri = request
@@ -3408,7 +3484,7 @@ async fn read_resource(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let catalog =
-        protocol_catalog_for_request(state, session_id, client_id, session, token, label).await;
+        protocol_catalog_for_request(state, session_id, client_id, session, token, caller).await;
     // Match on the exposed (connection-namespaced) URI, then forward the
     // original upstream URI to that binding's connection — the connection is
     // taken from the binding, never re-derived from the URI string.
@@ -3438,7 +3514,7 @@ async fn read_resource(
     match upstream_operation(
         state,
         token,
-        label,
+        caller,
         connection,
         "resources/read",
         json!({"uri": upstream_uri}),
@@ -3486,11 +3562,11 @@ async fn list_prompts(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let catalog =
-        protocol_catalog_for_request(state, session_id, client_id, session, token, label).await;
+        protocol_catalog_for_request(state, session_id, client_id, session, token, caller).await;
     state.sessions.note_catalog(
         session_id,
         client_id,
@@ -3513,7 +3589,7 @@ async fn get_prompt(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let name = request
@@ -3525,7 +3601,7 @@ async fn get_prompt(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let catalog =
-        protocol_catalog_for_request(state, session_id, client_id, session, token, label).await;
+        protocol_catalog_for_request(state, session_id, client_id, session, token, caller).await;
     let Some(prompt) = catalog
         .prompts
         .iter()
@@ -3541,7 +3617,7 @@ async fn get_prompt(
     match upstream_operation(
         state,
         token,
-        label,
+        caller,
         &prompt.connection,
         "prompts/get",
         json!({"name": prompt.upstream_name, "arguments": arguments}),
@@ -3562,11 +3638,11 @@ async fn complete(
     client_id: uuid::Uuid,
     session: &Session,
     token: &str,
-    label: &str,
+    caller: &Caller,
     request: &Value,
 ) -> Response {
     let catalog =
-        protocol_catalog_for_request(state, session_id, client_id, session, token, label).await;
+        protocol_catalog_for_request(state, session_id, client_id, session, token, caller).await;
     let reference = request
         .pointer("/params/ref")
         .cloned()
@@ -3619,7 +3695,7 @@ async fn complete(
     match upstream_operation(
         state,
         token,
-        label,
+        caller,
         connection,
         "completion/complete",
         params,

@@ -506,6 +506,32 @@ pub fn session_dto(session: &crate::sessions::SessionInfo) -> SessionDto {
     }
 }
 
+fn agent_identity_dto(identity: &crate::attest::AgentIdentity) -> aka_api::AgentIdentityDto {
+    match identity {
+        crate::attest::AgentIdentity::Verified {
+            program,
+            signer,
+            team_id,
+            identifier,
+        } => aka_api::AgentIdentityDto::Verified {
+            program: program.clone(),
+            signer: signer.clone(),
+            team_id: team_id.clone(),
+            identifier: identifier.clone(),
+        },
+        crate::attest::AgentIdentity::VerifiedSigner {
+            signer,
+            team_id,
+            identifier,
+        } => aka_api::AgentIdentityDto::VerifiedSigner {
+            signer: signer.clone(),
+            team_id: team_id.clone(),
+            identifier: identifier.clone(),
+        },
+        crate::attest::AgentIdentity::Unattested => aka_api::AgentIdentityDto::Unattested,
+    }
+}
+
 /// Seconds until a deadline, on this broker's clock right now. Rides beside
 /// the absolute RFC 3339 form so a client can anchor the countdown to its
 /// own clock instead of trusting the two clocks to agree.
@@ -523,6 +549,8 @@ pub fn approval_dto(pending: &crate::approvals::PendingApproval) -> ApprovalDto 
         unit: Some(pending.unit.as_str().to_string()),
         target: pending.target.clone(),
         agent: pending.agent.clone(),
+        identity: Some(agent_identity_dto(&pending.identity)),
+        run_scoped: Some(pending.run_scoped),
         summary: pending.summary.clone(),
         detail: pending.detail.clone(),
         credential_names: pending.credential_names.clone(),
@@ -621,6 +649,8 @@ pub fn activity_dto(entry: &AuditEntry) -> ActivityDto {
         text: entry.text.clone(),
         detail: entry.detail.clone(),
         agent: entry.agent.clone(),
+        identity: entry.identity.as_ref().map(agent_identity_dto),
+        session: entry.session.clone(),
         connection: entry.connection.clone(),
         outcome: entry.outcome.clone(),
         protocol: entry

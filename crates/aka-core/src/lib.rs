@@ -11,6 +11,7 @@
 //! tests everywhere.
 
 pub mod approvals;
+pub mod attest;
 pub mod audit;
 pub mod auth;
 pub mod broker;

@@ -179,7 +179,7 @@ function startSubject(option: StartOption): string {
 
 /** Step 1's lead before anything exists: what the step is about to do. */
 export function startAddLead(option: StartOption): string {
-  return `Connect to ${startSubject(option)} via Multitool.`;
+  return `Connect Multitool to your ${option.unit}.`;
 }
 
 /**

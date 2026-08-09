@@ -303,6 +303,37 @@ export interface IdentityInfo {
   legacy_aliases: number;
 }
 
+/**
+ * What the operating system proved about the program behind a request.
+ *
+ * Mirrors `aka_core::attest::AgentIdentity`. Unlike the `agent` label — which
+ * the caller chooses and can therefore be anything — nothing here can be set
+ * by the agent, which is why these are the values the UI is allowed to render
+ * as a name.
+ *
+ * `unattested` is the ordinary state, not a failure: Linux, hosted brokers,
+ * direct-endpoint clients, and anything that skips the helper all land here,
+ * and the app says "an agent" rather than inventing a name.
+ */
+export type AgentIdentity =
+  | {
+      kind: 'verified';
+      /** The bundle's display name, e.g. `Claude Desktop`. */
+      program: string;
+      signer: string;
+      team_id: string;
+      identifier: string;
+    }
+  | {
+      /** Signature verified, but the image is a bare executable with no
+       * bundle to take a name from — the ordinary shape for a signed CLI. */
+      kind: 'verified_signer';
+      signer: string;
+      team_id: string;
+      identifier: string;
+    }
+  | { kind: 'unattested' };
+
 export interface SessionSummary {
   id: number;
   type: ConnectionType;
@@ -319,8 +350,14 @@ export interface ActivityEntry {
   kind?: string | null;
   text: string;
   detail: string | null;
-  /** Which agent acted / which connection was touched, when attributable. */
+  /** Which agent acted / which connection was touched, when attributable.
+   * `agent` is the self-reported label, kept for the record but not shown. */
   agent?: string | null;
+  /** What the OS proved about the agent, when anything could be. */
+  identity?: AgentIdentity | null;
+  /** Broker-minted run handle. Unlike `agent` the caller cannot choose it, so
+   * it is what lets a log of unnamed agents still be followed run by run. */
+  session?: string | null;
   connection?: string | null;
   outcome?: string | null;
   protocol?: string | null;
@@ -405,8 +442,14 @@ export interface Approval {
   unit?: 'request' | 'tool' | 'session' | 'login' | 'host_key' | null;
   /** The pinned destination the traffic would reach. */
   target: string;
-  /** Self-reported agent label. Attribution, never authorization. */
+  /** Self-reported agent label. Attribution, never authorization — and never
+   * rendered: `identity` is what the prompt shows. Kept for the audit record. */
   agent: string;
+  /** What the OS proved about the caller. Absent on older brokers. */
+  identity?: AgentIdentity | null;
+  /** Whether an approval window here binds to this one run rather than to
+   * whatever next sends the same label, so the button can say which. */
+  run_scoped?: boolean | null;
   /** The headline: `GET /user/repos`, `search_issues`, `New Postgres session`. */
   summary: string;
   /** A body preview, a tool's arguments, or the client's application name. */

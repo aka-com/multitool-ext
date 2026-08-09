@@ -319,7 +319,8 @@
   margin: 12px 0 5px; padding: 0 2px;
   font-size: 0.75rem; font-weight: 650; color: var(--muted);
 }
-  .agent-tools-context{ color: var(--faint); font-weight: 400; }
+  .agent-tools-sec-h{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .agent-tools-context{ color: var(--faint); font-weight: 400; text-align: right; }
   .dd-tools .dd-sec-h{ margin-top: 4px; }
   .dd-creds > .dd-sec-h:first-child{ margin-top: 4px; }
   /* ---- main window layout ---------------------------------------------- */
@@ -923,6 +924,26 @@
   /* Agent-, upstream-, and target-controlled text is isolated from
      surrounding punctuation so bidi controls cannot reorder the dialog. */
   .untrusted-identity{ unicode-bidi: isolate; }
+  /* ---- attested agent identity ----------------------------------------- */
+  /* A verified program's name carries a check the way a verified account does.
+     The check is always a sibling element of the name, never part of its text:
+     an agent-chosen string cannot reach these rules, and cannot grow a check of
+     its own by spelling one. */
+  .vcheck{
+  display: inline-flex; vertical-align: -2px; margin-left: 3px; color: var(--ok-solid);
+}
+  .vcheck svg{ width: 13px; height: 13px; }
+  /* An unverified caller has no name to show, so the words carry it and there
+     is no chip — an absent mark is the signal. */
+  .anon{ font-weight: 650; }
+  .approval-facts .approval-fact-note{ color: var(--muted); font-weight: 400; }
+  .act-chip.act-chip-verified{
+  display: inline-flex; align-items: center; gap: 2px;
+  color: var(--ok-ink); border-color: var(--ok-border); background: var(--ok-wash);
+}
+  .act-chip.act-chip-verified .vcheck{ margin-left: 0; }
+  .act-chip.act-chip-verified .vcheck svg{ width: 11px; height: 11px; }
+  .act-chip.act-chip-session{ font-variant-numeric: tabular-nums; }
   /* What Approve hands over, in the app's voice. Deliberately outside
      .approval-call's field chrome: that block is the agent's text, and the
      two must not be able to read as one. */
@@ -2663,6 +2684,9 @@ textarea.cloud-paste-zone {
    MULTITOOL_AWS_AWS_ACCESS_KEY_ID is the whole identity of the row. Mask
    and value share one size, so revealing does not resize the row. */
 .cd-secret-name { overflow-wrap: anywhere; }
+.cd-secret-actions {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; margin-right: -4px;
+}
 .cd-secret-act {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; padding: 0; border-radius: 6px; color: var(--muted-2);
@@ -3512,6 +3536,11 @@ label.totp-remove-check {
   background: var(--panel); border: 1px solid var(--line-mid); border-radius: 9px;
   box-shadow: var(--shadow-menu);
 }
+.act-filter-menu-heading {
+  padding: 6px 8px 2px; color: var(--muted); font-size: 0.6875rem;
+  font-weight: 700; letter-spacing: .02em;
+}
+.act-filter-option-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .act-filter-menu .menu-item.on { background: var(--accent-wash-2); color: var(--accent-ink); }
 .activity-page-footer {
   display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap;

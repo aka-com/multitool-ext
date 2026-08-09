@@ -10,6 +10,7 @@
 
 pub mod manage;
 pub mod principal;
+pub mod uds;
 pub mod wellknown;
 
 use std::io;
@@ -261,11 +262,66 @@ pub struct Authed {
     /// Self-reported client label (`X-Multitool-Client`), for attribution
     /// only.
     pub client: String,
+    /// What the operating system could prove about the caller — as opposed to
+    /// `client`, which is whatever the caller typed. Always
+    /// [`AgentIdentity::Unattested`] on the TCP listener, where the peer is
+    /// the operator's proxy rather than the agent.
+    pub identity: crate::attest::AgentIdentity,
+    /// The specific run behind this request — the peer process on the control
+    /// socket. An approval window binds to this rather than to the label, so
+    /// a second process cannot join it by sending the same name. `None` on
+    /// TCP, where there is no peer worth naming.
+    pub scope: Option<String>,
     /// The identity's stable principal id.
     pub client_id: uuid::Uuid,
     /// The presented token was a legacy per-agent alias still riding the
     /// migration grace period.
     pub via_alias: bool,
+}
+
+/// Resolve the attested identity of whoever sent this request, if anyone can
+/// be. Only the Unix socket carries a peer worth asking about.
+/// An identity resolved somewhere other than this request's transport.
+///
+/// The MCP host serves loopback TCP and dispatches into this router
+/// in-process, so neither hop has a peer to inspect. It resolves identity once
+/// per session, from an attestation ticket minted on the control socket, and
+/// carries it in here. Extensions cannot be set from the wire, so this is only
+/// ever reachable by in-process callers.
+#[derive(Clone)]
+pub(crate) struct ForwardedIdentity(
+    pub crate::attest::AgentIdentity,
+    pub Option<String>,
+);
+
+/// Who is asking, in the three forms an approval needs: the label for the
+/// activity log, what the OS proved for the prompt, and the run a window binds
+/// to. Passed as one value so a call site cannot supply the label and forget
+/// the rest.
+#[derive(Clone, Copy)]
+pub(crate) struct Requester<'a> {
+    pub label: &'a str,
+    pub identity: &'a crate::attest::AgentIdentity,
+    pub scope: Option<&'a str>,
+}
+
+pub(crate) fn request_identity(
+    parts: &Parts,
+) -> (crate::attest::AgentIdentity, Option<String>) {
+    if let Some(forwarded) = parts.extensions.get::<ForwardedIdentity>() {
+        return (forwarded.0.clone(), forwarded.1.clone());
+    }
+    let Some(peer) = parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<uds::UdsPeer>>()
+        .and_then(|info| info.0 .0)
+    else {
+        return (crate::attest::AgentIdentity::Unattested, None);
+    };
+    // pid plus start time is the process handle: unique while the process
+    // lives, and not reused by whatever inherits the pid later.
+    let scope = format!("{}:{}", peer.pid, peer.start_time);
+    (crate::attest::attest_cached(peer), Some(scope))
 }
 
 impl FromRequestParts<AppState> for Authed {
@@ -287,8 +343,11 @@ impl FromRequestParts<AppState> for Authed {
                     .filter(|v| validate_agent_name(v))
                     .unwrap_or(DEFAULT_CLIENT_LABEL)
                     .to_string();
+                let (identity, scope) = request_identity(parts);
                 Ok(Authed {
                     client,
+                    identity,
+                    scope,
                     client_id: verified.client_id,
                     via_alias: verified.via_alias,
                 })
@@ -618,6 +677,7 @@ pub fn router_with(
         .route("/.well-known/agent-broker.json", get(get_manifest))
         .route("/instructions", get(get_instructions))
         .route("/v1/pair", post(post_pair))
+        .route("/v1/attest", post(post_attest))
         .route("/v1/connections", get(get_connections))
         .route("/v1/whoami", get(get_whoami))
         // The JSON-envelope plane is buffered end to end, so it gets its own,
@@ -838,7 +898,15 @@ pub async fn serve_with(broker: Arc<Broker>, options: ServeOptions) -> crate::Re
 
     let app = router(broker);
     let task = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        // Connect info on the socket is what makes agent attestation possible:
+        // it captures the peer process when the connection is accepted, while
+        // that process is provably still alive. See `daemon::uds`.
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<uds::UdsPeer>(),
+        )
+        .await
+        {
             tracing::error!("daemon exited: {e}");
         }
     });
@@ -958,6 +1026,44 @@ async fn post_pair(State(state): State<AppState>, ApiJson(body): ApiJson<PairBod
             // prose: the shared key already lives at this path, so agents
             // that can read files skip pairing entirely.
             "store_at": broker.paths.token_display(),
+        })),
+    )
+        .into_response()
+}
+
+/* ------------------------------ attestation ------------------------------- */
+
+/// Hand the caller a ticket carrying whatever the OS proved about it.
+///
+/// The MCP session runs over loopback TCP, where there is no peer to inspect,
+/// so identity has to be resolved here — on the socket, where the peer process
+/// is visible — and carried across. See [`crate::attest::AttestationTickets`].
+///
+/// Socket-only for the same reason pairing is: on TCP the peer is the
+/// operator's proxy, so there is nothing to attest and a route that pretended
+/// otherwise would be actively misleading.
+async fn post_attest(State(state): State<AppState>, authed: Authed) -> Response {
+    if state.transport.is_tcp() {
+        return err_detail(
+            StatusCode::NOT_FOUND,
+            ErrorReason::NotServedRemotely,
+            "attestation is not served remotely; a TCP peer is the operator's \
+             proxy rather than the calling program",
+        );
+    }
+    let broker = &state.broker;
+    if let Err(wait) = broker.token_limiter.check(&authed.client_id.to_string()) {
+        return err_rate_limited(ErrorReason::RateLimited, wait);
+    }
+    // An unattested caller gets `null` rather than an error: failing to prove
+    // anything is the ordinary outcome (a shell, an npm-installed harness, any
+    // non-macOS host), not a fault the caller should retry.
+    let ticket = broker.attestation_tickets.issue(authed.identity.clone());
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ticket": ticket,
+            "identity": authed.identity,
         })),
     )
         .into_response()
@@ -1375,7 +1481,11 @@ async fn post_http(
         broker.store.as_ref(),
         &broker.workspace,
         &conn,
-        &client,
+        Requester {
+            label: &client,
+            identity: &authed.identity,
+            scope: authed.scope.as_deref(),
+        },
         &method,
         &call.path,
         &header_map,
@@ -2040,7 +2150,7 @@ fn approval_for_call(
     store: &dyn crate::repository::CatalogReader,
     workspace: &crate::repository::WorkspaceContext,
     conn: &crate::types::Connection,
-    client: &str,
+    requester: Requester<'_>,
     method: &http::Method,
     path: &str,
     headers: &http::HeaderMap,
@@ -2048,7 +2158,11 @@ fn approval_for_call(
 ) -> Option<crate::approvals::ApprovalRequest> {
     use crate::approvals::{capped_text, ApprovalRequest};
     let request = |summary: String| {
-        ApprovalRequest::new(conn, client, summary)
+        ApprovalRequest::new(conn, requester.label, summary)
+            .requester(
+                requester.identity.clone(),
+                requester.scope.map(str::to_string),
+            )
             .credentials_from(store, workspace)
             .http_operation(method, path)
     };

@@ -756,6 +756,25 @@ pub struct SessionDto {
     pub opened_at: String,
 }
 
+/// What the broker's operating system proved about the program behind an
+/// agent request. This deliberately excludes the caller-selected agent label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentIdentityDto {
+    Verified {
+        program: String,
+        signer: String,
+        team_id: String,
+        identifier: String,
+    },
+    VerifiedSigner {
+        signer: String,
+        team_id: String,
+        identifier: String,
+    },
+    Unattested,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityDto {
     pub icon: String,
@@ -769,6 +788,12 @@ pub struct ActivityDto {
     /// Structured attribution for filtering: which agent acted and which
     /// connection was touched (both optional per entry).
     pub agent: Option<String>,
+    /// OS-attested attribution. Absent for unattested and legacy entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<AgentIdentityDto>,
+    /// Broker-minted run handle used to correlate otherwise unnamed entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     pub connection: Option<String>,
     /// Stable machine outcome and protocol, when the audit entry carries
     /// them. Consumers must not reverse-engineer either from presentation
@@ -826,6 +851,13 @@ pub struct ApprovalDto {
     pub target: String,
     /// Self-reported agent label. Attribution, never authorization.
     pub agent: String,
+    /// What the operating system proved about the caller. Optional so a new
+    /// app can still manage an older broker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<AgentIdentityDto>,
+    /// Whether an approval window binds to this one broker-minted run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_scoped: Option<bool>,
     /// The headline: `GET /user/repos`, `search_issues`, `New Postgres session`.
     pub summary: String,
     /// A second line when there is one: a body preview, a tool's arguments,
@@ -1152,6 +1184,8 @@ mod tests {
                 text: "Connection added".into(),
                 detail: None,
                 agent: None,
+                identity: None,
+                session: None,
                 connection: None,
                 outcome: None,
                 protocol: None,

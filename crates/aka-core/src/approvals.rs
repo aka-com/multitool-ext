@@ -124,6 +124,13 @@ pub struct ApprovalRequest {
     /// Self-reported agent label. Attribution for the prompt, never
     /// authorization — the decision is scoped to the connection.
     pub agent: String,
+    /// What the OS proved about the caller. Unlike `agent`, this cannot be
+    /// chosen by the caller, so it is what the prompt shows and what the
+    /// window is keyed on.
+    pub identity: crate::attest::AgentIdentity,
+    /// The specific run this request came from — an MCP session id, or a
+    /// process handle on the control socket. Set only where one is knowable.
+    pub scope: Option<String>,
     /// The headline: `GET /user/repos`, `search_issues`, `psql session`.
     pub summary: String,
     /// The second line, when there is more worth showing: a body preview,
@@ -167,6 +174,8 @@ impl ApprovalRequest {
             connection: connection.clone(),
             unit,
             agent: cap_approval_text(agent.into()),
+            identity: crate::attest::AgentIdentity::Unattested,
+            scope: None,
             summary: cap_approval_text(summary.into()),
             detail: None,
             credential_names: Vec::new(),
@@ -232,6 +241,36 @@ impl ApprovalRequest {
         self.detail = detail.map(cap_approval_text);
         self
     }
+
+    /// Name the run this request came from, and what the OS proved about it.
+    ///
+    /// `scope` must identify one session or process, not one program: two
+    /// concurrent runs of the same verified app are two principals, and an
+    /// approval given about one is not an answer about the other.
+    pub fn requester(
+        mut self,
+        identity: crate::attest::AgentIdentity,
+        scope: Option<String>,
+    ) -> Self {
+        self.identity = identity;
+        self.scope = scope;
+        self
+    }
+
+    /// Who a window opened on this request belongs to.
+    ///
+    /// Run-keying is deliberately limited to attested callers. It is strictly
+    /// narrower, so it would be safe to apply everywhere — but for an
+    /// unattested caller a "run" can be as short as a single connection, and
+    /// keying on it would re-prompt for traffic the user has already approved.
+    /// Nothing is proven about those callers either way, so they keep the
+    /// label behaviour and the prompt stays useful.
+    fn principal(&self) -> Principal {
+        match (self.identity.is_attested(), &self.scope) {
+            (true, Some(scope)) => Principal::Run(scope.clone()),
+            _ => Principal::Label(self.agent.clone()),
+        }
+    }
 }
 
 /// One prompt waiting on the user, as the app renders it. Carries no
@@ -247,6 +286,14 @@ pub struct PendingApproval {
     /// The pinned destination (`https://api.github.com`, `app@db:5432/x`).
     pub target: String,
     pub agent: String,
+    /// What the OS proved about the caller. The prompt shows this instead of
+    /// `agent`, which is only what the caller called itself.
+    pub identity: crate::attest::AgentIdentity,
+    /// Whether an approval window here binds to this one run rather than to
+    /// whatever next sends the same label. Drives the wording on the
+    /// approve-for-a-while button, which otherwise promises more than it can
+    /// deliver.
+    pub run_scoped: bool,
     pub summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -409,15 +456,50 @@ struct Grant {
     wall_until: DateTime<Utc>,
 }
 
-/// What an approval covers: one connection, for one agent.
+/// Who an approval window belongs to.
 ///
-/// The agent label is self-reported, which is why it scopes a grant but never
-/// grants one. Keying the window on it can only *narrow* what an approval
-/// admits — a second agent that does not claim the first one's label gets
-/// asked in its own name instead of riding an answer the user gave about
-/// somebody else. An agent that does claim it is no better off than under a
-/// connection-wide window, which is what this replaces.
-type GrantKey = (Uuid, String);
+/// The distinction is whether another caller can *become* this principal by
+/// asking to be. A label can be copied out of an activity log and sent by
+/// anything, so a window keyed on one is only ever a narrowing of a
+/// connection-wide window — better than nothing, but not a boundary. A run is
+/// the specific process or session the OS identified, and nothing a second
+/// caller sends can make it that run.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Principal {
+    /// One verified run: this MCP session, or this process on the socket.
+    /// A different process cannot join the window by claiming the same name.
+    Run(String),
+    /// A self-reported label, for callers nothing could be proven about.
+    /// Keying on it can only narrow what an approval admits — a second agent
+    /// that does not claim the first one's label gets asked in its own name
+    /// instead of riding an answer the user gave about somebody else. An
+    /// agent that does claim it is no better off than under the
+    /// connection-wide window this replaced.
+    Label(String),
+}
+
+impl Principal {
+    /// How to name this window's holder in the app's "who is covered" list.
+    ///
+    /// A run id is a broker-minted opaque handle, so it is shown as one rather
+    /// than dressed up as a name — the point of the list is to say how many
+    /// distinct holders there are and whether any of them is you.
+    fn display(&self) -> String {
+        match self {
+            Principal::Run(scope) => format!("session {}", short_run(scope)),
+            Principal::Label(label) => label.clone(),
+        }
+    }
+}
+
+/// The first few characters of a run id: enough to tell two runs apart in a
+/// list, short enough to sit in a row without wrapping.
+fn short_run(scope: &str) -> String {
+    scope.chars().filter(|c| *c != '-').take(4).collect()
+}
+
+/// What an approval covers: one connection, for one principal.
+type GrantKey = (Uuid, Principal);
 
 #[derive(Default)]
 struct State {
@@ -555,7 +637,7 @@ impl Approvals {
     /// window or a running cooldown answers without raising anything.
     pub async fn gate(&self, request: ApprovalRequest) -> Verdict {
         let connection_id = request.connection.id;
-        let key: GrantKey = (connection_id, request.agent.clone());
+        let key: GrantKey = (connection_id, request.principal());
         let now = Instant::now();
 
         // Retire whatever lapsed while nobody was looking, and tell the
@@ -634,6 +716,8 @@ impl Approvals {
                         unit: request.unit,
                         target: cap_approval_text(request.connection.target()),
                         agent: cap_approval_text(request.agent.clone()),
+                        identity: request.identity.clone(),
+                        run_scoped: matches!(request.principal(), Principal::Run(_)),
                         summary: request.summary.clone(),
                         detail: request.detail.clone(),
                         credential_names: request.credential_names.clone(),
@@ -864,7 +948,7 @@ impl Approvals {
                 .grants
                 .keys()
                 .filter(|(id, _)| id == connection_id)
-                .map(|(_, agent)| agent.clone())
+                .map(|(_, principal)| principal.display())
                 .collect();
             (agents, lapsed)
         };
@@ -1034,6 +1118,7 @@ impl Approvals {
         };
         let mut entry = AuditEntry::new(kind, text)
             .agent(request.agent.clone())
+            .attested(&request.identity, request.scope.as_deref())
             .connection(request.connection.name.clone())
             .detail(request.summary.clone())
             .outcome(verdict.audit_outcome())
@@ -1054,6 +1139,7 @@ impl Approvals {
                 ),
             )
             .agent(request.agent.clone())
+            .attested(&request.identity, request.scope.as_deref())
             .connection(request.connection.name.clone())
             .detail(request.summary.clone())
             .outcome("approved")
@@ -1246,6 +1332,84 @@ mod tests {
 
     fn request_from(connection: &Connection, agent: &str) -> ApprovalRequest {
         ApprovalRequest::new(connection, agent, "GET /user/repos")
+    }
+
+    /// A request from a verified program, bound to one run of it.
+    fn attested_request(connection: &Connection, agent: &str, run: &str) -> ApprovalRequest {
+        ApprovalRequest::new(connection, agent, "GET /user/repos").requester(
+            crate::attest::AgentIdentity::Verified {
+                program: "Claude Desktop".into(),
+                signer: "Anthropic, PBC".into(),
+                team_id: "TEAM1".into(),
+                identifier: "com.anthropic.claude-desktop".into(),
+            },
+            Some(run.to_string()),
+        )
+    }
+
+    /* ---------------------- run-scoped approval windows -------------------- */
+
+    #[tokio::test]
+    async fn an_attested_window_is_not_joinable_by_claiming_the_same_label() {
+        // The bug this closes: an approval window used to be keyed on the
+        // self-reported label, so anything sending the same string rode a
+        // decision the user made about somebody else.
+        let (approvals, answers, _dir) = auto(ApprovalDecision::ApproveWindow);
+        let conn = connection();
+
+        assert_eq!(
+            approvals
+                .gate(attested_request(&conn, "claude-code", "run-a"))
+                .await,
+            Verdict::Allowed
+        );
+        let asked_once = answers.seen.load(Ordering::SeqCst);
+
+        // Same program, same label, different run: must be asked in its own
+        // name rather than admitted by the first run's window.
+        assert_eq!(
+            approvals
+                .gate(attested_request(&conn, "claude-code", "run-b"))
+                .await,
+            Verdict::Allowed
+        );
+        assert!(
+            answers.seen.load(Ordering::SeqCst) > asked_once,
+            "a second run rode the first run's window instead of being asked"
+        );
+
+        // The original run keeps its window: this narrowed the grant, it did
+        // not throw it away.
+        let before_repeat = answers.seen.load(Ordering::SeqCst);
+        assert_eq!(
+            approvals
+                .gate(attested_request(&conn, "claude-code", "run-a"))
+                .await,
+            Verdict::Allowed
+        );
+        assert_eq!(
+            answers.seen.load(Ordering::SeqCst),
+            before_repeat,
+            "the run that was approved should still be covered by its window"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unattested_caller_keeps_the_label_scoped_window() {
+        // Nothing is proven about these callers, and run-keying them would
+        // re-prompt for traffic the user already approved. They keep the older
+        // behaviour deliberately.
+        let (approvals, answers, _dir) = auto(ApprovalDecision::ApproveWindow);
+        let conn = connection();
+
+        assert_eq!(approvals.gate(request(&conn)).await, Verdict::Allowed);
+        let asked_once = answers.seen.load(Ordering::SeqCst);
+        assert_eq!(approvals.gate(request(&conn)).await, Verdict::Allowed);
+        assert_eq!(
+            answers.seen.load(Ordering::SeqCst),
+            asked_once,
+            "an unattested repeat should ride its label's window"
+        );
     }
 
     /* ------------------------- per-agent scoping -------------------------- */
@@ -1726,7 +1890,7 @@ mod tests {
             .lock()
             .unwrap()
             .grants
-            .get_mut(&(conn.id, "claude-code".to_string()))
+            .get_mut(&(conn.id, Principal::Label("claude-code".to_string())))
             .unwrap()
             .wall_until = Utc::now() - chrono::Duration::seconds(1);
 

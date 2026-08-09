@@ -85,6 +85,12 @@ test('every option says what one of it is, so “another” never stands alone',
   }
 });
 
+test('step 1 leads with connecting Multitool to the selected resource', () => {
+  for (const option of START_OPTIONS) {
+    assert.equal(startAddLead(option), `Connect Multitool to your ${option.unit}.`);
+  }
+});
+
 test('the repeat action names its object rather than a bare “another”', () => {
   assert.equal(
     startAddAnotherLabel(startOptionById('notion'), 'Connect'),

@@ -229,7 +229,54 @@ enum Relay {
 /// request it arrived on finishes.
 type Outbox = tokio::sync::mpsc::UnboundedSender<String>;
 
+/// The header the attestation ticket rides on, matching
+/// `aka_core::attest::ATTESTATION_HEADER`.
+const ATTESTATION_HEADER: &str = "x-multitool-attestation";
+
+/// Whether this frame is the handshake that opens a session. Only that one
+/// carries an attestation ticket; every later request inherits the identity
+/// the session already holds.
+fn is_initialize(message: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(message)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .map(|method| method == "initialize")
+        })
+        .unwrap_or(false)
+}
+
 impl Bridge {
+    /// Ask the broker what it can prove about this process, over the control
+    /// socket where our peer credentials are visible.
+    ///
+    /// Every failure is `None`: an older broker without the route, a
+    /// platform with no attestation, or a caller nothing can be proven about
+    /// all mean the same thing — the session is unattested, which is a state
+    /// the UI renders rather than an error worth failing the handshake over.
+    async fn attestation_ticket(&self) -> Option<String> {
+        let (status, body) = crate::client::unix_http(
+            &self.paths.socket_file(),
+            "POST",
+            "/v1/attest",
+            Some("{}"),
+            Some(&self.token()),
+            self.label.as_deref(),
+        )
+        .await
+        .ok()?;
+        if status != 200 {
+            return None;
+        }
+        serde_json::from_str::<serde_json::Value>(&body)
+            .ok()?
+            .get("ticket")?
+            .as_str()
+            .map(str::to_string)
+    }
+
     async fn post(&self, message: &str, out: &Outbox) -> Result<Relay, String> {
         let mut request = self
             .http
@@ -244,6 +291,19 @@ impl Bridge {
         }
         if let Some(label) = &self.label {
             request = request.header("x-multitool-client", label.clone());
+        }
+        // The MCP leg is loopback TCP, so the host cannot see which program is
+        // behind it. A ticket fetched over the control socket — where the
+        // broker *can* read our peer credentials — carries that across.
+        //
+        // Fetched per initialize rather than once at startup: tickets are
+        // single-use, and session recovery re-initializes, so a cached one
+        // would be spent on the first handshake and leave every recovered
+        // session unattested.
+        if is_initialize(message) {
+            if let Some(ticket) = self.attestation_ticket().await {
+                request = request.header(ATTESTATION_HEADER, ticket);
+            }
         }
         // SEP-2243: surface the JSON-RPC method (and named tool/prompt) as
         // routing headers so the host and any load balancer between it and

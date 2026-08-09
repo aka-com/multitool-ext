@@ -602,8 +602,21 @@ function seedFixtures() {
     ['allowedOnce', 'Allowed this request: claude-code', 'Connect to Postgres → app@db.internal.aka.com:5432/app_production', 1500, 'claude-code'],
     ['paired', 'Agent connected: claude-code', null, 3000, 'claude-code'],
   ];
-  fixtures.forEach(([kind, text, detail, minutes, agent]) =>
-    db.activity.push({ ...MOCK_ACTIVITY_META[kind], text, detail, agent, at: t(minutes) }));
+  fixtures.forEach(([kind, text, detail, minutes, agent]) => {
+    const identity = agent === 'claude-code'
+      ? {
+          kind: 'verified' as const,
+          program: 'Claude Desktop',
+          signer: 'Anthropic, PBC',
+          team_id: 'Q6L2SF6YDW',
+          identifier: 'com.anthropic.claude-desktop',
+        }
+      : agent ? { kind: 'unattested' as const } : undefined;
+    const session = agent ? `${agent}-fixture-run` : undefined;
+    db.activity.push({
+      ...MOCK_ACTIVITY_META[kind], text, detail, agent, identity, session, at: t(minutes),
+    });
+  });
   // The only fixture that needs the broker's audit `kind` on the wire: the
   // Connect-agents walkthrough reads it to tell whether a cloud session has
   // ever been minted, which is how its second step finishes.
@@ -672,6 +685,14 @@ function seedFixtures() {
       type: github.type,
       target: connTarget(github),
       agent: 'claude-code',
+      identity: {
+        kind: 'verified',
+        program: 'Claude Desktop',
+        signer: 'Anthropic, PBC',
+        team_id: 'Q6L2SF6YDW',
+        identifier: 'com.anthropic.claude-desktop',
+      },
+      run_scoped: true,
       summary: 'POST /repos/aka/aka/issues',
       detail: '{"title":"Flaky test in pg_proxy","labels":["bug"]}',
       waiting: 1,
@@ -712,6 +733,8 @@ function seedFixtures() {
       unit: 'session',
       target: connTarget(prodDb),
       agent: 'deploy-script',
+      identity: { kind: 'unattested' },
+      run_scoped: false,
       summary: 'New Postgres session',
       detail: 'psql · user=app',
       consequence:
@@ -737,6 +760,13 @@ function seedFixtures() {
       unit: 'login',
       target: connTarget(prodSsh),
       agent: 'claude-code',
+      identity: {
+        kind: 'verified_signer',
+        signer: 'Anthropic, PBC',
+        team_id: 'Q6L2SF6YDW',
+        identifier: 'com.anthropic.claude-code',
+      },
+      run_scoped: true,
       summary: `SSH login as ${connTarget(prodSsh)}`,
       detail: 'host key SHA256:t3kZ0h1Qm7pXvB2nR8sLdY4wJcF6aGuE9oNbT5iKxWs',
       consequence:

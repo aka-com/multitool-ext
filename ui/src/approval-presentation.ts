@@ -1,4 +1,4 @@
-import type { Approval } from './types';
+import type { AgentIdentity, Approval } from './types';
 
 const KNOWN_NAMES: Readonly<Record<string, string>> = {
   github: 'GitHub',
@@ -13,16 +13,71 @@ export function approvalToolName(connection: string): string {
   return KNOWN_NAMES[connection.trim().toLowerCase()] ?? connection;
 }
 
-/** Agent names are self-reported identifiers. Make their separators readable
- * without pretending they are verified identities. */
-export function approvalAgentName(agent: string): string {
-  if (agent === 'endpoint') return 'Direct Endpoint Client';
-  return agent
-    .trim()
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ') || 'Unknown Agent';
+/**
+ * How to refer to whoever is calling.
+ *
+ * Multitool only prints a name it can vouch for. A self-reported label is
+ * whatever the caller typed, so rendering it puts attacker-chosen text into
+ * the sentence a user reads while deciding whether to trust that caller —
+ * `agent` is therefore never displayed, only recorded. When the OS proved
+ * nothing, the app says "an agent", which is both honest and enough: the user
+ * knows what they just asked for.
+ *
+ * `lead` starts a sentence, `mid` sits inside one. That is the only
+ * grammatical wrinkle the three states introduce, and keeping the two forms
+ * here is what stops each call site from inventing its own.
+ */
+export interface AgentNaming {
+  /** Sentence-initial: "An agent wants to…". */
+  lead: string;
+  /** Mid-sentence: "Allow this agent to…". */
+  mid: string;
+  /** The verified program name, when there is one, for a name + check mark. */
+  program?: string;
+  /** The verified signing organisation, when the program has no name. */
+  signer?: string;
+  verified: boolean;
+}
+
+/** The one label that is not a self-reported name: the broker sets it on its
+ * own direct-endpoint plane, so it is a fact about the transport rather than a
+ * claim by the caller, and stays worth showing. */
+const ENDPOINT_LABEL = 'endpoint';
+
+export function agentNaming(
+  identity?: AgentIdentity | null,
+  agent?: string | null,
+): AgentNaming {
+  if (identity?.kind !== 'verified' && identity?.kind !== 'verified_signer'
+      && agent === ENDPOINT_LABEL) {
+    return {
+      lead: 'A direct endpoint client',
+      mid: 'this direct endpoint client',
+      verified: false,
+    };
+  }
+  switch (identity?.kind) {
+    case 'verified':
+      return {
+        lead: identity.program,
+        mid: identity.program,
+        program: identity.program,
+        verified: true,
+      };
+    case 'verified_signer':
+      // The signer is an organisation, not the program, so it is never put
+      // where a program name would go — deriving "Claude Code" from
+      // `com.anthropic.claude-code` would be exactly the guess this design
+      // exists to avoid.
+      return {
+        lead: `An agent from ${identity.signer}`,
+        mid: `an agent from ${identity.signer}`,
+        signer: identity.signer,
+        verified: true,
+      };
+    default:
+      return { lead: 'An agent', mid: 'this agent', verified: false };
+  }
 }
 
 /** Compatibility for brokers that predate structured operation fields. Only
@@ -73,8 +128,17 @@ export function approvalWantsLine(approval: Approval): string {
   const clause = /^[A-Z][a-z]/.test(action)
     ? action.charAt(0).toLowerCase() + action.slice(1)
     : action;
-  return `${approvalAgentName(approval.agent)} wants to ${clause} on ${
+  return `${agentNaming(approval.identity, approval.agent).lead} wants to ${clause} on ${
     approvalToolName(approval.connection)}`;
+}
+
+/** What the approve-for-a-while button promises. A window on an attested
+ * caller binds to that one run; on an unattested one it covers whatever next
+ * sends the same label, and the button must not imply otherwise. */
+export function approvalWindowLabel(approval: Approval, minutes: number): string {
+  return approval.run_scoped
+    ? `Approve this session for ${minutes} min`
+    : `Approve for ${minutes} min`;
 }
 
 /** Short consequence under the question. Host-key approval is durable rather

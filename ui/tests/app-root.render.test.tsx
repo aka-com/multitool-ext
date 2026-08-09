@@ -167,7 +167,7 @@ test('the application root boots against the mock bridge', () => {
 });
 
 test('secondary pages offer a titlebar Back button to Inventory', async () => {
-  for (const [tab, title] of [['activity', 'Activity log'], ['start', 'Connect agents']] as const) {
+  for (const [tab, title] of [['activity', 'Activity log']] as const) {
     goToTab(tab);
     const heading = await testingLibrary.waitFor(() => {
       const found = document.querySelector<HTMLElement>('.dw-head');
@@ -187,6 +187,14 @@ test('secondary pages offer a titlebar Back button to Inventory', async () => {
       assert.equal(testingLibrary.queryByRole(titlebar, 'button', { name: 'Back' }), null);
     });
   }
+
+  goToTab('start');
+  assert.equal(document.querySelector('.dw-head'), null,
+    'Connect agents starts with its editable sentence instead of a redundant page heading');
+  const titlebar = document.querySelector<HTMLElement>('.dw-titlebar')!;
+  testingLibrary.fireEvent.click(
+    testingLibrary.getByRole(titlebar, 'button', { name: 'Back' }),
+  );
 });
 
 test('desktop settings visibility is independent from the menu bar', async () => {
@@ -402,7 +410,7 @@ test('the typed add sheet saves passwords with a 2FA seed', { timeout: 8_000 }, 
   assert.deepEqual(
     [...document.querySelectorAll<HTMLElement>('.add-credential-menu .cred-name')]
       .map((label) => label.textContent),
-    ['Add password', 'Add secret', 'Add tool'],
+    ['Add agent tool', 'Add password', 'Add secret'],
   );
   testingLibrary.fireEvent.click(passwordOption);
   const dialog = await testingLibrary.findByRole(document.body, 'dialog', {
@@ -1143,7 +1151,7 @@ test('the hero-sentence menus open and move under the arrow keys', async () => {
   });
 });
 
-test('the activity agent filter holds one agent at a time', async () => {
+test('the activity agent filter uses verified programs and broker sessions', async () => {
   goToTab('activity');
   const trigger = await testingLibrary.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
@@ -1167,19 +1175,20 @@ test('the activity agent filter holds one agent at a time', async () => {
   assert.equal(options[0].textContent, 'All agents');
   assert.equal(options[0].getAttribute('aria-selected'), 'true');
 
-  const agent = options[1].dataset.value!;
+  const attribution = options[1].dataset.value!;
+  const label = options[1].querySelector('span')!.textContent!;
   testingLibrary.fireEvent.click(options[1]);
   await testingLibrary.waitFor(() => {
     assert.equal(document.querySelector('.act-filter-menu'), null);
-    assert.equal(trigger.textContent, `Agent:${agent}`);
+    assert.equal(trigger.textContent, `Agent:${label}`);
     assert.ok(trigger.classList.contains('on'));
   });
 
-  // Every mounted entry belongs to the chosen agent — one filter, not the
-  // union the chip row allowed.
-  const chips = [...document.querySelectorAll<HTMLElement>('.act-chip.untrusted-identity')];
-  assert.ok(chips.length, 'the filtered list still has entries');
-  for (const chip of chips) assert.equal(chip.textContent, `reported as “${agent}”`);
+  assert.match(attribution, /^(program|signer|session|legacy):/);
+  const chips = [...document.querySelectorAll<HTMLElement>('.act-chip-verified')];
+  assert.ok(chips.length, 'the filtered list still has verified attribution');
+  for (const chip of chips) assert.match(chip.textContent!, new RegExp(label));
+  assert.doesNotMatch(document.querySelector('.activity-view')?.textContent ?? '', /reported as/);
 
   testingLibrary.fireEvent.click(trigger);
   const back = await testingLibrary.findByRole(document.body, 'option', { name: 'All agents' });
