@@ -174,11 +174,9 @@ impl AuthError {
             Self::EnrollmentRefused => {
                 "enrollment is not open, or that is not the secret it issued".into()
             }
-            Self::InviteRefused => {
-                "that invite is unknown, has expired, or has already been \
+            Self::InviteRefused => "that invite is unknown, has expired, or has already been \
                  redeemed; ask the operator for a fresh `aka admin invite`"
-                    .into()
-            }
+                .into(),
             Self::Ceremony(what) => format!("the passkey ceremony could not be completed: {what}"),
             Self::Invalid(what) => format!("{what} is not valid, has expired, or has been used"),
             Self::RefreshReuse => {
@@ -903,6 +901,28 @@ impl AuthStore {
         });
     }
 
+    /// Whether a session cookie still authenticates, without counting as
+    /// activity.
+    ///
+    /// The SSE revalidator asks this every second for the stream's whole
+    /// lifetime. `verify_session` touches `last_seen_at`, and a touch from
+    /// that loop would make any open tab immortal against `SESSION_IDLE`:
+    /// the idle rule measures the *user*, so only real requests may reset
+    /// it. Expired rows are left for the next `verify_session` or
+    /// `prune_sessions` to remove — this path takes no lock on the file.
+    pub fn session_still_valid(&self, cookie: &str) -> bool {
+        let Some(offered) = shaped(cookie, SESSION_PREFIX) else {
+            return false;
+        };
+        let now = Utc::now();
+        let state = self.locked();
+        state.sessions.iter().any(|session| {
+            session.token_hash == offered
+                && session.expires_at > now
+                && session.last_seen_at + SESSION_IDLE > now
+        })
+    }
+
     /// Verify a session cookie.
     ///
     /// Pass `csrf` as `Some` for an unsafe method so we can check it against
@@ -1455,6 +1475,41 @@ mod tests {
         assert_eq!(verified.surface, ClientSurface::Web);
         assert!(verified.scopes.contains(Scope::ManageWrite));
         assert!(verified.authenticated_at.is_some());
+    }
+
+    #[test]
+    fn stream_revalidation_does_not_count_as_user_activity() {
+        let store = store();
+        let account = enrolled(&store);
+        let issued = store
+            .create_session(account.id, Uuid::new_v4(), ScopeSet::all())
+            .unwrap();
+
+        // Backdate the session so any touch would be visible (and overdue,
+        // were the caller `verify_session`).
+        let backdated = Utc::now() - ChronoDuration::hours(1);
+        {
+            let mut state = store.locked();
+            state.sessions[0].last_seen_at = backdated;
+        }
+        assert!(store.session_still_valid(&issued.cookie));
+        assert_eq!(
+            store.locked().sessions[0].last_seen_at,
+            backdated,
+            "the stream's liveness check must not reset the idle clock"
+        );
+        assert!(!store.session_still_valid("akases_bogus"));
+
+        // The ordinary verify is what counts as activity.
+        store.verify_session(&issued.cookie, None).unwrap();
+        assert!(store.locked().sessions[0].last_seen_at > backdated);
+
+        // Once the idle window lapses, the non-touching check refuses too.
+        {
+            let mut state = store.locked();
+            state.sessions[0].last_seen_at = Utc::now() - SESSION_IDLE - ChronoDuration::seconds(1);
+        }
+        assert!(!store.session_still_valid(&issued.cookie));
     }
 
     #[test]

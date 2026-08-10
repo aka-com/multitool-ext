@@ -130,7 +130,9 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
   /* ------------------------- this shell, only ------------------------- */
 
   // Which broker the app manages is a property of this installation. A
-  // browser is already *at* one broker — the one that served the page.
+  // browser is already *at* one broker — the one that served the page —
+  // so the web bridge answers this one itself (see `webBrokerProfile`)
+  // instead of surfacing this refusal.
   get_broker_profile: native('the web app is served by the broker it manages'),
   connect_remote_broker: native('the web app is served by the broker it manages'),
   sign_in_remote_broker: native('the web app signs in on this page, not through a device grant'),
@@ -320,6 +322,12 @@ export const COMMANDS: { [K in CommandName]: CommandSpec } = {
     body: NO_BODY,
   }),
   get_endpoint: broker('GET', '/v1/manage/connections/:connectionId/endpoint'),
+  // The copy read-back, distinct from get_endpoint: it takes the broker's
+  // copy gate and writes the "Direct endpoint copied" audit entry. The web
+  // app renders the format client-side and copies with the browser API.
+  copy_endpoint_value: broker('POST', '/v1/manage/connections/:connectionId/endpoint/copy', {
+    body: NO_BODY,
+  }),
   set_endpoint_expiry: broker('POST', '/v1/manage/connections/:connectionId/endpoint/expiry', {
     body: pick('expire'),
   }),

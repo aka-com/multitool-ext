@@ -136,34 +136,32 @@ fn connection() -> Value {
 }
 
 #[test]
-fn bare_cli_prints_short_help_successfully_and_long_help_keeps_operator_commands() {
+fn bare_cli_is_contextual_and_help_commands_keep_the_command_reference() {
     let bare = Command::new(env!("CARGO_BIN_EXE_aka")).output().unwrap();
     assert_success(&bare);
     assert!(bare.stderr.is_empty());
-    let bare_help = String::from_utf8(bare.stdout).unwrap();
-    assert!(bare_help.contains("USE A CONNECTION"));
-    assert!(bare_help.contains("GET STARTED"));
+    let bare_home = String::from_utf8(bare.stdout).unwrap();
+    assert!(bare_home.starts_with(&format!("aka {}\n", env!("CARGO_PKG_VERSION"))));
     assert!(
-        bare_help.find("USE A CONNECTION") < bare_help.find("GET STARTED"),
-        "connection commands should come first: {bare_help}"
+        bare_home
+            .lines()
+            .nth(2)
+            .is_some_and(|line| line.contains(" - ")),
+        "{bare_home}"
     );
-    assert!(bare_help.contains("run <conn> -- <cmd>"));
-    assert!(bare_help.contains("env <conn>"));
-    assert!(bare_help.contains("aka run <conn> -- psql"));
+    assert!(!bare_home.contains("CONTEXT"), "{bare_home}");
+    assert!(!bare_home.contains("STATUS"), "{bare_home}");
+    assert!(bare_home.contains("NEXT"), "{bare_home}");
+    assert!(bare_home.contains("MORE"), "{bare_home}");
     assert!(
-        bare_help.contains("Put your command after `--` to run it with short-lived credentials:")
+        bare_home.contains("aka -h for common commands\naka --help for full reference"),
+        "{bare_home}"
     );
-    assert!(bare_help.contains("  skill"), "{bare_help}");
-    assert!(bare_help.contains("    api <name>"), "{bare_help}");
-    assert!(bare_help.contains("      aws <name>"), "{bare_help}");
-    assert!(bare_help.contains("OPERATOR"));
-    assert!(bare_help.contains("RUNTIME"));
-    assert!(!bare_help.contains("ADVANCED"));
-    assert!(bare_help.contains("completions <shell>"));
-    assert!(!bare_help.contains("Run `aka <command> --help`"));
-    // Bare `aka` frames the help with a best-effort live status line.
-    assert!(bare_help.contains("broker"), "{bare_help}");
-    assert!(!bare_help.contains("run a headless broker — or open the Multitool app"));
+    assert!(!bare_home.contains("https://example.com"), "{bare_home}");
+    assert!(!bare_home.contains("USAGE"), "{bare_home}");
+    assert!(!bare_home.contains("USE A CONNECTION"), "{bare_home}");
+    assert!(!bare_home.contains("RUNTIME"), "{bare_home}");
+    assert!(!bare_home.contains("Brokered credentials for AI agents"));
 
     let short = Command::new(env!("CARGO_BIN_EXE_aka"))
         .arg("-h")
@@ -171,25 +169,189 @@ fn bare_cli_prints_short_help_successfully_and_long_help_keeps_operator_commands
         .unwrap();
     assert_success(&short);
     let short_help = String::from_utf8(short.stdout).unwrap();
+    assert!(short_help.contains("USE A CONNECTION"));
+    assert!(short_help.contains("GET STARTED"));
+    assert!(short_help.contains(&format!("aka {}\nUSAGE", env!("CARGO_PKG_VERSION"))));
+    assert!(!short_help.contains("Agent access for APIs, MCPs, databases, and servers"));
     assert!(
-        bare_help.contains(short_help.trim_end()),
-        "bare aka embeds the short help verbatim"
+        short_help.find("USE A CONNECTION") < short_help.find("GET STARTED"),
+        "connection commands should come first: {short_help}"
+    );
+    assert!(short_help.contains("run <conn> -- <cmd>"));
+    assert!(short_help.contains("env <conn>"));
+    assert!(short_help.contains("Run with brokered credentials"));
+    assert!(!short_help.contains("Run a command with brokered credentials"));
+    assert!(short_help.contains("aka run <conn> -- psql"));
+    assert!(short_help.contains("Run commands after `--` with short-lived credentials:"));
+    assert!(!short_help.contains("  skill"), "{short_help}");
+    assert!(!short_help.contains("    api <name>"), "{short_help}");
+    assert!(!short_help.contains("      aws <name>"), "{short_help}");
+    assert!(
+        short_help.lines().any(|line| line.starts_with(" logout")),
+        "{short_help}"
+    );
+    assert!(
+        !short_help.lines().any(|line| line.starts_with(" skill ")),
+        "{short_help}"
+    );
+    assert!(short_help.contains("setup skill"), "{short_help}");
+    assert!(short_help.contains("setup instructions"), "{short_help}");
+    assert!(short_help.contains("setup desktop"), "{short_help}");
+    assert!(
+        short_help.contains("Show desktop connection details"),
+        "{short_help}"
+    );
+    assert!(short_help.contains("conn [add | …]"), "{short_help}");
+    assert!(short_help.contains("secret [add | …]"), "{short_help}");
+    assert!(!short_help.contains("commands:"), "{short_help}");
+    assert!(short_help.contains("cloud creds <conn>"), "{short_help}");
+    assert!(short_help.contains("cloud config <conn>"), "{short_help}");
+    assert!(!short_help.contains("cloud install <conn>"), "{short_help}");
+    assert!(!short_help.contains("settings: get | set"), "{short_help}");
+    assert!(short_help.contains("OPERATOR"));
+    assert!(short_help.contains("RUNTIME"));
+    assert!(!short_help.contains("ADVANCED"));
+    assert!(short_help.contains("completions <shell>"));
+    assert!(short_help.contains("FULL REFERENCE"));
+    assert!(short_help.contains("aka --help"));
+    assert!(!short_help.contains("aka --help --help"));
+    assert!(!short_help.contains("Run `aka <command> --help`"));
+    let description_columns = [
+        "Run with brokered credentials",
+        "Show broker status",
+        "Add and manage connections",
+        "Show pending and recent approval requests and questions",
+        "Run a headless broker",
+        "Run the MCP stdio bridge",
+    ]
+    .map(|description| {
+        short_help
+            .lines()
+            .find(|line| line.contains(description))
+            .and_then(|line| {
+                line.find(description)
+                    .map(|byte| line[..byte].chars().count())
+            })
+            .unwrap()
+    });
+    assert!(
+        description_columns
+            .windows(2)
+            .all(|pair| pair[0] == pair[1]),
+        "root command descriptions should share one column: {short_help}"
     );
     assert!(!short_help.contains("NEXT"), "-h stays a pure help page");
 
-    let long = Command::new(env!("CARGO_BIN_EXE_aka"))
+    let regular = Command::new(env!("CARGO_BIN_EXE_aka"))
         .arg("--help")
         .output()
         .unwrap();
-    assert_success(&long);
-    let long_help = String::from_utf8(long.stdout).unwrap();
+    assert_success(&regular);
+    let regular_help = String::from_utf8(regular.stdout).unwrap();
+    assert_ne!(regular_help, short_help);
+    assert!(regular_help.contains("    api <name>"), "{regular_help}");
+    assert!(regular_help.contains("      aws <name>"), "{regular_help}");
+
+    let full = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["--help", "--help"])
+        .output()
+        .unwrap();
+    assert_success(&full);
+    let long_help = String::from_utf8(full.stdout).unwrap();
+    assert_eq!(long_help, regular_help);
     assert!(long_help.contains("OPERATOR"));
     assert!(long_help.contains("RUNTIME"));
     assert!(!long_help.contains("ADVANCED"));
-    assert!(long_help.contains("COMMON WORKFLOWS"));
-    assert!(long_help.contains("aka setup <client>"));
+    assert!(long_help.contains("EXAMPLES"));
+    assert!(long_help.contains("aka setup codex --write"));
+    assert!(!long_help.contains("Run a headless broker    aka serve"));
+    assert!(!long_help.contains("Add a connection         aka conn add pg --help"));
+    assert!(long_help.contains("  skill"), "{long_help}");
+    assert!(
+        !long_help.lines().any(|line| line.starts_with(" skill ")),
+        "{long_help}"
+    );
+    assert!(long_help.contains("    api <name>"), "{long_help}");
+    assert!(long_help.contains("      aws <name>"), "{long_help}");
+    assert!(
+        long_help.contains("List connections available to this agent"),
+        "{long_help}"
+    );
+    assert!(
+        long_help.contains("List all configured connections, including disabled connections"),
+        "{long_help}"
+    );
+
+    for (command, description) in [
+        ("status", "Check the broker at this URL"),
+        ("activity", "Read activity from this broker URL"),
+        ("sessions", "List or close sessions on this broker URL"),
+        ("approvals", "Read approval requests from this broker URL"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+            .args([command, "--help"])
+            .output()
+            .unwrap();
+        assert_success(&output);
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains(description), "{command} help:\n{help}");
+    }
+    for (args, description) in [
+        (
+            &["use", "--help"][..],
+            "Clear the saved default context. Environment and repository",
+        ),
+        (
+            &["admin", "token", "--help"][..],
+            "Disable token-based management access. Passkey, device, and",
+        ),
+        (
+            &["approve", "--help"][..],
+            "Approve a pending request for the displayed time window",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_success(&output);
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            help.contains(description),
+            "{} help:\n{help}",
+            args.join(" ")
+        );
+    }
+    let onboarding_rows =
+        [" setup ", " login <url>", " use ", " status ", " logout "].map(|prefix| {
+            long_help
+                .lines()
+                .position(|line| line.starts_with(prefix))
+                .unwrap()
+        });
+    assert!(
+        onboarding_rows.windows(2).all(|rows| rows[0] < rows[1]),
+        "onboarding commands should follow their lifecycle: {long_help}"
+    );
+    assert!(
+        long_help.lines().any(|line| line.starts_with(" logout")),
+        "{long_help}"
+    );
+    assert!(!long_help.contains("conn [add | …]"), "{long_help}");
     assert!(!long_help.contains("Run `aka <command> --help`"));
     assert!(!long_help.contains("\nOTHER\n"));
+
+    let nested = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["serve", "--help"])
+        .output()
+        .unwrap();
+    assert_success(&nested);
+    assert!(
+        String::from_utf8(nested.stdout)
+            .unwrap()
+            .contains("instead of the bundled one"),
+        "nested --help should retain its detailed reference"
+    );
 }
 
 #[test]
@@ -209,7 +371,7 @@ fn status_is_machine_readable_and_classifies_a_missing_broker() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["running"], false);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no broker is running"));
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -328,15 +490,46 @@ fn setup_generates_paste_ready_mcp_client_configuration() {
     assert_success(&codex);
     assert_eq!(
         String::from_utf8(codex.stdout).unwrap(),
-        "[mcp_servers.multitool]\ncommand = \"aka\"\nargs = [\"mcp\", \"--client\", \"codex\"]\n"
+        "codex mcp add multitool -- aka mcp --client codex\n"
+    );
+    let stderr = String::from_utf8_lossy(&codex.stderr);
+    assert!(stderr.contains("Codex setup command"), "{stderr}");
+    assert!(stderr.contains("no changes made"), "{stderr}");
+    assert!(stderr.contains("aka setup codex --write"), "{stderr}");
+
+    let codex_json = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["--json", "setup", "codex"])
+        .output()
+        .unwrap();
+    assert_success(&codex_json);
+    let body: Value = serde_json::from_slice(&codex_json.stdout).unwrap();
+    assert_eq!(body["target"], "Codex CLI");
+    assert_eq!(body["format"], "shell");
+    assert_eq!(
+        body["content"],
+        "codex mcp add multitool -- aka mcp --client codex\n"
     );
 
     let claude = Command::new(env!("CARGO_BIN_EXE_aka"))
-        .args(["--json", "setup", "claude-code"])
+        .args(["setup", "claude-code"])
         .output()
         .unwrap();
     assert_success(&claude);
-    let body: Value = serde_json::from_slice(&claude.stdout).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&claude.stdout),
+        "claude mcp add multitool -- aka mcp --client claude-code\n"
+    );
+    let stderr = String::from_utf8_lossy(&claude.stderr);
+    assert!(stderr.contains("Claude Code setup command"), "{stderr}");
+    assert!(stderr.contains("no changes made"), "{stderr}");
+    assert!(stderr.contains("aka setup claude-code --write"), "{stderr}");
+
+    let claude_json = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["--json", "setup", "claude-code"])
+        .output()
+        .unwrap();
+    assert_success(&claude_json);
+    let body: Value = serde_json::from_slice(&claude_json.stdout).unwrap();
     assert_eq!(body["client"], "claude-code");
     assert_eq!(body["target"], "Claude Code CLI");
     assert_eq!(body["command"], "aka");
@@ -345,6 +538,19 @@ fn setup_generates_paste_ready_mcp_client_configuration() {
         body["content"],
         "claude mcp add multitool -- aka mcp --client claude-code\n"
     );
+
+    let desktop = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["setup", "claude-desktop"])
+        .output()
+        .unwrap();
+    assert_success(&desktop);
+    let stdout = String::from_utf8_lossy(&desktop.stdout);
+    assert!(stdout.contains("\"mcpServers\""), "{stdout}");
+    assert!(stdout.contains("\"claude-desktop\""), "{stdout}");
+    let stderr = String::from_utf8_lossy(&desktop.stderr);
+    assert!(stderr.contains("requires a manual config edit"), "{stderr}");
+    assert!(stderr.contains("--write` only prepares"), "{stderr}");
+    assert!(stderr.contains("no changes made"), "{stderr}");
 
     let help = Command::new(env!("CARGO_BIN_EXE_aka"))
         .args(["setup", "--help"])
@@ -365,6 +571,24 @@ fn setup_generates_paste_ready_mcp_client_configuration() {
 }
 
 #[test]
+fn setup_skill_labels_preview_without_polluting_stdout() {
+    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["setup", "skill"])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("---\n"), "{stdout}");
+    assert!(stdout.contains("name: multitool"), "{stdout}");
+    assert!(!stdout.contains("no changes made"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Agent skill preview"), "{stderr}");
+    assert!(stderr.contains("no changes made"), "{stderr}");
+    assert!(stderr.contains("aka setup skill --write"), "{stderr}");
+}
+
+#[test]
 fn explicit_missing_roots_are_not_created_by_mutations() {
     let parent = tempfile::tempdir().unwrap();
     let missing = parent.path().join("typo");
@@ -373,7 +597,9 @@ fn explicit_missing_roots_are_not_created_by_mutations() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not an existing broker root"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("is not a broker root"));
+    assert!(!stderr.contains("Using broker root"), "{stderr}");
     assert!(!missing.exists(), "a typo must not create broker state");
 }
 
@@ -473,7 +699,7 @@ fn broker_url_environment_rotates_the_current_management_token_online() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("AKA_MANAGE_TOKEN still contains the superseded token"),
+        stderr.contains("AKA_MANAGE_TOKEN") && stderr.contains("previous token"),
         "{stderr}"
     );
     handle.join().unwrap();
@@ -499,7 +725,13 @@ fn broker_url_environment_applies_to_agent_key_reads() {
         },
     ]);
     let output = Command::new(env!("CARGO_BIN_EXE_aka"))
-        .args(["--json", "admin", "agent-key", "--root", root.path().to_str().unwrap()])
+        .args([
+            "--json",
+            "admin",
+            "agent-key",
+            "--root",
+            root.path().to_str().unwrap(),
+        ])
         .env("AKA_MANAGE_TOKEN", "akamgr_test")
         .env("AKA_BROKER_URL", &url)
         .output()
@@ -812,7 +1044,7 @@ fn remote_commands_fail_with_auth_exit_code_before_network_without_a_token() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no management token"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Live management requires a token"));
 }
 
 /// `aka login` speaks the join protocol: the invite rides in the URL
@@ -856,7 +1088,6 @@ fn login_redeems_an_invite_over_the_join_endpoint() {
     // A refused invite is an authentication failure, not a generic error.
     assert_eq!(output.status.code(), Some(4));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("refused the invite"), "{stderr}");
     assert!(stderr.contains("already been redeemed"), "{stderr}");
 
     let request = requests.lock().unwrap()[0].clone();
@@ -929,7 +1160,9 @@ fn run_and_env_reach_a_remote_broker_with_the_agent_key() {
             "{request}"
         );
         assert!(
-            request.to_lowercase().contains("x-multitool-client: ci-runner"),
+            request
+                .to_lowercase()
+                .contains("x-multitool-client: ci-runner"),
             "{request}"
         );
     }
@@ -1041,14 +1274,33 @@ fn ls_falls_back_to_the_agent_catalog_without_a_management_token() {
 /// each step separately, and stays one JSON envelope.
 #[test]
 fn setup_write_applies_the_skill_and_pin_and_emits_one_envelope() {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let home = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let codex = bin.join("codex");
+    std::fs::write(
+        &codex,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CODEX_CALLS\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let codex_calls = home.path().join("codex-calls");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let aka = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_aka"))
             .args(args)
             .current_dir(repo.path())
             .env("HOME", home.path())
             .env("XDG_CONFIG_HOME", home.path().join(".config"))
+            .env("CODEX_CALLS", &codex_calls)
+            .env("PATH", &path)
             .env_remove("AKA_BROKER")
             .env_remove("AKA_BROKER_URL")
             .output()
@@ -1059,17 +1311,31 @@ fn setup_write_applies_the_skill_and_pin_and_emits_one_envelope() {
     // claiming agents are pointed anywhere.
     let output = aka(&["setup", "codex", "--write"]);
     assert_success(&output);
-    assert!(repo.path().join(".claude/skills/multitool/SKILL.md").exists());
+    assert!(repo
+        .path()
+        .join(".claude/skills/multitool/SKILL.md")
+        .exists());
     assert!(!repo.path().join(".aka").exists());
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("registered MCP server multitool with Codex"),
+        "{stderr}"
+    );
     assert!(stderr.contains("no broker context pinned"), "{stderr}");
 
     // With one, the repo is pinned to it.
-    assert_success(&aka(&["use", "corp", "--broker", "https://broker.example.dev"]));
+    assert_success(&aka(&[
+        "use",
+        "corp",
+        "--broker",
+        "https://broker.example.dev",
+    ]));
     let output = aka(&["setup", "codex", "--write"]);
     assert_success(&output);
     assert_eq!(
-        std::fs::read_to_string(repo.path().join(".aka")).unwrap().trim(),
+        std::fs::read_to_string(repo.path().join(".aka"))
+            .unwrap()
+            .trim(),
         "corp"
     );
 
@@ -1086,5 +1352,49 @@ fn setup_write_applies_the_skill_and_pin_and_emits_one_envelope() {
     assert_eq!(objects[0]["action"], "setup.write");
     let steps = objects[0]["result"]["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 3);
-    assert!(steps.iter().any(|s| s["step"] == "skill" && s["applied"] == true));
+    assert!(steps
+        .iter()
+        .any(|s| s["step"] == "skill" && s["applied"] == true));
+    assert!(steps
+        .iter()
+        .any(|s| s["step"] == "mcp" && s["applied"] == true));
+
+    let calls = std::fs::read_to_string(codex_calls).unwrap();
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        vec![
+            "mcp add multitool -- aka mcp --client codex",
+            "mcp add multitool -- aka mcp --client codex",
+            "mcp add multitool -- aka mcp --client codex",
+        ]
+    );
+}
+
+#[test]
+fn claude_desktop_setup_write_is_explicitly_repo_only() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_aka"))
+        .args(["setup", "claude-desktop", "--write"])
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env_remove("AKA_BROKER")
+        .env_remove("AKA_BROKER_URL")
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("requires a manual edit"), "{stderr}");
+    assert!(
+        stderr.contains("--write only prepares this repository"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\"mcpServers\""), "{stderr}");
+    assert!(repo
+        .path()
+        .join(".claude/skills/multitool/SKILL.md")
+        .exists());
 }

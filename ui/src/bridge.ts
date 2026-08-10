@@ -72,8 +72,11 @@ async function developmentMock() {
   return import('./mock-bridge');
 }
 
-/** Which window chrome to render, from the URL hash. */
-export const mode = location.hash.replace('#', '') || 'window';
+/** Which window chrome to render, from the URL hash. The hash is the
+ * desktop shell's channel for naming its tray and popup surfaces; in a
+ * browser anyone can type one, and a hand-typed #dropdown would boot tray
+ * chrome full of native calls — the web app is always the plain window. */
+export const mode = webHost ? 'window' : location.hash.replace('#', '') || 'window';
 
 export async function invoke<K extends CommandName>(
   command: K,
@@ -86,15 +89,21 @@ export async function invoke<K extends CommandName>(
     ) as Promise<CommandResult<K>>;
   }
   if (webHost) {
+    const http = await import('./http-bridge');
+    // The desktop asks its shell which broker it manages. A browser is
+    // already at the answer — the broker that served this page — so the
+    // bridge answers locally instead of refusing a native command and
+    // leaving the app to guess at a dead local broker.
+    if (command === 'get_broker_profile') {
+      return http.webBrokerProfile() as Promise<CommandResult<K>>;
+    }
     // Refuse here rather than at the network: a native command has no
     // route to attempt, and a 404 would read as a broker problem.
     if (commandHost(command) === 'native') {
-      const http = await import('./http-bridge');
       throw new http.NotAvailableHereError(
         `${command} is only available in the desktop app: ${nativeOnlyReason(command)}`,
       );
     }
-    const http = await import('./http-bridge');
     return http.invoke(command, args);
   }
   const mock = await developmentMock();

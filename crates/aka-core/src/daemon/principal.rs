@@ -226,7 +226,10 @@ impl Revalidator {
                 workspace,
                 token,
             } => identity.verify_manage(workspace, token).is_ok(),
-            Self::Session { auth, cookie } => auth.verify_session(cookie, None).is_ok(),
+            // Deliberately the non-touching check: this runs every second
+            // for the stream's lifetime, and letting it count as activity
+            // would exempt any open tab from the session idle rule.
+            Self::Session { auth, cookie } => auth.session_still_valid(cookie),
             Self::Access { auth, token } => auth.verify_access(token).is_ok(),
             Self::Automation { auth, token } => auth.verify_automation(token).is_ok(),
         }

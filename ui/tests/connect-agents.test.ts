@@ -533,7 +533,7 @@ test('the hero sentence never names the cloud CLI twice', () => {
 });
 
 test('only AWS gets a durable profile; the others re-export per shell', () => {
-  assert.equal(cloudSetupCommand(AWS), "aka cloud install 'aws-prod'");
+  assert.equal(cloudSetupCommand(AWS), "aka cloud config 'aws-prod'");
   assert.equal(cloudSetupCommand(GCP), `eval "$(aka cloud env 'gcp-prod')"`);
   assert.equal(cloudSetupCommand(AZURE), `eval "$(aka cloud env 'azure-prod')"`);
   // The name reaches a shell, so a quote in it must not end the argument.

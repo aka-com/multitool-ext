@@ -51,16 +51,9 @@ impl Agent {
         match self {
             Self::Local(paths) => {
                 let key = local_key(paths, label).await?;
-                unix_http(
-                    &paths.socket_file(),
-                    method,
-                    path,
-                    body,
-                    Some(&key),
-                    label,
-                )
-                .await
-                .map_err(|error| transport_error(&paths.socket_file(), error))
+                unix_http(&paths.socket_file(), method, path, body, Some(&key), label)
+                    .await
+                    .map_err(|error| transport_error(&paths.socket_file(), error))
             }
             Self::Remote { base, key } => {
                 let client = reqwest::Client::new();
@@ -83,19 +76,23 @@ impl Agent {
                         .header("content-type", "application/json")
                         .body(body.to_string());
                 }
-                let response = request.send().await.map_err(|error| {
-                    OpenSessionError::RemoteUnreachable {
-                        base: base.clone(),
-                        detail: error.to_string(),
-                    }
-                })?;
+                let response =
+                    request
+                        .send()
+                        .await
+                        .map_err(|error| OpenSessionError::RemoteUnreachable {
+                            base: base.clone(),
+                            detail: error.to_string(),
+                        })?;
                 let status = response.status().as_u16();
-                let payload = response.text().await.map_err(|error| {
-                    OpenSessionError::RemoteUnreachable {
-                        base: base.clone(),
-                        detail: error.to_string(),
-                    }
-                })?;
+                let payload =
+                    response
+                        .text()
+                        .await
+                        .map_err(|error| OpenSessionError::RemoteUnreachable {
+                            base: base.clone(),
+                            detail: error.to_string(),
+                        })?;
                 Ok((status, payload))
             }
         }
@@ -123,15 +120,35 @@ pub enum OpenSessionError {
     Malformed(String),
 }
 
+fn display_home_relative(path: &std::path::Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(relative) = path.strip_prefix(home) {
+            if relative.as_os_str().is_empty() {
+                return "~".into();
+            }
+            return format!("~/{}", relative.display());
+        }
+    }
+    path.display().to_string()
+}
+
+fn broker_location(socket: &std::path::Path) -> &std::path::Path {
+    let parent = socket.parent().unwrap_or(socket);
+    if parent.file_name().is_some_and(|name| name == "sock") {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    }
+}
+
 impl std::fmt::Display for OpenSessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoBroker { socket } => write!(
                 f,
-                "no broker is running at {} — start Multitool for the local store \
-                 (~/.aka), or `aka serve` (default ~/.akaserver) / \
-                 `aka serve --root …` for a headless root",
-                socket.display()
+                "No broker is running at {}.\n\
+                 Start the Multitool app, run `aka serve`, or switch contexts with `aka use`.",
+                display_home_relative(broker_location(socket))
             ),
             Self::Refused { status, detail, .. } => {
                 write!(f, "the broker refused the open (HTTP {status}): {detail}")
@@ -139,12 +156,17 @@ impl std::fmt::Display for OpenSessionError {
             Self::Transport { socket, detail } => {
                 write!(
                     f,
-                    "could not reach the broker at {}: {detail}",
-                    socket.display()
+                    "Broker at {} is unreachable.\n{detail}\n\
+                     Check that the broker is still running, then retry.",
+                    display_home_relative(broker_location(socket))
                 )
             }
             Self::RemoteUnreachable { base, detail } => {
-                write!(f, "could not reach the broker at {base}: {detail}")
+                write!(
+                    f,
+                    "Broker at {base} is unreachable.\n{detail}\n\
+                     Check the URL, network connection, and broker status, then retry."
+                )
             }
             Self::Malformed(detail) => f.write_str(detail),
         }
@@ -256,10 +278,7 @@ fn pairing_body(label: Option<&str>) -> String {
 /// The shared key for an authenticated agent-plane call: the token file when
 /// it is readable, otherwise one pair round-trip (which hands the same shared
 /// key back).
-async fn local_key(
-    paths: &Paths,
-    client_label: Option<&str>,
-) -> Result<String, OpenSessionError> {
+async fn local_key(paths: &Paths, client_label: Option<&str>) -> Result<String, OpenSessionError> {
     let socket = paths.socket_file();
     let key = std::fs::read_to_string(paths.token_file())
         .ok()
@@ -460,6 +479,9 @@ mod tests {
             matches!(error, OpenSessionError::NoBroker { .. }),
             "{error}"
         );
+        assert!(error.to_string().contains("Start the Multitool app"));
+        assert!(error.to_string().contains(dir.path().to_str().unwrap()));
+        assert!(!error.to_string().contains("sock/broker.sock"));
 
         // A refusal carries the broker's detail through.
         stub_broker(&paths).await;
@@ -476,5 +498,34 @@ mod tests {
             } if reason.as_deref() == Some("denied_by_policy")
         ));
         assert!(error.to_string().contains("agent access is off for prod"));
+    }
+
+    #[test]
+    fn connection_errors_name_the_target_state_and_next_step() {
+        let no_broker = OpenSessionError::NoBroker {
+            socket: std::path::PathBuf::from("/tmp/example/sock/broker.sock"),
+        }
+        .to_string();
+        assert_eq!(
+            no_broker,
+            "No broker is running at /tmp/example.\n\
+             Start the Multitool app, run `aka serve`, or switch contexts with `aka use`."
+        );
+
+        let local = OpenSessionError::Transport {
+            socket: std::path::PathBuf::from("/tmp/example/sock/broker.sock"),
+            detail: "connection reset".into(),
+        }
+        .to_string();
+        assert!(local.starts_with("Broker at /tmp/example is unreachable."));
+        assert!(local.contains("Check that the broker is still running"));
+
+        let remote = OpenSessionError::RemoteUnreachable {
+            base: "https://example.com".into(),
+            detail: "connection refused".into(),
+        }
+        .to_string();
+        assert!(remote.starts_with("Broker at https://example.com is unreachable."));
+        assert!(remote.contains("Check the URL, network connection, and broker status"));
     }
 }

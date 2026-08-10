@@ -9,6 +9,7 @@ import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { state } from '../app-state';
+import { isNativeHost } from '../bridge';
 import { canQuickConnectMcp, catalogEntryById } from '../catalog';
 import { cloudSetupCommand } from '../cloud-setup';
 import { EndpointStrip } from './endpoint-view';
@@ -308,7 +309,7 @@ function StartWalkthrough(): ReactNode {
   const catalogEntry = option.catalogId ? catalogEntryById(option.catalogId) : undefined;
   const progress = startProgress(option, state.connections);
   const connectMode = resolveConnectMode(state.connectMode, option);
-  const addAction = catalogEntry && canQuickConnectMcp(catalogEntry)
+  const addAction = isNativeHost() && catalogEntry && canQuickConnectMcp(catalogEntry)
     ? 'catalog-connect-oauth' : 'catalog-add';
   const addVerb = addAction === 'catalog-connect-oauth' ? 'Connect' : 'Add';
 
@@ -417,6 +418,7 @@ function StartWalkthrough(): ReactNode {
             data-act={connectMode === 'direct' && directConnection && directEndpoint
               ? 'copy-first-task'
               : 'copy-text'}
+            disabled={!step1Done || !step2Done}
             data-conn={connectMode === 'direct' ? directConnection?.id : undefined}
             data-task={connectMode === 'direct' ? option.taskBody : undefined}
             data-text={connectMode === 'direct' ? undefined : task}>Copy prompt</button></div>

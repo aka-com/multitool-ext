@@ -195,10 +195,7 @@ struct InviteQuery {
 /// connections, so it takes local access to the host rather than a
 /// credential someone could carry. Redemption (`POST /v1/join`) is the half
 /// that must work over the network.
-async fn open_invite(
-    State(state): State<AppState>,
-    Query(query): Query<InviteQuery>,
-) -> Response {
+async fn open_invite(State(state): State<AppState>, Query(query): Query<InviteQuery>) -> Response {
     let label = query
         .label
         .map(|label| label.trim().to_string())
@@ -257,11 +254,14 @@ async fn open_enrollment(State(state): State<AppState>) -> Response {
                 "Passkey enrollment opened",
                 "on the broker host",
             );
+            // The web app's root is where enrollment asks for this secret.
+            // `/authorize` is the desktop's OAuth page and refuses a bare
+            // visit — a printed link must land somewhere that works.
             let url = state
                 .broker
                 .public_origin()
                 .ok()
-                .map(|origin| origin.url("/authorize"));
+                .map(|origin| origin.url("/"));
             Json(json!({
                 "secret": secret.as_str(),
                 "sign_in_url": url,
@@ -366,11 +366,21 @@ async fn register_options(
         return refusal;
     }
 
-    // A signed-in owner may add a passkey without a fresh enrollment secret.
+    // A signed-in owner may add a passkey without a fresh enrollment secret —
+    // but only right after a fresh gesture. Adding a credential decides who
+    // can sign in, the same tier the manage plane guards with `Always`
+    // step-up; a tab that merely stayed open on a shared machine must not
+    // clear it.
     let signed_in = cookie(&headers, SESSION_COOKIE)
         .and_then(|value| state.broker.auth.verify_session(&value, None).ok());
+    let fresh = signed_in.as_ref().is_some_and(|verified| {
+        verified.authenticated_at.is_some_and(|at| {
+            chrono::Utc::now() - at
+                < chrono::Duration::from_std(super::RECENT_AUTH_WINDOW).unwrap_or_default()
+        })
+    });
     let secret = body.enrollment_secret.as_deref();
-    if signed_in.is_none() && secret.is_none() {
+    if !fresh && secret.is_none() {
         return auth_error(AuthError::EnrollmentRefused);
     }
 
@@ -389,8 +399,9 @@ async fn register_options(
         Err(error_value) => return auth_error(error_value),
     };
     let label = clean_label(body.label.as_deref(), "Passkey");
-    // A signed-in owner passes no secret; the session is the authorization.
-    let secret = signed_in.is_none().then_some(secret).flatten();
+    // A freshly-authenticated owner passes no secret; the session is the
+    // authorization. Anyone else needed the one-use secret to get here.
+    let secret = (!fresh).then_some(secret).flatten();
     match state
         .broker
         .auth

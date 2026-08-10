@@ -65,6 +65,14 @@ import {
   LOCAL_BROKER, brokerLabel, brokerTakeover, brokerTone, remoteEndpointCaution,
   supportsOnePassword, supportsTypedCredentials,
 } from '/src/broker';
+import type { BrokerTakeover } from '/src/broker';
+import {
+  SignedOutError, StepUpRequiredError, currentSession, onSessionLost, refreshSession, signOut,
+} from '/src/http-bridge';
+import { endpointFormatByKey } from '/src/endpoint-formats';
+import {
+  fetchAuthConfig, registerPasskey, signInWithPasskey,
+} from '/src/web-auth';
 import { sameBrokerScope } from '/src/broker-scope';
 import {
   SAMPLE_TOOLS, persistSamplesDismissed, sampleConnection, sampleToolById,
@@ -115,6 +123,7 @@ import type {
   ConnectionSummary,
   ConnectionType,
   ElicitationRequest,
+  IssuedEndpoint,
   McpAuthDraft,
   LockState,
   McpAuthState,
@@ -597,6 +606,9 @@ async function openRequestsSurface(id?: string | null): Promise<void> {
 }
 
 async function consumePendingOpenRequests(): Promise<void> {
+  // The pending slot is filled by the desktop tray; the web app has no
+  // native inbox to drain and asking would only log a refusal.
+  if (!isNativeHost()) return;
   if (state.sheet && isProtectedFormSheet(state.sheet) && state.sheet.kind !== 'approval') {
     return;
   }
@@ -631,6 +643,147 @@ function markLocalBrokerUnavailable(): void {
     connected: false,
     error: 'The local broker did not answer. Your stored data has not been replaced or cleared.',
   });
+}
+
+/* ----------------------------- web sign-in -------------------------------- */
+// The web app authenticates itself: the broker that served the page runs the
+// passkey ceremonies, and the session cookie they mint is what every manage
+// call below rides. The desktop shell never enters this section — its
+// sign-in happens in the system browser, owned by the Rust side.
+
+/** Which full-pane takeover the main content shows. Web sign-in outranks the
+ * broker-link takeovers: without a session every one of them would just be
+ * a differently-worded 401. */
+function activeTakeover(): BrokerTakeover | 'web-signin' {
+  if (!isNativeHost() && state.webAuth.status !== 'signedin') return 'web-signin';
+  return brokerTakeover(state.broker, state.remoteSetup.open);
+}
+
+/** What the sign-in pane needs before anyone is signed in. A failure leaves
+ * `configError` for the pane to show with a Retry. Deliberately does not
+ * pick the pane's view: a refresh must not yank a user out of the half
+ * they chose. */
+async function loadWebAuthConfig(): Promise<void> {
+  try {
+    const config = await fetchAuthConfig();
+    state.webAuth.config = config;
+    state.webAuth.configError = null;
+  } catch (error) {
+    console.error('auth config', error);
+    state.webAuth.config = null;
+    state.webAuth.configError = errorMessage(error);
+  }
+}
+
+/** The half of the pane a fresh arrival lands on: first run has nothing to
+ * sign in with, so it starts at enrollment. */
+function defaultWebAuthView(): void {
+  state.webAuth.view = state.webAuth.config?.enrolled ? 'signin' : 'enroll';
+}
+
+/** Web boot gate: true when a session exists and boot may load data. */
+async function initWebAuth(): Promise<boolean> {
+  const session = await currentSession();
+  if (session) {
+    state.webAuth.status = 'signedin';
+    return true;
+  }
+  state.webAuth.status = 'signedout';
+  await loadWebAuthConfig();
+  defaultWebAuthView();
+  return false;
+}
+
+/** A 401 from the broker: this browser's session ended. Flip to the sign-in
+ * takeover instead of scattering per-view errors that all mean "signed
+ * out". Safe to call from any catch — it no-ops on the desktop. */
+function markWebSignedOut(): void {
+  if (isNativeHost() || state.webAuth.status === 'signedout') return;
+  state.webAuth.status = 'signedout';
+  state.webAuth.busy = false;
+  state.webAuth.notice = 'Your session expired. Sign in again.';
+  state.webAuth.error = null;
+  render();
+  void loadWebAuthConfig().then(() => {
+    defaultWebAuthView();
+    render();
+  });
+}
+
+/**
+ * After a ceremony signed this browser in, reload the page.
+ *
+ * Boot ran (or will run) its early sign-in return, so the event listeners
+ * and data loads for the signed-in app were never set up; a reload runs the
+ * whole boot against the fresh session cookie rather than replaying half of
+ * boot here and hoping the halves stay in sync.
+ */
+function completeWebSignIn(): void {
+  location.reload();
+}
+
+/**
+ * The text an endpoint copy produces, mirroring the desktop's native
+ * `endpoint_copy_text` over the same closed format vocabulary. The named
+ * formats reuse the menu's own client-side builders.
+ */
+function webEndpointCopyText(
+  conn: ConnectionSummary,
+  issued: IssuedEndpoint,
+  format: string,
+  taskBody?: string,
+): string | null {
+  if (format === 'first-task') {
+    const task = taskBody?.trim();
+    if (!task || task.length > 2000) return null;
+    if (conn.type === 'pg') return `Connect to this Postgres DSN: ${issued.dsn}\n\nThen ${task}`;
+    if (conn.type === 'ssh') return `Use this SSH endpoint: ${issued.example}\n\nThen ${task}`;
+    return null;
+  }
+  if (format === 'direct') return conn.type === 'ssh' ? issued.example : issued.dsn;
+  if (format === 'dsn') return issued.dsn;
+  if (format === 'secret') return issued.secret;
+  if (format === 'example') return issued.example;
+  const spec = endpointFormatByKey(conn.type, format);
+  if (!spec) return null;
+  const address = spec.needsAltAddress ? issued.tcp_dsn : issued.dsn;
+  if (!address) return null;
+  return spec.build(conn, address, issued.secret);
+}
+
+/**
+ * Web fallback for the desktop's native endpoint copy: the broker's copy
+ * route reads the endpoint back — taking the same gate and writing the same
+ * "copied" audit entry the desktop path does — and the browser's clipboard
+ * carries the rendered text. The secret does enter the page here; in a
+ * browser the page is the client, so there is no hygienic stop short of
+ * not copying at all.
+ */
+async function copyEndpointTextWeb(
+  connectionId: string,
+  format: string,
+  taskBody?: string,
+): Promise<boolean> {
+  const conn = state.connections.find((candidate) => candidate.id === connectionId);
+  if (!conn) return false;
+  return run(async () => {
+    const issued = await invoke('copy_endpoint_value', { connectionId });
+    if (!issued) throw new Error('this tool has no direct endpoint');
+    const text = webEndpointCopyText(conn, issued, format, taskBody);
+    if (text == null) throw new Error('could not render this copy format');
+    await writeBrowserClipboard(text);
+  });
+}
+
+const BROWSER_CLIPBOARD_HELP =
+  'Browser blocked clipboard access. Copy the value manually or allow clipboard access.';
+
+async function writeBrowserClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    throw new Error(BROWSER_CLIPBOARD_HELP);
+  }
 }
 
 async function refresh(which: RefreshTarget = 'all'): Promise<boolean> {
@@ -676,6 +829,7 @@ async function loadOnePasswordIntegrations(): Promise<boolean> {
     return true;
   } catch (error) {
     console.error('list_onepassword_integrations', error);
+    if (error instanceof SignedOutError) markWebSignedOut();
     // A transient provider/management read must not make already-configured
     // connections disappear. Broker scope changes clear this state first.
     return false;
@@ -706,6 +860,10 @@ async function loadActivity(preserveDepth: boolean): Promise<boolean> {
   } catch (error) {
     console.error('list_activity', error);
     if (!brokerEpochIsCurrent(epoch)) return false;
+    if (error instanceof SignedOutError) {
+      markWebSignedOut();
+      return false;
+    }
     state.loadStatus.activity = { status: 'error', error: errorMessage(error) };
     return false;
   }
@@ -764,6 +922,10 @@ async function load<K extends CommandName>(
   } catch (error) {
     console.error(cmd, error);
     if (!brokerEpochIsCurrent(epoch)) return false;
+    if (error instanceof SignedOutError) {
+      markWebSignedOut();
+      return false;
+    }
     state.loadStatus[key] = { status: 'error', error: errorMessage(error) };
     if (key === 'connections') markLocalBrokerUnavailable();
     return false;
@@ -819,6 +981,10 @@ async function loadSettings(): Promise<boolean> {
   } catch (error) {
     console.error(error);
     if (!brokerEpochIsCurrent(epoch)) return false;
+    if (error instanceof SignedOutError) {
+      markWebSignedOut();
+      return false;
+    }
     state.loadStatus.settings = { status: 'error', error: errorMessage(error) };
     return false;
   }
@@ -880,6 +1046,10 @@ async function loadIdentity(): Promise<boolean> {
   } catch (error) {
     console.error('get_identity', error);
     if (!brokerEpochIsCurrent(epoch)) return false;
+    if (error instanceof SignedOutError) {
+      markWebSignedOut();
+      return false;
+    }
     state.loadStatus.identity = { status: 'error', error: errorMessage(error) };
     return false;
   }
@@ -1295,6 +1465,11 @@ function selectCredentialRow(id: string): void {
  * dropped on blur and refreshed at the broker-provided rollover boundary. */
 function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
   const [live, setLive] = useState<{ code: string; expiresAt: number } | null>(null);
+  // Web only: the broker wants a fresh passkey gesture before issuing the
+  // code. A gesture cannot come from this component's background refresh
+  // loop, so it renders a button and the user's click carries it.
+  const [needsStepUp, setNeedsStepUp] = useState(false);
+  const [stepUpEpoch, setStepUpEpoch] = useState(0);
   const [now, setNow] = useState(Date.now());
   const scope = `${state.broker.mode}:${state.broker.url ?? ''}`;
   useEffect(() => {
@@ -1310,6 +1485,7 @@ function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
         if (!mounted || !focused || generation !== requestGeneration) return;
         const receivedAt = Date.now();
         setNow(receivedAt);
+        setNeedsStepUp(false);
         setLive({ code: next.code, expiresAt: receivedAt + next.seconds_remaining * 1000 });
         if (refreshTimer) clearTimeout(refreshTimer);
         refreshTimer = setTimeout(() => { void load(); }, next.seconds_remaining * 1000 + 150);
@@ -1317,6 +1493,7 @@ function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
         if (mounted && focused && generation === requestGeneration) {
           console.error('get_secret_totp', error);
           setLive(null);
+          if (error instanceof StepUpRequiredError) setNeedsStepUp(true);
         }
       }
     };
@@ -1344,7 +1521,20 @@ function LiveTotpCode({ id, site }: { id: string; site: string }): ReactNode {
       window.removeEventListener('blur', pause);
       window.removeEventListener('focus', resume);
     };
-  }, [id, scope]);
+  }, [id, scope, stepUpEpoch]);
+  if (!live && needsStepUp) {
+    return <button className="totp-live" title="Confirm with your passkey to show the code"
+      aria-label={`Confirm with your passkey to show the 2FA code for ${site}`}
+      onClick={() => {
+        // The gesture re-stamps the session; bumping the epoch re-runs the
+        // effect so the ordinary refresh loop takes over from there.
+        void signInWithPasskey()
+          .then(() => { setNeedsStepUp(false); setStepUpEpoch((epoch) => epoch + 1); })
+          .catch((error) => toast('⚠ ' + errorMessage(error)));
+      }}>
+      <span className="totp-code">Confirm with passkey…</span>
+    </button>;
+  }
   if (!live) return <span className="totp-live totp-live-loading" aria-label="Loading 2FA code">
     <span className="totp-code">––– –––</span>
   </span>;
@@ -2042,13 +2232,17 @@ function connectionIssues(
     });
   }
   if (c.last_status === 'needs_reconnect') {
+    const reconnectFix = c.mcp_path
+      ? fixBtn('reconnect-mcp', c.id, 'Reconnect…')
+      : c.oauth_spec
+      ? fixBtn('oauth-reconnect', c.id, 'Reconnect…')
+      : null;
     issues.push({
       text: c.last_detail || 'The credential was rejected; reconnect to refresh it.',
-      fixes: c.mcp_path
-        ? [fixBtn('reconnect-mcp', c.id, 'Reconnect…')]
-        : c.oauth_spec
-        ? [fixBtn('oauth-reconnect', c.id, 'Reconnect…')]
+      detail: reconnectFix && !isNativeHost()
+        ? 'Reconnect in the Multitool desktop app.'
         : undefined,
+      fixes: reconnectFix && isNativeHost() ? [reconnectFix] : undefined,
     });
   }
   if (c.last_status === 'warning') {
@@ -2161,7 +2355,8 @@ async function addCatalogEntry(entry: CatalogEntry): Promise<void> {
   const existing = connectionsForEntry(entry, state.connections);
   const asApi = Boolean(entry.mcp && entry.preset && existing.length > 0
     && existing.every((connection) => !connection.mcp_path));
-  await openCatalogConnectionForm(entry, asApi ? 'bearer' : 'oauth', asApi);
+  const authMode = asApi || !isNativeHost() ? 'bearer' : 'oauth';
+  await openCatalogConnectionForm(entry, authMode, asApi);
 }
 
 function onePasswordMethodLabel(method: OnePasswordIntegration['kind']): string {
@@ -2566,7 +2761,7 @@ function OnePasswordConnectStep(): ReactNode {
           </div>
           <p className="onepassword-method-hint">{local
             ? "Credentials are stored in this Mac’s Keychain."
-            : "Credentials are stored in the remote broker’s secure vault. Uses a dedicated read-only account that can't access Personal and Private vaults."}</p>
+            : "Credentials are stored in the hosted Multitool’s secure vault. Uses a dedicated read-only account that can't access Personal and Private vaults."}</p>
         </> : null}
         {flow.method === 'connect' ? <>
           {!updating ? <div className="f-row">
@@ -3531,7 +3726,7 @@ async function activatePaletteEntry(entryId: string): Promise<void> {
   state.addPalette = null;
   render();
   if (!entry) return;
-  if (canQuickConnectMcp(entry)) {
+  if (isNativeHost() && canQuickConnectMcp(entry)) {
     await quickConnectCatalogMcp(entry);
     return;
   }
@@ -3622,7 +3817,9 @@ function AddToolPalette(): ReactNode {
                     <span className="palette-tx"><b>{entry.name}</b>
                       <span className="palette-desc">{entry.description}</span></span>
                     <span className="palette-verb">
-                      {canQuickConnectMcp(entry) ? 'Connect' : catalogAddLabel(entry)}
+                      {isNativeHost() && canQuickConnectMcp(entry)
+                        ? 'Connect'
+                        : catalogAddLabel(entry)}
                     </span>
                   </button>
                 );
@@ -4123,7 +4320,7 @@ function VaultSwitch(): ReactNode {
       <button
         className="broker-btn vault-btn is-connect"
         data-act="onepassword-open" disabled={!available}
-        title={available ? 'Connect 1Password' : 'Update this remote broker to use 1Password'}
+        title={available ? 'Connect 1Password' : 'Update this hosted Multitool to use 1Password'}
         aria-label={available ? 'Connect 1Password' : '1Password unavailable'}>
         <span className="vault-btn-1p" aria-hidden="true"><Icon markup={ICONS.onepassword} /></span>
       </button>
@@ -4803,6 +5000,18 @@ function BrokerIdentityLine(): ReactNode {
 function BrokerSwitch(): ReactNode {
   const tone = brokerTone(state.broker);
   const label = brokerLabel(state.broker);
+  // The web app manages exactly the broker that served it; there is nothing
+  // to switch to, so the switcher is a status label here.
+  if (!isNativeHost()) {
+    return (
+      <div className="broker-switch-wrap">
+        <span className="broker-btn" title="The instance serving this page">
+          <span className={`broker-dot ${tone}`}></span>
+          <span className="broker-label">{label}</span>
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="broker-switch-wrap">
       <button className={`broker-btn ${state.brokerMenuOpen ? 'on' : ''}`} data-act="broker-menu"
@@ -4824,10 +5033,126 @@ function BrokerSwitch(): ReactNode {
   );
 }
 
+/**
+ * The web app's sign-in pane: the one surface a signed-out browser gets.
+ *
+ * Two halves. **Sign in** runs the assertion ceremony against the passkey
+ * already enrolled for this origin. **Enroll** turns the one-use secret
+ * `aka admin enroll` printed on the broker host into this browser's first
+ * (or an additional) passkey — enrolling also signs in, so both halves end
+ * the same way: a session cookie and a reload into the booted app.
+ */
+function WebSignInPane(): ReactNode {
+  const auth = state.webAuth;
+  const config = auth.config;
+  if (!config) {
+    return (
+      <div className="broker-pane broker-pane-error" role="alert">
+        <div className="bp-icon bp-icon-error"><Icon markup={ICONS.circleX} /></div>
+        <h2>Couldn’t load sign-in</h2>
+        {auth.configError ? <p className="bp-detail">{auth.configError}</p> : null}
+        <div className="bp-actions">
+          <button className="btn primary" data-act="web-auth-retry">Retry</button>
+        </div>
+      </div>
+    );
+  }
+  if (!config.passkeys_available) {
+    return (
+      <div className="broker-pane broker-pane-error" role="alert">
+        <div className="bp-icon bp-icon-error"><Icon markup={ICONS.circleX} /></div>
+        <h2>Passkey sign-in isn’t available here</h2>
+        <p className="bp-detail">
+          This instance has no public origin to bind passkeys to. Restart the
+          broker with <code>--public-url</code> matching this page’s address,
+          then reload.
+        </p>
+        <div className="bp-actions">
+          <button className="btn primary" data-act="web-auth-retry">Retry</button>
+        </div>
+      </div>
+    );
+  }
+  if (auth.view === 'enroll') {
+    return (
+      <div className="broker-pane" role="form" aria-label="Enroll a passkey">
+        <div className="bp-icon"><Icon markup={ICONS.appIcon} /></div>
+        <h2>{config.enrolled ? 'Enroll a new passkey' : 'Set up your passkey'}</h2>
+        <p className="bp-lead">
+          Enrollment is opened from the broker host: run this there and paste
+          the one-use code it prints. This creates a passkey for this hosted
+          Multitool.
+        </p>
+        <pre className="setup-instructions bp-setup-code"><code>aka admin enroll</code></pre>
+        <button className="btn sm" data-act="copy-text" data-text="aka admin enroll">Copy</button>
+        {!config.enrollment_open
+          ? <div className="field-hint" role="status">
+              No enrollment code is open on this instance right now — run the
+              command above to print a fresh one.
+            </div>
+          : null}
+        <div className="f-row">
+          <label htmlFor="wa-secret">One-use enrollment code</label>
+          <input id="wa-secret" value={auth.secret} autoComplete="off" spellCheck={false}
+            onChange={(e) => { state.webAuth.secret = e.currentTarget.value; render(); }} />
+          <div className="field-hint">
+            Codes expire 15 minutes after they’re printed.
+          </div>
+        </div>
+        <div className="f-row">
+          <label htmlFor="wa-label">This passkey’s name</label>
+          <input id="wa-label" value={auth.label} autoComplete="off"
+            placeholder="Work Mac"
+            onChange={(e) => { state.webAuth.label = e.currentTarget.value; render(); }} />
+          <div className="field-hint">
+            How it appears in the hosted Multitool’s list of enrolled passkeys, so you
+            can revoke it from anywhere.
+          </div>
+        </div>
+        {auth.error ? <div className="inline-error" role="alert">{auth.error}</div> : null}
+        <div className="bp-actions">
+          <button className="btn primary" data-act="web-enroll-submit"
+            disabled={auth.busy || !auth.secret.trim()}>
+            {auth.busy ? 'Waiting for your passkey…' : 'Create passkey'}
+          </button>
+          {config.enrolled
+            ? <button className="btn ghost" data-act="web-auth-view" data-view="signin"
+                disabled={auth.busy}>Back to sign-in</button>
+            : null}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="broker-pane" role="form" aria-label="Sign in">
+      <div className="bp-icon"><Icon markup={ICONS.appIcon} /></div>
+      <h2>Sign in to Multitool</h2>
+      <p className="bp-lead">
+        Use a passkey enrolled for this hosted Multitool. The check happens in
+        your browser; nothing to type.
+      </p>
+      {auth.notice ? <div className="field-hint" role="status">{auth.notice}</div> : null}
+      {auth.error ? <div className="inline-error" role="alert">{auth.error}</div> : null}
+      <div className="bp-actions">
+        <button className="btn primary" data-act="web-signin-submit" disabled={auth.busy}>
+          {auth.busy ? 'Waiting for your passkey…' : 'Sign in with passkey'}
+        </button>
+        <button className="btn ghost" data-act="web-auth-view" data-view="enroll"
+          disabled={auth.busy}>
+          Enroll another passkey…
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The full-pane broker takeover: the first-run chooser, the remote-setup
- * form (controlled), the connecting spinner, or the unreachable-broker
- * error. */
-function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error' }): ReactNode {
+ * form (controlled), the connecting spinner, the unreachable-broker
+ * error, or — web only — the sign-in pane. */
+function BrokerPane({ kind }: {
+  kind: 'choose' | 'setup' | 'connecting' | 'error' | 'web-signin';
+}): ReactNode {
+  if (kind === 'web-signin') return <WebSignInPane />;
   if (kind === 'choose') {
     const starting = state.brokerStartingLocal;
     return (
@@ -4843,7 +5168,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
             <span className="bp-choice-desc">
               {starting
                 ? 'Starting the local broker…'
-                : 'Run Multitool on this computer, without connecting to a hosted instance.'}
+                : 'Run Multitool on this computer, without connecting to hosted Multitool.'}
             </span>
           </button>
           <button type="button" className="bp-choice" data-act="broker-pick-remote"
@@ -4859,8 +5184,8 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
   if (kind === 'setup') {
     const setup = state.remoteSetup;
     const setupInstructions =
-      '# To start a remote instance, run this behind a TLS proxy or tunnel:\n'
-      + 'aka serve --listen 0.0.0.0:4780\naka manage token';
+      '# To host Multitool remotely, run this behind a TLS proxy or tunnel:\n'
+      + 'aka serve --listen 0.0.0.0:4780\naka admin token';
     const sameBroker = setup.url.trim() === ''
       || setup.url.trim().replace(/\/+$/, '') === (state.broker.url ?? '');
     const hasSaved = state.broker.has_saved_token && sameBroker;
@@ -4869,16 +5194,16 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
     const urlReady = setup.url.trim() !== '';
     const enrollInstructions =
       '# On the broker host, open enrollment for your first passkey:\n'
-      + 'aka manage enroll';
+      + 'aka admin enroll';
     return (
       <div className="broker-pane" role="form" aria-label="Connect to hosted Multitool">
         <div className="bp-icon"><Icon markup={ICONS.appIcon} /></div>
         <h2>Connect to hosted Multitool</h2>
         <p className="bp-lead">
-          Sign in with the passkey you use for this instance on the web.
+          Sign in with a passkey enrolled for this hosted Multitool.
         </p>
         <div className="f-row">
-          <label htmlFor="rb-url">Hosted instance URL</label>
+          <label htmlFor="rb-url">Hosted Multitool URL</label>
           <input id="rb-url" placeholder="https://multitool.dev" value={setup.url}
             autoComplete="off" spellCheck={false}
             onChange={(e) => { setup.url = e.currentTarget.value; render(); }} />
@@ -4894,7 +5219,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
             placeholder="This Mac"
             onChange={(e) => { setup.deviceName = e.currentTarget.value; render(); }} />
           <div className="field-hint">
-            How this Mac appears in the instance’s list of authorised devices,
+            How this Mac appears in the hosted Multitool’s list of authorized devices,
             so you can revoke it from anywhere.
           </div>
         </div>
@@ -4918,7 +5243,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
         {setup.signingIn && (
           <p className="bp-detail" role="status">
             Finish signing in on the page that opened in your browser. The
-            passkey is checked by the instance itself, not by this app.
+            passkey is checked by the hosted Multitool itself, not by this app.
           </p>
         )}
         <div className="adv-collapse">
@@ -4958,7 +5283,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
     return (
       <div className="broker-pane" role="status">
         <span className="app-loading-spinner"></span>
-        <h2>Connecting to the remote broker</h2>
+        <h2>Connecting to hosted Multitool</h2>
         <p className="bp-lead"><code>{state.broker.url ?? ''}</code></p>
         <div className="bp-actions">
           <button className="btn ghost" data-act="broker-pick-local">Use this Mac instead</button>
@@ -4970,7 +5295,7 @@ function BrokerPane({ kind }: { kind: 'choose' | 'setup' | 'connecting' | 'error
   return (
     <div className="broker-pane broker-pane-error" role="alert">
       <div className="bp-icon bp-icon-error"><Icon markup={ICONS.circleX} /></div>
-      <h2>{local ? 'The local broker isn’t responding' : 'Can’t reach the remote broker'}</h2>
+      <h2>{local ? 'The local broker isn’t responding' : 'Can’t reach hosted Multitool'}</h2>
       {!local && <p className="bp-lead"><code>{state.broker.url ?? ''}</code></p>}
       {state.broker.error && <p className="bp-detail">{state.broker.error}</p>}
       <div className="bp-actions">
@@ -5056,12 +5381,19 @@ function AppMenu({ takeover, requestCount }: {
               {recheckRunning ? 'Rechecking tools…' : 'Recheck all tools'}
             </button>
             <div className="menu-rule"></div>
-            <button className="menu-item" data-act="mode-tray">
-              Minimize to menu bar
-            </button>
+            {isNativeHost()
+              ? <button className="menu-item" data-act="mode-tray">
+                  Minimize to menu bar
+                </button>
+              : null}
             <button className="menu-item" data-act="open-settings">
               Settings
             </button>
+            {!isNativeHost()
+              ? <button className="menu-item" data-act="web-signout">
+                  Sign out
+                </button>
+              : null}
           </div>
         : null}
     </div>
@@ -5095,7 +5427,7 @@ function LoadFailureBand(): ReactNode {
 }
 
 function MainWindow(): ReactNode {
-  const takeover = brokerTakeover(state.broker, state.remoteSetup.open);
+  const takeover = activeTakeover();
   const requestCount = activeRequestCount(state.approvals, state.elicitations);
   const pageTitle = credentialsTab(state.tab) ? 'Credentials'
     : state.tab === 'activity' ? 'Activity log'
@@ -5262,7 +5594,7 @@ function DropdownMenu({ requestCount }: { requestCount: number }): ReactNode {
 }
 
 function DropdownWindow(): ReactNode {
-  const takeover = brokerTakeover(state.broker, state.remoteSetup.open);
+  const takeover = activeTakeover();
   const requestCount = activeRequestCount(state.approvals, state.elicitations);
   if (takeover) {
     return (
@@ -5532,8 +5864,11 @@ function InteractiveAppRoot(): ReactNode {
   // Waiting requests render on the Activity tab, so that is when the core
   // may treat them as "on screen" for notification purposes.
   const requestsVisible = booted && state.tab === 'activity'
-    && !brokerTakeover(state.broker, state.remoteSetup.open);
+    && !activeTakeover();
   useEffect(() => {
+    // Web has no native request inbox to inform, and asking would only
+    // surface a refusal as an unhandled rejection on every tab switch.
+    if (!isNativeHost()) return;
     void invoke('ui_set_request_inbox_visible', { visible: requestsVisible });
   }, [requestsVisible]);
   if (!booted) {
@@ -5567,7 +5902,9 @@ function InteractiveAppRoot(): ReactNode {
 function AppRoot(): ReactNode {
   // Every surface publishes through the same tiny external store. The HUD
   // stops here: it never boots broker data or shares the main/dropdown view
-  // state that can open sheets and menus.
+  // state that can open sheets and menus. The HUD is desktop chrome; the
+  // bridge pins a browser's mode to 'window', so this cannot select it
+  // there.
   useUiRevision(uiStore);
   return mode === 'attention' ? <AttentionHud /> : <InteractiveAppRoot />;
 }
@@ -8521,11 +8858,16 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
     const mcpAdd = t === 'api' && isMcpDraft(d);
     const oauthPreset = !mcpAdd && t === 'api' && d.entryId
       ? catalogEntryById(d.entryId)?.oauthPreset : undefined;
-    const modeValue = d.authMode || (mcpAdd ? 'oauth' : 'bearer');
+    const requestedMode = d.authMode || (mcpAdd ? 'oauth' : 'bearer');
+    const modeValue = !isNativeHost() && requestedMode === 'oauth'
+      ? 'bearer'
+      : requestedMode;
     const recipes: Array<[string, string]> = [
       // MCP servers advertise their own sign-in flow; the browser dance is
       // the default and a pasted token stays one select away.
-      ...(mcpAdd ? [['oauth', 'Sign in with your account (OAuth)'] as [string, string]] : []),
+      ...(mcpAdd && isNativeHost()
+        ? [['oauth', 'Sign in with your account (OAuth)'] as [string, string]]
+        : []),
       ['bearer', 'Bearer token'], ['header', 'Custom header'],
       ...(t === 'api' ? [['query', 'Query parameter'] as [string, string]] : []),
       // Dispatch-time request signing: no injected credential at all — the
@@ -8537,7 +8879,9 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
       ] : []),
       // Plain REST rows with documented OAuth endpoints offer a browser
       // sign-in against the user's own OAuth app (BYO-app, loopback PKCE).
-      ...(oauthPreset ? [['oauth', 'Sign in with your browser (your OAuth app)'] as [string, string]] : []),
+      ...(oauthPreset && isNativeHost()
+        ? [['oauth', 'Sign in with your browser (your OAuth app)'] as [string, string]]
+        : []),
       ['advanced', 'Bearer token + template'],
     ];
     const clientIdField = (detail: string): ReactNode => (
@@ -8564,6 +8908,13 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
         <CustomSelect id="c-auth-mode" options={recipes} selectedValue={modeValue} />
       </div>,
     );
+    if (!isNativeHost() && (mcpAdd || oauthPreset)) {
+      fields.push(
+        <div className="rule-note oauth-note" key="oauth-desktop-note">
+          OAuth setup requires the Multitool desktop app. Add a bearer token here instead.
+        </div>,
+      );
+    }
     if (modeValue === 'oauth' && oauthPreset) {
       const checked = d.oauthScopes ?? oauthPreset.scopes;
       fields.push(
@@ -8761,7 +9112,7 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
   const label = editing
     ? editPresentation?.label ?? catalogNameForType(t)
     : state.connEntryName || catalogNameForType(t);
-  const oauthSelected = !editing && t === 'api' && isMcpDraft(d)
+  const oauthSelected = isNativeHost() && !editing && t === 'api' && isMcpDraft(d)
     && (d.authMode || 'oauth') === 'oauth';
   const title = `${editing ? 'Edit' : oauthSelected ? 'Connect' : 'Add'} ${label}`;
   // The draft-test verdict sits between the fields (below the Advanced
@@ -8807,7 +9158,9 @@ function ConnSheet({ editing }: { editing: boolean }): ReactNode {
           <>
             <button className="btn danger conn-delete-btn" data-act="del-conn-from-edit"
               data-id={conn.id}>Delete…</button>
-            {managedMcpOAuth
+            {!isNativeHost() && (managedMcpOAuth || conn.mcp_path || conn.oauth_spec)
+              ? <span className="rule-note">Reconnect in the Multitool desktop app.</span>
+              : managedMcpOAuth
               ? <button className="btn" data-act="reconnect-mcp" data-id={conn.id}>Reconnect…</button>
               : conn.mcp_path || conn.oauth_spec
               ? <div className="tile-menu-wrap sheet-conn-menu">
@@ -8938,6 +9291,15 @@ function McpAuthSheet(): ReactNode {
 
 /** Kick off (or restart) a sign-in and switch to the progress sheet. */
 async function startMcpAuth(draft: McpAuthDraft): Promise<boolean> {
+  // The sign-in hands its result to a loopback catcher only the desktop
+  // app runs; starting it from a browser would strand the user mid-flow.
+  // Refuse up front with the reason instead of after the redirect.
+  if (!isNativeHost()) {
+    showFormError(new Error(
+      'OAuth setup must be completed in the Multitool desktop app.',
+    ));
+    return false;
+  }
   const epoch = brokerEpoch;
   try {
     const auth = await invoke('start_mcp_auth', { input: draft });
@@ -9563,6 +9925,22 @@ async function run(fn: () => Promise<unknown>): Promise<boolean> {
     await fn();
     return brokerEpochIsCurrent(epoch);
   } catch (error) {
+    // The broker wants a fresh passkey gesture for this one action (web
+    // only; the desktop's step-up runs in the system browser, shell-side).
+    // Run the gesture here and retry once — the second refusal is real.
+    if (error instanceof StepUpRequiredError && !isNativeHost()) {
+      try {
+        await signInWithPasskey();
+        await fn();
+        return brokerEpochIsCurrent(epoch);
+      } catch (retryError) {
+        error = retryError;
+      }
+    }
+    if (error instanceof SignedOutError) {
+      markWebSignedOut();
+      return false;
+    }
     if (brokerEpochIsCurrent(epoch) && formErrorKind(error) !== 'cancelled') {
       toast('⚠ ' + errorMessage(error));
     }
@@ -10007,7 +10385,10 @@ async function saveConnInner(sheet: SheetState): Promise<void> {
     : state.connections.find((connection) => connection.id === sheet.id) ?? null;
   const toolNameTaken = adding && toolNameIsTaken(name);
   const mcpAdd = adding && t === 'api' && isMcpDraft(d);
-  const authMode = d.authMode || (mcpAdd ? 'oauth' : 'bearer');
+  const requestedAuthMode = d.authMode || (mcpAdd ? 'oauth' : 'bearer');
+  const authMode = !isNativeHost() && requestedAuthMode === 'oauth'
+    ? 'bearer'
+    : requestedAuthMode;
   const usesOauth = mcpAdd && authMode === 'oauth';
   const oauthPreset = adding && t === 'api' && !mcpAdd && d.entryId
     ? catalogEntryById(d.entryId)?.oauthPreset : undefined;
@@ -10184,6 +10565,12 @@ async function saveConnInner(sheet: SheetState): Promise<void> {
       oauth_extra_params: oauthPreset!.extraAuthParams ?? [],
       trusted_ca_bundle_path: (d.pgCaBundlePath || '').trim() || null,
     };
+    // The consent flow returns to a loopback catcher only the desktop app
+    // runs; in a browser the redirect would strand the user mid-sign-in.
+    if (!isNativeHost()) {
+      toast('⚠ OAuth sign-in for tools needs the desktop app');
+      return;
+    }
     toast('🌐 Approve access in your browser…');
     if (await run(() => invoke('oauth_connect', {
       input, clientSecret: (d.oauthClientSecret || '').trim() || null,
@@ -10872,6 +11259,76 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       render();
       break;
     }
+    // The web sign-in pane (see WebSignInPane). Ceremonies run right here in
+    // this browser; success reloads the page so boot runs signed in.
+    case 'web-auth-retry':
+      await loadWebAuthConfig();
+      render();
+      break;
+    case 'web-auth-view': {
+      const view = btn.dataset.view;
+      if (view === 'signin' || view === 'enroll') state.webAuth.view = view;
+      state.webAuth.error = null;
+      // The enroll pane's hints reflect whether an enrollment is open, and
+      // that changes on the broker host at any time: refresh on entry, but
+      // never let a transient failure blank a pane that was rendering.
+      if (view === 'enroll') {
+        void fetchAuthConfig()
+          .then((config) => {
+            state.webAuth.config = config;
+            render();
+          })
+          .catch(() => { /* keep the config we had */ });
+      }
+      render();
+      break;
+    }
+    case 'web-signin-submit': {
+      state.webAuth.busy = true;
+      state.webAuth.notice = null;
+      state.webAuth.error = null;
+      render();
+      try {
+        await signInWithPasskey();
+        completeWebSignIn();
+      } catch (error) {
+        console.error('web sign-in', error);
+        state.webAuth.busy = false;
+        state.webAuth.error = errorMessage(error);
+        render();
+      }
+      break;
+    }
+    case 'web-enroll-submit': {
+      state.webAuth.busy = true;
+      state.webAuth.notice = null;
+      state.webAuth.error = null;
+      render();
+      try {
+        await registerPasskey(
+          state.webAuth.secret.trim(),
+          state.webAuth.label.trim() || null,
+        );
+        completeWebSignIn();
+      } catch (error) {
+        console.error('web enroll', error);
+        state.webAuth.busy = false;
+        state.webAuth.error = errorMessage(error);
+        render();
+      }
+      break;
+    }
+    case 'web-signout': {
+      try {
+        await signOut();
+      } catch (error) {
+        // The reload lands on the sign-in pane either way; the cookie's
+        // revocation is the broker's side and it saw the request or not.
+        console.error('sign out', error);
+      }
+      location.reload();
+      break;
+    }
     case 'mode-tray': state.menuOpen = false; run(() => invoke('ui_set_mode', { mode: 'tray' })); break;
     case 'mode-window': run(() => invoke('ui_set_mode', { mode: 'window' })); break;
     case 'quit-app': run(() => invoke('ui_quit')); break;
@@ -10973,11 +11430,11 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'copy-endpoint-dsn': {
       const conn = state.connections.find((candidate) => candidate.id === btn.dataset.conn);
       state.epMenuOpen = null;
-      if (conn && await run(() => invoke('copy_endpoint_text', {
-        connectionId: conn.id,
-        format: 'direct',
-      }))) {
-        toast('📋 Copied for 30s');
+      const copied = conn && (isNativeHost()
+        ? await run(() => invoke('copy_endpoint_text', { connectionId: conn.id, format: 'direct' }))
+        : await copyEndpointTextWeb(conn.id, 'direct'));
+      if (copied) {
+        toast(isNativeHost() ? '📋 Copied for 30s' : '📋 Copied');
         flashCopied(`ep:${conn.id}`);
       }
       break;
@@ -10986,11 +11443,11 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       const conn = state.connections.find((candidate) => candidate.id === btn.dataset.conn);
       const format = btn.dataset.format ?? '';
       state.epMenuOpen = null;
-      if (conn && format && await run(() => invoke('copy_endpoint_text', {
-        connectionId: conn.id,
-        format,
-      }))) {
-        toast('📋 Copied for 30s');
+      const copied = conn && format && (isNativeHost()
+        ? await run(() => invoke('copy_endpoint_text', { connectionId: conn.id, format }))
+        : await copyEndpointTextWeb(conn.id, format));
+      if (copied) {
+        toast(isNativeHost() ? '📋 Copied for 30s' : '📋 Copied');
         flashCopied(`epf:${conn.id}:${format}`);
       }
       break;
@@ -10998,10 +11455,25 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'copy-endpoint': {
       const connectionId = state.sheet?.id;
       const format = btn.dataset.field ?? '';
-      if (connectionId && format && await run(() => invoke('copy_endpoint_text', {
-        connectionId,
-        format,
-      }))) {
+      if (!connectionId || !format) break;
+      // The issued sheet already displays these values; in a browser the
+      // honest copy is exactly the text on screen.
+      if (!isNativeHost()) {
+        const info = state.sheet?.endpoint;
+        const value = format === 'dsn' ? info?.dsn
+          : format === 'secret' ? info?.secret
+          : format === 'example' ? info?.example
+          : null;
+        if (!value) break;
+        try {
+          await writeBrowserClipboard(value);
+          toast('📋 Copied');
+        } catch {
+          toast(`⚠ ${BROWSER_CLIPBOARD_HELP}`);
+        }
+        break;
+      }
+      if (await run(() => invoke('copy_endpoint_text', { connectionId, format }))) {
         toast('📋 Copied for 30s');
       }
       break;
@@ -11016,10 +11488,10 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
         if (await run(() => invoke('copy_agent_setup'))) toast('📋 Setup instructions copied');
       } else if (state.agentSetupInstructions) {
         try {
-          await navigator.clipboard.writeText(state.agentSetupInstructions);
+          await writeBrowserClipboard(state.agentSetupInstructions);
           toast('📋 Setup instructions copied');
         } catch {
-          toast('⚠ Your browser blocked the clipboard');
+          toast(`⚠ ${BROWSER_CLIPBOARD_HELP}`);
         }
       }
       break;
@@ -11272,6 +11744,17 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       render();
       break;
     case 'copy-totp': {
+      // Web: the broker issues the code (audited, stepping up if asked) and
+      // the browser's clipboard carries it. The code is already rendered on
+      // this surface, so the clipboard is no worse than the screen.
+      if (!isNativeHost()) {
+        if (await run(async () => {
+          const totp = await invoke('get_secret_totp', { id });
+          await writeBrowserClipboard(totp.code);
+          toast(`🔑 2FA code copied · valid ${totp.seconds_remaining}s`);
+        })) render();
+        break;
+      }
       const epoch = brokerEpoch;
       try {
         const secondsRemaining = await invoke('copy_secret_totp', { id });
@@ -11352,23 +11835,25 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       const text = btn.dataset.text ?? '';
       if (!text) break;
       try {
-        await navigator.clipboard.writeText(text);
+        await writeBrowserClipboard(text);
         toast('📋 Copied');
       } catch {
-        toast('⚠ Could not copy');
+        toast(`⚠ ${BROWSER_CLIPBOARD_HELP}`);
       }
       break;
     }
     case 'copy-first-task': {
       const connectionId = btn.dataset.conn ?? '';
       const taskBody = btn.dataset.task ?? '';
-      if (connectionId && taskBody && await run(() => invoke('copy_endpoint_text', {
-        connectionId,
-        format: 'first-task',
-        taskBody,
-      }))) {
-        toast('📋 Copied for 30s');
-      }
+      if (!connectionId || !taskBody) break;
+      const copied = isNativeHost()
+        ? await run(() => invoke('copy_endpoint_text', {
+            connectionId,
+            format: 'first-task',
+            taskBody,
+          }))
+        : await copyEndpointTextWeb(connectionId, 'first-task', taskBody);
+      if (copied) toast(isNativeHost() ? '📋 Copied for 30s' : '📋 Copied');
       break;
     }
     case 'show-all-tools':
@@ -11423,7 +11908,10 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       const entry = catalogEntryById(id);
       state.catalogActionMenuOpen = null;
       render();
-      if (entry) await quickConnectCatalogMcp(entry);
+      if (entry) {
+        if (isNativeHost()) await quickConnectCatalogMcp(entry);
+        else await openCatalogConnectionForm(entry, 'bearer');
+      }
       break;
     }
     case 'catalog-connect-manual': {
@@ -11857,6 +12345,11 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
     case 'oauth-reconnect': {
       state.connMenuOpen = null;
       state.connMenuPoint = null;
+      if (!isNativeHost()) {
+        toast('⚠ Reconnect in the Multitool desktop app');
+        render();
+        break;
+      }
       toast('🌐 Approve access in your browser…');
       if (await run(() => invoke('oauth_reconnect', { id }))) {
         toast('🔌 Reconnected');
@@ -11900,12 +12393,16 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       }
       break;
     }
+    // In a browser the browser *is* the system browser: open_url exists to
+    // escape the desktop webview, so the web app opens a tab itself.
     case 'mcp-open-browser':
-      await run(() => invoke('open_url', { url: btn.dataset.url || '' }));
+    case 'open-external-url': {
+      const url = btn.dataset.url || '';
+      if (!url) break;
+      if (isNativeHost()) await run(() => invoke('open_url', { url }));
+      else window.open(url, '_blank', 'noopener');
       break;
-    case 'open-external-url':
-      await run(() => invoke('open_url', { url: btn.dataset.url || '' }));
-      break;
+    }
     case 'open-notification-settings':
       await run(() => invoke('open_notification_settings'));
       break;
@@ -12224,13 +12721,18 @@ async function handleActionClick(e: ReactMouseEvent<HTMLDivElement>): Promise<vo
       break;
     }
     case 'unlock-app': await unlockApp(); break;
+    // The click handler's promise is unobserved, so a bare await here turns
+    // any refusal into an unhandled rejection. Unreachable on the web today
+    // (the lock never engages there), but one refactor away from noise.
     case 'retry-embedded-unlock':
       state.lock = { ...state.lock, embeddedError: undefined };
       render();
-      await invoke('retry_embedded_unlock');
+      await run(() => invoke('retry_embedded_unlock'));
       break;
     case 'lock-now': {
-      state.lock = await invoke('lock_app');
+      await run(async () => {
+        state.lock = await invoke('lock_app');
+      });
       render();
       break;
     }
@@ -12601,9 +13103,12 @@ function handleAppKeyDown(e: KeyboardEvent): void {
   }
   // ⌘L mirrors the File ▸ Lock Now menu item. The native accelerator only
   // fires while a native menu is attached, and the dropdown panel has none.
-  if (e.key.toLowerCase() === 'l' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+  // The lock is the desktop shell's; in a browser ⌘L/Ctrl+L must keep
+  // meaning "focus the address bar".
+  if (isNativeHost()
+      && e.key.toLowerCase() === 'l' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
     e.preventDefault();
-    void invoke('lock_app').then(receiveLockState);
+    void invoke('lock_app').then(receiveLockState).catch(console.error);
     return;
   }
   // A focused row moves with Alt+Up/Down — the keyboard-accessible
@@ -12812,6 +13317,32 @@ function scheduleRequestRefresh(): void {
 }
 
 async function boot() {
+  // The web app signs in before anything else: every broker read below
+  // would 401 without a session, and the sign-in pane is the only usable
+  // surface until one exists. Completing a ceremony reloads the page, so
+  // this boot never resumes — the next one runs signed in.
+  if (!isNativeHost() && !(await initWebAuth())) {
+    booted = true;
+    render();
+    return;
+  }
+  if (!isNativeHost()) {
+    // The transport can discover the session's end before any user action
+    // does — the event stream dies to a revoked or expired session. Show
+    // sign-in at that moment instead of a stale snapshot.
+    onSessionLost(() => markWebSignedOut());
+    // A tab that sat hidden past its session's expiry should show sign-in
+    // when the user returns, not a stale snapshot that fails on the first
+    // click. One session read per return to the tab is cheap.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || state.webAuth.status !== 'signedin') return;
+      void refreshSession()
+        .then((session) => {
+          if (!session) markWebSignedOut();
+        })
+        .catch(() => { /* a transport blip; the next action reports */ });
+    });
+  }
   if (mode === 'dropdown' && state.tab === 'start') state.tab = 'secrets';
   // A webview reload must not leave a stale native lock behind. Forms acquire
   // it again before they are shown.

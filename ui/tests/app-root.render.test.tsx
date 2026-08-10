@@ -1033,7 +1033,7 @@ test('legacy remote brokers disable the 1Password surface', async () => {
   // accessible name rather than a visible word.
   assert.equal(connect.textContent?.trim(), '');
   assert.match(connect.getAttribute('aria-label') ?? '', /unavailable/i);
-  assert.match(connect.title, /remote broker/i);
+  assert.match(connect.title, /hosted Multitool/i);
 
   await mock.invoke('switch_broker_local');
   // Back on the local broker, the earlier tests' surviving connection

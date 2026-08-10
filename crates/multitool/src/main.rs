@@ -191,7 +191,7 @@ struct InstructionsArgs {
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum McpSetupClient {
-    /// Codex config.toml.
+    /// Codex CLI.
     Codex,
     /// Claude Code's `claude mcp add` command.
     ClaudeCode,
@@ -216,12 +216,12 @@ enum SetupCommand {
     /// With --broker, fetches that broker's authoritative setup. Prints to
     /// stdout by default; `--write` writes .claude/skills/multitool/SKILL.md.
     Skill(SkillArgs),
-    /// Print agent setup markdown (/instructions).
+    /// Print agent setup instructions.
     ///
     /// Local defaults by default; with --broker, fetches that hosted broker's
     /// authoritative agent setup (requires its management token).
     Instructions(InstructionsArgs),
-    /// Connect the desktop app to a headless broker.
+    /// Show desktop connection details.
     ///
     /// The app's "Local Multitool" runs its own broker; it reaches a broker
     /// started with `aka serve` only as a hosted instance. This prints the
@@ -239,22 +239,23 @@ enum SetupCommand {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // one short-lived instance per invocation
 enum Command {
-    /// Connect an agent, MCP client, or the desktop app.
+    /// Connect an agent or app.
     ///
-    /// `aka setup <client>` prints the paste-ready configuration for that
-    /// MCP client (codex, claude-code, claude-desktop) and points at the
-    /// agent skill. Nothing is written without an explicit subcommand flag
-    /// (`aka setup skill --write`).
+    /// `aka setup <client>` previews the paste-ready command or configuration
+    /// for that MCP client (codex, claude-code, claude-desktop). Use `--write`
+    /// to configure clients that provide a CLI, write the agent skill, and pin
+    /// this repository to the current broker context.
     #[command(args_conflicts_with_subcommands = true)]
     Setup {
         #[command(subcommand)]
         command: Option<SetupCommand>,
-        /// The MCP client to print configuration for.
+        /// The MCP client whose setup should be previewed or applied.
         #[arg(value_enum)]
         client: Option<McpSetupClient>,
         /// Apply the configuration instead of printing it: register the MCP
-        /// server with the client, write the repo-local agent skill, and pin
-        /// this directory to the current context when one is set.
+        /// server when the client provides a CLI, write the repo-local agent
+        /// skill, and pin this directory to the current context when one is
+        /// set. Claude Desktop configuration remains a manual edit.
         #[arg(long, requires = "client")]
         write: bool,
     },
@@ -279,7 +280,7 @@ enum Command {
     /// authoritative agent setup (requires its management token).
     #[command(hide = true)]
     Instructions(InstructionsArgs),
-    /// Run a broker and its web interface.
+    /// Run a headless broker.
     ///
     /// Uses its own root (not the desktop app store). Default root is
     /// `~/.akaserver` (data + socket under it). Override with `--root` or
@@ -354,7 +355,7 @@ enum Command {
         #[arg(long, alias = "no-sidecar")]
         no_mcp: bool,
     },
-    /// Run the MCP stdio bridge (normally launched by a configured client).
+    /// Run the MCP stdio bridge.
     ///
     /// Configure clients with `aka setup <client>`. The client then launches
     /// this runtime command, which reads this computer's shared key and
@@ -368,7 +369,7 @@ enum Command {
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
     },
-    /// Run a command with brokered credentials for a connection.
+    /// Run with brokered credentials for a connection.
     ///
     /// One runner for every kind — the connection's kind decides the
     /// dispatch. pg runs the command with the short-lived PG* environment:
@@ -397,7 +398,7 @@ enum Command {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
-    /// Print scoped exports for a connection (run's no-command form).
+    /// Print temporary credential exports for a connection.
     ///
     /// pg prints PG* exports with the ticket in PGPASSWORD:
     /// `eval "$(aka env analytics)" && psql`. ssh prints the scoped agent
@@ -430,7 +431,7 @@ enum Command {
         #[arg(long, conflicts_with = "format")]
         password_only: bool,
     },
-    /// Cloud credential_process plumbing (creds, install).
+    /// Cloud credential helpers (creds, config).
     ///
     /// Cloud connections hold long-lived AWS/Azure/GCP identity in the vault;
     /// `aka run <connection> -- <command>` is the usual way to use one. These
@@ -442,7 +443,7 @@ enum Command {
         #[command(subcommand)]
         command: CloudCommand,
     },
-    /// Agent socket for auth-required direct endpoints.
+    /// Expose an authenticated SSH agent socket.
     ///
     /// Speaks for a connection's *direct endpoint*, presenting the endpoint
     /// secret the agent protocol gives stock `ssh` no way to send.
@@ -463,7 +464,7 @@ enum Command {
         /// local management-credential store.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this machine's.
+        /// Open the SSH endpoint from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
         /// Bind here instead of a private temporary path, so a
@@ -483,7 +484,7 @@ enum Command {
         #[command(subcommand)]
         command: SecretCommand,
     },
-    /// Operator commands, gated by the management token.
+    /// Manage broker access and settings.
     ///
     /// The broker has two credential planes: agents hold the shared agent
     /// key and use connections; admin commands hold the management token
@@ -509,11 +510,11 @@ enum Command {
         /// local management-credential store.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this machine's.
+        /// List or close sessions on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// The approval inbox: pending and recent approvals/elicitations.
+    /// Show pending and recent approval requests and questions.
     ///
     /// Lists decision records newest last. Answer a pending id with
     /// `aka approve <id>` or `aka deny <id>`.
@@ -525,15 +526,15 @@ enum Command {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this machine's.
+        /// Read approval requests from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Approve one pending request for its bounded confirmation window.
+    /// Approve a pending request for the displayed time window.
     Approve {
         /// The request id (`aka approvals` shows pending ids).
         id: Uuid,
-        /// Elicitation answer in NAME=VALUE form; repeat for multiple fields.
+        /// Answer in NAME=VALUE form; repeat for multiple fields.
         #[arg(
             long = "value",
             value_name = "NAME=VALUE",
@@ -543,22 +544,22 @@ enum Command {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this machine's.
+        /// Submit the approval to this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Deny one pending approval or elicitation.
+    /// Deny a pending request.
     Deny {
         /// The request id (`aka approvals` shows pending ids).
         id: Uuid,
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this machine's.
+        /// Submit the denial to this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Join a broker with an invite, storing its context and agent key.
+    /// Join a broker using an invite.
     ///
     /// The operator mints the invite with `aka admin invite`. Paste the URL
     /// it prints — the code rides in the fragment, so joining is one
@@ -581,12 +582,12 @@ enum Command {
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
     },
-    /// Forget a broker's stored context and agent key.
+    /// Forget a stored broker context and agent key.
     Logout {
         /// The context or broker URL to forget; omit for the current one.
         name: Option<String>,
     },
-    /// Show or switch the ambient broker context.
+    /// Show or switch broker context.
     ///
     /// Contexts decide where commands point when --root/--broker are absent:
     /// `local` (the desktop layout) and `server` (the serve root) are built
@@ -611,25 +612,26 @@ enum Command {
         /// Remove a defined context.
         #[arg(long, requires = "name", conflicts_with = "unset")]
         rm: bool,
-        /// Clear the current context; commands fall back to local.
+        /// Clear the saved default context. Environment and repository
+        /// overrides still apply.
         #[arg(long, conflicts_with = "name")]
         unset: bool,
     },
-    /// List connections with kind, access, and destination at a glance.
+    /// List connections available to this agent.
     Ls {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this machine's.
+        /// List connections from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Print, issue/rotate, renew, or revoke a connection's direct endpoint.
+    /// Show or manage a connection's direct endpoint.
     ///
     /// Issuance requires a running local or remote broker to own the
     /// listener; reads and revocation also work as offline edits.
     Endpoint(EndpointArgs),
-    /// Broker health and surface.
+    /// Show broker status.
     ///
     /// Reports whether a broker is running on this layout and what it serves
     /// (MCP host, tools, key file). Exits nonzero when none is up.
@@ -637,12 +639,11 @@ enum Command {
         /// Check a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Check the broker at this URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Audit trail (newest last).
+    /// Show the audit trail (newest last).
     ///
     /// Local reads project the append-only log onto the same schema returned
     /// by a remote broker.
@@ -653,8 +654,7 @@ enum Command {
         /// Read a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Read activity from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
@@ -662,8 +662,10 @@ enum Command {
 
 #[derive(Subcommand)]
 enum SecretCommand {
-    /// Add a secret. The value is read from stdin (or --value-env), never
-    /// from argv, where it would sit in `ps` output and shell history.
+    /// Add a secret from stdin or an environment variable.
+    ///
+    /// The value never comes from argv, where it would sit in `ps` output
+    /// and shell history.
     Add {
         /// Secret name, as referenced by connection templates.
         name: String,
@@ -680,23 +682,23 @@ enum SecretCommand {
         /// Create a missing explicit --root before seeding this first secret.
         #[arg(long, requires = "root")]
         create_root: bool,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Add the secret to this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// List secrets and the connections using them.
+    /// List secrets and their connections.
     List {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// List secrets from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Rename a secret; every injection template referencing it is
-    /// rewritten atomically with the rename.
+    /// Rename a secret.
+    ///
+    /// Every injection template referencing it is rewritten atomically with
+    /// the rename.
     Rename {
         /// The secret's current name.
         name: String,
@@ -705,14 +707,15 @@ enum SecretCommand {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Rename the secret on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Rotate a secret's value in place. Like add, the value is read
-    /// from stdin or --value-env, never from argv; every connection
-    /// referencing the secret picks the new value up on its next use.
+    /// Replace a secret's value.
+    ///
+    /// Like add, the value is read from stdin or --value-env, never from
+    /// argv; every connection referencing the secret picks the new value up
+    /// on its next use.
     Rotate {
         /// The secret to rotate.
         name: String,
@@ -726,20 +729,20 @@ enum SecretCommand {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Replace the secret on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Delete a secret. Refused while a connection still uses it.
+    /// Delete an unused secret.
+    ///
+    /// Refused while a connection still uses it.
     Rm {
         /// The secret to delete.
         name: String,
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Delete the secret from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
@@ -747,7 +750,7 @@ enum SecretCommand {
 
 #[derive(Subcommand)]
 enum AdminCommand {
-    /// Mint a one-use invite a teammate redeems with `aka login`.
+    /// Mint or manage one-use invitations.
     ///
     /// The invite is what makes handing out the shared agent key safe over
     /// the network: `/v1/pair` stays closed on TCP, and `/v1/join` accepts
@@ -789,8 +792,7 @@ enum AdminCommand {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Read or rotate the key on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
@@ -799,10 +801,12 @@ enum AdminCommand {
         #[command(subcommand)]
         command: SettingsCommand,
     },
-    /// Store a management token so management commands can drive a broker
-    /// while it runs — this machine's broker over its socket, or a hosted
-    /// one by URL. The token is read from stdin (or --token-env), never
-    /// argv, and is verified against the broker when it is reachable.
+    /// Store a management token.
+    ///
+    /// This lets management commands drive a running broker: this machine's
+    /// broker over its socket, or a hosted one by URL. The token is read from
+    /// stdin (or --token-env), never argv, and is verified against the broker
+    /// when it is reachable.
     Login {
         /// The hosted broker's manage URL; omit to store the token for
         /// this machine's broker (keyed by its socket path).
@@ -825,12 +829,15 @@ enum AdminCommand {
         #[arg(long)]
         root: Option<PathBuf>,
     },
-    /// Rotate this broker's management token and print it once. When the
-    /// broker is running, authorizes with the current saved/environment
-    /// token or its owner-only first-start token file. Falls back to an
-    /// offline issue when the local broker is stopped.
+    /// Rotate or revoke the management token.
+    ///
+    /// A rotation prints the replacement once. When the broker is running,
+    /// this authorizes with the current saved/environment token or its
+    /// owner-only first-start token file. It falls back to an offline issue
+    /// when the local broker is stopped.
     Token {
-        /// Revoke the management token instead (closes the manage API).
+        /// Disable token-based management access. Passkey, device, and
+        /// automation access remain available.
         #[arg(long)]
         revoke: bool,
         /// Expire the token this many days after issue (default 30, maximum
@@ -893,8 +900,7 @@ enum SettingsCommand {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Read settings from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
@@ -912,8 +918,7 @@ enum SettingsCommand {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Change settings on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
@@ -922,32 +927,35 @@ enum SettingsCommand {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // one short-lived instance per invocation
 enum ConnCommand {
-    /// Add a connection agents can name on capability calls.
+    /// Add a connection.
     Add {
         #[command(subcommand)]
         command: ConnAddCommand,
     },
-    /// List configured connections.
+    /// List all configured connections, including disabled connections.
     List {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// List connections from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Show one connection's policy, endpoint, health, and capability fields.
+    /// Show connection configuration and health.
     Show {
         name: String,
+        /// Read a connection from a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Read the connection from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Update fields on a connection (its kind is fixed). Only the flags
-    /// you pass change; changing the destination revokes the tool's direct
-    /// endpoints, exactly as in the app.
+    /// Update connection policy or fields.
+    ///
+    /// The connection kind is fixed and only the flags you pass change.
+    /// Changing the destination revokes the tool's direct endpoints, exactly
+    /// as in the app.
     ///
     /// Capability fields are kind-scoped: `aka conn update pg <name> --host …`.
     /// Policy is kind-free: `aka conn update <name> --confirm`.
@@ -958,7 +966,7 @@ enum ConnCommand {
         #[command(flatten)]
         policy: ConnPolicyArgs,
     },
-    /// Rename a connection without touching its capability fields.
+    /// Rename a connection.
     Rename {
         /// The connection's current name.
         name: String,
@@ -967,61 +975,63 @@ enum ConnCommand {
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Rename the connection on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Delete a connection. Its agent access and direct endpoints die with
-    /// it; its secrets stay in the vault.
+    /// Delete a connection.
+    ///
+    /// Its agent access and direct endpoints die with it; its secrets stay
+    /// in the vault.
     Rm {
         /// The connection to delete.
         name: String,
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Delete the connection from this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Enable agent access for a connection: calls execute immediately,
-    /// for every agent at once.
+    /// Enable agent access.
+    ///
+    /// Calls execute immediately for every agent at once.
     Enable {
         /// The connection to enable.
         name: String,
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Enable the connection on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Disable agent access for a connection: every agent's calls are
-    /// refused with 403 denied_by_policy until re-enabled.
+    /// Disable agent access.
+    ///
+    /// Every agent's calls are refused with 403 denied_by_policy until
+    /// re-enabled.
     Disable {
         /// The connection to disable.
         name: String,
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Disable the connection on this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
-    /// Test a connection against its pinned destination with its stored
-    /// credential (the credential travels only on the upstream leg).
-    /// Exits nonzero when the test fails.
+    /// Test destination and credentials.
+    ///
+    /// Tests the pinned destination with the stored credential; the
+    /// credential travels only on the upstream leg. Exits nonzero when the
+    /// test fails.
     Test {
         /// The connection to test.
         name: String,
         /// Operate on a broker rooted here instead of the default layout.
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Manage the broker at this manage-API URL instead of this
-        /// machine's.
+        /// Test the connection through this broker URL instead of this machine's.
         #[arg(long)]
         broker: Option<String>,
     },
@@ -1064,7 +1074,7 @@ struct EndpointArgs {
     /// Operate on a broker rooted here instead of the default layout.
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Manage the broker at this manage-API URL instead of this machine's.
+    /// Read or change the endpoint on this broker URL instead of this machine's.
     #[arg(long)]
     broker: Option<String>,
 }
@@ -1098,7 +1108,7 @@ struct ConnPolicyArgs {
     /// Operate on a broker rooted here instead of the default layout.
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Manage the broker at this manage-API URL instead of this machine's.
+    /// Update connection policy on this broker URL instead of this machine's.
     #[arg(long)]
     broker: Option<String>,
 }
@@ -1126,7 +1136,7 @@ struct ManagementTarget {
     /// Operate on a broker rooted here instead of the default layout.
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Manage the broker at this manage-API URL instead of this machine's.
+    /// Add or update the connection on this broker URL instead of this machine's.
     #[arg(long)]
     broker: Option<String>,
 }
@@ -1529,8 +1539,7 @@ struct ConnAdd {
     /// Skip the post-add connection test.
     #[arg(long)]
     no_test: bool,
-    /// Manage the broker at this manage-API URL instead of this
-    /// machine's.
+    /// Add the connection to this broker URL instead of this machine's.
     #[arg(long)]
     broker: Option<String>,
 }
@@ -1691,7 +1700,7 @@ impl ConnKind {
 
 #[derive(Subcommand)]
 enum CloudCommand {
-    /// Print raw credentials for credential_process / scripts.
+    /// Print temporary cloud credentials.
     ///
     /// Default format is provider-native: AWS prints credential_process JSON
     /// (Version 1). Use --format env for KEY=value lines, or json for the full
@@ -1713,8 +1722,9 @@ enum CloudCommand {
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
     },
-    /// Print an AWS shared-config profile stanza for credential_process.
-    Install {
+    /// Print cloud CLI configuration.
+    #[command(name = "config", alias = "install")]
+    Config {
         /// The cloud connection's name.
         connection: String,
         /// Profile name to emit (default: multitool-<connection>).
@@ -1727,7 +1737,7 @@ enum CloudCommand {
         /// flag exists to catch the remote guess and explain, never to work.
         #[arg(long, hide = true)]
         broker: Option<String>,
-        /// Label this client in the user's activity log (unused for install
+        /// Label this client in the user's activity log (unused for config
         /// text, kept for consistency with other cloud subcommands).
         #[arg(long, value_parser = parse_client_label)]
         client: Option<String>,
@@ -1780,11 +1790,8 @@ fn endpoint_require_auth(require_auth: bool, no_require_auth: bool) -> Option<bo
 
 fn endpoint_action_supported(action: EndpointAction, online: bool) -> Result<(), &'static str> {
     if matches!(action, EndpointAction::Issue | EndpointAction::Renew) && !online {
-        Err(
-            "direct endpoint issuance and renewal require a running broker to own the listener; \
-             start Multitool for the local store, or `aka serve` / `aka serve --root …` \
-             for a headless root, then retry",
-        )
+        Err("No broker running for this context.\n\
+             Start the Multitool app or `aka serve`, then retry.")
     } else {
         Ok(())
     }
@@ -1926,8 +1933,7 @@ struct ConnUpdate {
     /// Operate on a broker rooted here instead of the default layout.
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Manage the broker at this manage-API URL instead of this
-    /// machine's.
+    /// Update the connection on this broker URL instead of this machine's.
     #[arg(long)]
     broker: Option<String>,
 }
@@ -2011,15 +2017,7 @@ fn run_cli() {
         .ok();
     if std::env::args_os().len() == 1 {
         let color = stdout_use_color();
-        let (header, next) = bare_help_frame(color);
-        println!("{header}\n");
-        let mut command = configured_cli_command(color, false);
-        command
-            .print_help()
-            .unwrap_or_else(|error| die(format!("could not print help: {error}")));
-        if let Some(next) = next {
-            println!("\n{next}");
-        }
+        println!("{}", bare_home(color));
         return;
     }
     let cli = parse_cli();
@@ -2037,15 +2035,7 @@ fn run_cli() {
             }
             (Some(SetupCommand::Desktop { root }), _) => cmd_setup_desktop(root, json),
             (None, Some(client)) if write => cmd_setup_apply(client, json),
-            (None, Some(client)) => {
-                cmd_setup_mcp(client, json);
-                if !json {
-                    guide(format!(
-                        "apply all of this: `aka setup {} --write`",
-                        client.label()
-                    ));
-                }
-            }
+            (None, Some(client)) => cmd_setup_mcp(client, json),
             (None, None) => die_with(
                 ExitCode::Usage,
                 "name an MCP client (codex, claude-code, claude-desktop) — \
@@ -2106,7 +2096,7 @@ fn run_cli() {
             command,
         } => {
             if let Some(url) = broker {
-                refuse_remote_usage("run", "", &url);
+                refuse_remote_usage("run", &url);
             }
             cmd_run(connection, root, client, command, json)
         }
@@ -2119,7 +2109,7 @@ fn run_cli() {
             password_only,
         } => {
             if let Some(url) = broker {
-                refuse_remote_usage("env", "", &url);
+                refuse_remote_usage("env", &url);
             }
             cmd_env(connection, root, client, format, password_only, json)
         }
@@ -2132,11 +2122,11 @@ fn run_cli() {
                 client,
             } => {
                 if let Some(url) = broker {
-                    refuse_remote_usage("cloud creds", "/v1/cloud/session", &url);
+                    refuse_remote_usage("cloud creds", &url);
                 }
                 cmd_cloud_creds(connection, format, root, client, json)
             }
-            CloudCommand::Install {
+            CloudCommand::Config {
                 connection,
                 profile,
                 root,
@@ -2144,9 +2134,9 @@ fn run_cli() {
                 client: _,
             } => {
                 if let Some(url) = broker {
-                    refuse_remote_usage("cloud install", "/v1/cloud/session", &url);
+                    refuse_remote_usage("cloud config", &url);
                 }
-                cmd_cloud_install(connection, profile, root, json)
+                cmd_cloud_config(connection, profile, root, json)
             }
         },
         Command::SshAgent {
@@ -2513,10 +2503,7 @@ enum ContextTarget {
 struct ContextsFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     current: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "std::collections::BTreeMap::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     contexts: std::collections::BTreeMap<String, ContextEntry>,
 }
 
@@ -2677,14 +2664,11 @@ fn usage_agent(explicit: Option<&Path>) -> client::Agent {
         Some((source, ContextTarget::Broker(url))) => {
             let url = url.trim_end_matches('/').to_string();
             let key = remote_agent_key(&url).unwrap_or_else(|| {
-                die_with(
-                    ExitCode::Authentication,
-                    format!(
-                        "no agent key stored for {url} ({source}) — join it with \
-                         `aka login {url}` using an invite from its operator, or \
-                         set AKA_AGENT_KEY"
-                    ),
-                )
+                guide_compact(format!(
+                    "Using {}",
+                    context_target_description(&source, &url)
+                ));
+                die_with(ExitCode::Authentication, agent_key_required_help(&url))
             });
             client::Agent::remote(&url, &key)
         }
@@ -2713,10 +2697,19 @@ fn cmd_admin_invite(
     root: Option<PathBuf>,
     json: bool,
 ) {
-    let root = root.or_else(|| match ambient_context() {
-        Some((_, ContextTarget::Root(path))) => Some(path),
-        _ => None,
-    });
+    let explicit_root = root.is_some();
+    let ambient = (!explicit_root).then(ambient_context).flatten();
+    let (root, target) = match (root, ambient) {
+        (Some(root), _) => {
+            let display = display_home_relative_path(&root);
+            (Some(root), display)
+        }
+        (None, Some((source, ContextTarget::Root(path)))) => {
+            let display = display_home_relative_path(&path);
+            (Some(path), context_status_description(&source, &display))
+        }
+        (None, _) => (None, format!("{} (local)", local_context_location())),
+    };
     require_existing_root_for_read(root.as_deref(), false);
     let paths = store_paths(root.as_deref());
     let socket = paths.socket_file();
@@ -2735,19 +2728,40 @@ fn cmd_admin_invite(
             },
         ),
     };
-    let (status, body) = match runtime.block_on(client::unix_http(
-        &socket, method, &path, None, None, None,
-    )) {
-        Ok(response) => response,
-        Err(error) => die_with(
-            ExitCode::NoBroker,
-            format!(
-                "could not reach this machine's broker at {}: {error}\n\
-                 Invites are minted on the broker host, so the broker has to be running there.",
-                socket.display()
-            ),
-        ),
-    };
+    let (status, body) =
+        match runtime.block_on(client::unix_http(&socket, method, &path, None, None, None)) {
+            Ok(response) => response,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                let start = if target.ends_with("(local)") {
+                    "Start the Multitool app, then retry.".to_string()
+                } else if target.ends_with("(server)") {
+                    "Start it with `aka serve`, then retry.".to_string()
+                } else {
+                    let root = root
+                        .as_deref()
+                        .expect("a non-local invite target has a root");
+                    format!(
+                        "Start it with `aka serve --root {}`, then retry.",
+                        bare_shell_path(root)
+                    )
+                };
+                die_with(
+                    ExitCode::NoBroker,
+                    format!(
+                        "{target} - No broker running\n\n\
+                         Invites must be created on the broker host.\n{start}"
+                    ),
+                )
+            }
+            Err(error) => die(format!(
+            "{target} - Broker status unavailable\n\n{error}\nRetry after the broker is reachable."
+        )),
+        };
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
     if status != 200 {
         let detail = parsed
@@ -2763,7 +2777,7 @@ fn cmd_admin_invite(
             return;
         }
         if invites.is_empty() {
-            guide("no outstanding invites");
+            guide("no active invites");
             return;
         }
         let rows = invites
@@ -2771,8 +2785,14 @@ fn cmd_admin_invite(
             .map(|invite| {
                 vec![
                     invite["label"].as_str().unwrap_or("—").to_string(),
-                    invite["created_at"].as_str().unwrap_or_default().to_string(),
-                    invite["expires_at"].as_str().unwrap_or_default().to_string(),
+                    invite["created_at"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    invite["expires_at"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
                 ]
             })
             .collect::<Vec<_>>();
@@ -2788,11 +2808,16 @@ fn cmd_admin_invite(
             "admin.invite.cancel",
             serde_json::json!({ "cancelled": cancelled }),
         );
-        ack(format!("voided {cancelled} outstanding invite(s)"));
+        ack(format!(
+            "cancelled {cancelled} invite{}",
+            if cancelled == 1 { "" } else { "s" }
+        ));
         return;
     }
     let invite = parsed["invite"].as_str().unwrap_or_default();
-    let public_url = parsed["public_url"].as_str().map(|url| url.trim_end_matches('/'));
+    let public_url = parsed["public_url"]
+        .as_str()
+        .map(|url| url.trim_end_matches('/'));
     let minutes = parsed["expires_in_seconds"].as_u64().unwrap_or(900) / 60;
     if json {
         mutation_ok(
@@ -2805,23 +2830,33 @@ fn cmd_admin_invite(
         );
         return;
     }
-    ack(format!("one-use invite created (expires in {minutes} min)"));
     match public_url {
         Some(url) => {
-            println!("{url}/join#{invite}");
+            ack(format!(
+                "invite created - expires in {minutes} minute{}",
+                if minutes == 1 { "" } else { "s" }
+            ));
+            let join_url = format!("{url}/join#{invite}");
+            println!("{join_url}");
             guide(format!(
-                "they run: aka login {url}/join#{invite}\n\
-                 The invite is spent by the first redemption; /v1/pair stays \
-                 closed over TCP."
+                "Send this URL to the person joining. They run:\n\
+                 aka login {}\n\n\
+                 The first successful login uses up the invite.",
+                shell_quote(&join_url)
             ));
         }
         None => {
+            ack(format!(
+                "invite code created - expires in {minutes} minute{}",
+                if minutes == 1 { "" } else { "s" }
+            ));
             println!("{invite}");
-            guide(
-                "this broker advertises no public URL, so the code prints \
-                 alone — serve with `--public-url` (or `--listen`) and they \
-                 run: aka login <url> --invite <code>",
-            );
+            guide(format!(
+                "This broker has no public URL. Give the person joining the broker URL and this command:\n\
+                 aka login <url> --invite {}\n\n\
+                 Set `--public-url` to generate one-line invite URLs in the future.",
+                shell_quote(invite)
+            ));
         }
     }
 }
@@ -2841,6 +2876,11 @@ fn urlencode(value: &str) -> String {
         .collect()
 }
 
+fn invite_code_required_help() -> &'static str {
+    "Invite code required.\n\n\
+     Paste the full URL from `aka admin invite`, or pass `--invite <code>`."
+}
+
 /// `aka login <url>`: redeem an invite, store the shared agent key for that
 /// broker, and define/select its context.
 fn cmd_login(
@@ -2857,7 +2897,10 @@ fn cmd_login(
         Some((base, fragment)) => (base.to_string(), Some(fragment.to_string())),
         None => (url.clone(), None),
     };
-    let base = base.trim_end_matches("/join").trim_end_matches('/').to_string();
+    let base = base
+        .trim_end_matches("/join")
+        .trim_end_matches('/')
+        .to_string();
     let base = match RemoteConfig::normalize_url(&base) {
         Ok(url) => url,
         Err(error) => die_with(ExitCode::Usage, error),
@@ -2868,11 +2911,7 @@ fn cmd_login(
         .filter(|code| !code.is_empty())
         .unwrap_or_else(|| {
             if presentation::stdin_is_tty() {
-                die_with(
-                    ExitCode::Usage,
-                    "no invite code — paste the URL your operator's `aka admin \
-                     invite` printed (it carries the code), or pass --invite <code>",
-                );
+                die_with(ExitCode::Usage, invite_code_required_help());
             }
             let mut code = String::new();
             use std::io::Read as _;
@@ -2881,7 +2920,7 @@ fn cmd_login(
                 .unwrap_or_else(|error| die(format!("could not read the invite: {error}")));
             let code = code.trim().to_string();
             if code.is_empty() {
-                die_with(ExitCode::Usage, "the invite code on stdin was empty");
+                die_with(ExitCode::Usage, invite_code_required_help());
             }
             code
         });
@@ -2892,7 +2931,7 @@ fn cmd_login(
         .enable_all()
         .build()
         .expect("tokio runtime");
-    let spinner = presentation::Spinner::start_if(!json, format!("joining {base}…"));
+    let spinner = presentation::Spinner::start_if(!json, format!("Joining {base}…"));
     let response = runtime.block_on(async {
         reqwest::Client::new()
             .post(format!("{base}/v1/join"))
@@ -2905,7 +2944,10 @@ fn cmd_login(
     let response = response.unwrap_or_else(|error| {
         die_with(
             ExitCode::RemoteUnreachable,
-            format!("could not reach {base}: {error}"),
+            format!(
+                "Broker at {base} is unreachable.\n{error}\n\n\
+                 Check the URL, network connection, and broker status, then retry."
+            ),
         )
     });
     let status = response.status();
@@ -2924,7 +2966,10 @@ fn cmd_login(
             } else {
                 ExitCode::Generic
             },
-            format!("{base} refused the invite: {detail}"),
+            format!(
+                "Invite rejected by {base}.\n{detail}\n\n\
+                 Ask the operator to create a new invite with `aka admin invite`."
+            ),
         );
     }
     let Some(key) = parsed["token"].as_str().filter(|key| !key.is_empty()) else {
@@ -2964,14 +3009,13 @@ fn cmd_login(
             "key_stored_in": store.storage_description(&stored_url),
         }),
     );
-    ack(format!(
-        "paired with {stored_url} — agent key stored in {}",
-        store.storage_description(&stored_url)
-    ));
-    ack(format!("context {name} saved and made current"));
+    ack(format!("joined {stored_url}"));
     guide(format!(
-        "management commands still need their own token: `aka admin login \
-         --broker {stored_url}`"
+        "Context   {name} (current)\n\
+         Agent key Saved in {}\n\n\
+         Next: run `aka setup <client> --write` to connect an agent.\n\n\
+         Management access is separate. If needed, use `aka admin login --broker {stored_url}`.",
+        store.storage_description(&stored_url)
     ));
 }
 
@@ -3010,7 +3054,10 @@ fn cmd_logout(name: Option<String>) {
     let ContextTarget::Broker(url) = target else {
         die_with(
             ExitCode::Usage,
-            format!("{name} is a local context; there is no stored key to forget"),
+            format!(
+                "{name} has no remote agent key to remove.\n\
+                 Use `aka use --unset` to clear the default context."
+            ),
         );
     };
     let paths = store_paths(None);
@@ -3027,8 +3074,13 @@ fn cmd_logout(name: Option<String>) {
         "logout",
         serde_json::json!({ "broker": url, "context": name }),
     );
-    ack(format!("forgot {name} ({url}) and its stored agent key"));
-    guide("its management token, if any, is separate: `aka admin logout`");
+    ack(format!("left {url}"));
+    guide(format!(
+        "Removed context: {name}\n\
+         Removed its saved agent key.\n\n\
+         Management access is unchanged. To remove it too, run \
+         `aka admin logout --broker {url}`."
+    ));
 }
 
 /// `aka use`: list, switch, define, pin, or remove contexts. All of it is
@@ -3048,7 +3100,8 @@ fn cmd_use(
         file.current = None;
         save_contexts(&file);
         mutation_ok("use.unset", serde_json::json!({ "current": null }));
-        ack("cleared the current context — commands point at local again");
+        ack("cleared the default context");
+        guide(current_context_message(ambient_context()));
         return;
     }
     let Some(name) = name else {
@@ -3078,61 +3131,64 @@ fn cmd_use(
             }));
             return;
         }
-        let current = file.current.as_deref();
+        let current = effective_context_name(&file);
+        let current = current.as_deref();
         let mut rows = Vec::new();
         let marker = |on: bool| if on { "*" } else { " " }.to_string();
         rows.push(vec![
             marker(current.is_none() && resolved.is_none()),
             "local".into(),
-            "the desktop layout (~/.aka)".into(),
+            format!("{} (desktop app)", local_context_location()),
         ]);
+        let server_root = named_context_target(&file, "server")
+            .ok()
+            .map(|target| context_target_location(&target))
+            .unwrap_or_else(|| "~/.akaserver".into());
         rows.push(vec![
             marker(current == Some("server")),
             "server".into(),
-            "the serve root (AKA_SERVER_ROOT or ~/.akaserver)".into(),
+            format!("{server_root} (`aka serve`)"),
         ]);
         for (name, entry) in &file.contexts {
             let target = entry
                 .broker
                 .clone()
-                .or_else(|| entry.root.as_ref().map(|p| p.display().to_string()))
+                .or_else(|| entry.root.as_ref().map(|p| display_home_relative_path(p)))
                 .unwrap_or_default();
-            rows.push(vec![marker(current == Some(name.as_str())), name.clone(), target]);
+            rows.push(vec![
+                marker(current == Some(name.as_str())),
+                name.clone(),
+                target,
+            ]);
         }
         println!("{}", presentation::table(&["", "name", "target"], rows));
-        match resolved {
-            Some((source, target)) => guide(format!(
-                "commands currently resolve via {source} → {}",
-                match target {
-                    ContextTarget::Local => "local".to_string(),
-                    ContextTarget::Root(path) => path.display().to_string(),
-                    ContextTarget::Broker(url) => url,
-                }
-            )),
-            None => guide("no ambient context — commands point at local (~/.aka)"),
-        }
+        guide(current_context_message(resolved));
         return;
     };
     if rm {
+        let was_current = file.current.as_deref() == Some(name.as_str());
         if file.contexts.remove(&name).is_none() {
             die_with(
                 ExitCode::NotFound,
                 format!("no context named {name} to remove"),
             );
         }
-        if file.current.as_deref() == Some(name.as_str()) {
+        if was_current {
             file.current = None;
         }
         save_contexts(&file);
         mutation_ok("use.rm", serde_json::json!({ "name": name }));
-        ack(format!("removed context {name}"));
+        ack(format!("removed context: {name}"));
+        if was_current {
+            guide(current_context_message(ambient_context()));
+        }
         return;
     }
     if broker.is_some() || root.is_some() {
         if matches!(name.as_str(), "local" | "server") {
             die_with(
                 ExitCode::Usage,
-                format!("{name} is a built-in context and cannot be redefined"),
+                format!("{name} is a built-in context.\nChoose another name for this broker."),
             );
         }
         let broker = broker.map(|url| match RemoteConfig::normalize_url(&url) {
@@ -3152,7 +3208,7 @@ fn cmd_use(
             "use.define",
             serde_json::json!({ "name": name, "root": root, "broker": broker, "current": name }),
         );
-        ack(format!("defined context {name} and made it current"));
+        ack(format!("created and switched to context: {name}"));
         return;
     }
     if let Err(message) = named_context_target(&file, &name) {
@@ -3161,17 +3217,20 @@ fn cmd_use(
     if pin {
         std::fs::write(PIN_FILE, format!("{name}\n"))
             .unwrap_or_else(|error| die(format!("could not write {PIN_FILE}: {error}")));
-        mutation_ok("use.pin", serde_json::json!({ "name": name, "file": PIN_FILE }));
-        ack(format!(
-            "pinned this directory to context {name} — commit {PIN_FILE} so \
-             teammates and agents inherit it"
+        mutation_ok(
+            "use.pin",
+            serde_json::json!({ "name": name, "file": PIN_FILE }),
+        );
+        ack(format!("pinned this directory to context: {name}"));
+        guide(format!(
+            "Commit {PIN_FILE} so teammates and agents use the same context."
         ));
         return;
     }
     file.current = Some(name.clone());
     save_contexts(&file);
     mutation_ok("use.switch", serde_json::json!({ "current": name }));
-    ack(format!("switched to context {name}"));
+    ack(format!("switched to context: {name}"));
 }
 
 /// One unauthenticated well-known read over a local socket with a short
@@ -3201,19 +3260,263 @@ fn broker_answers(paths: &Paths) -> bool {
         .unwrap_or(false)
 }
 
-/// The live line above bare `aka`'s help and, when there is a useful
-/// context-specific action, the NEXT hint below it. Everything degrades — no
-/// broker is a dim pointer, never an error, and the probe never authenticates
-/// so glancing at help leaves no audit trace.
-fn bare_help_frame(color: bool) -> (String, Option<String>) {
-    let next = |hint: &str, why: &str| {
-        format!(
-            "{}  {}   {}",
-            paint::bold_green(color, "NEXT"),
-            paint::bold_cyan(color, hint),
-            paint::dim(color, why)
-        )
+struct BareHome {
+    context: String,
+    status: String,
+    online: bool,
+    other_context: Option<BareContext>,
+    next_intro: Option<String>,
+    next: Vec<(String, String)>,
+    after: Vec<(String, String)>,
+    commands: Vec<(String, String)>,
+}
+
+struct BareContext {
+    name: String,
+    status: String,
+    online: bool,
+}
+
+fn bare_row(command: impl Into<String>, description: impl Into<String>) -> (String, String) {
+    (command.into(), description.into())
+}
+
+fn context_source_label(source: &str) -> &str {
+    source.strip_prefix("context ").unwrap_or(source)
+}
+
+fn context_target_description(source: &str, location: &str) -> String {
+    if let Some(name) = source.strip_prefix("context ") {
+        format!("{name} context at {location}")
+    } else if source.starts_with(&format!("{BROKER_ENV}=")) {
+        format!("broker from `{BROKER_ENV}` at {location}")
+    } else if source.starts_with("repo pin ") {
+        format!("repository-pinned context at {location}")
+    } else {
+        format!("broker at {location}")
+    }
+}
+
+fn context_saved_description(source: &str, location: &str) -> String {
+    if let Some(name) = source.strip_prefix("context ") {
+        format!("{name} ({location})")
+    } else if source.starts_with("repo pin ") {
+        format!("repository-pinned broker ({location})")
+    } else {
+        location.to_string()
+    }
+}
+
+fn context_status_description(source: &str, location: &str) -> String {
+    if let Some(name) = source.strip_prefix("context ") {
+        format!("{location} ({name})")
+    } else if source.starts_with(&format!("{BROKER_ENV}=")) {
+        format!("{location} ({source})")
+    } else if source.starts_with("repo pin ") {
+        format!("{location} (pinned by {PIN_FILE})")
+    } else {
+        location.to_string()
+    }
+}
+
+fn context_target_location(target: &ContextTarget) -> String {
+    match target {
+        ContextTarget::Local => local_context_location(),
+        ContextTarget::Root(path) => display_home_relative_path(path),
+        ContextTarget::Broker(url) => url.clone(),
+    }
+}
+
+fn current_context_message(resolved: Option<(String, ContextTarget)>) -> String {
+    let summary = match resolved {
+        Some((source, target)) => {
+            context_status_description(&source, &context_target_location(&target))
+        }
+        None => format!("{} (local)", local_context_location()),
     };
+    format!("Current: {summary}")
+}
+
+fn effective_context_name(file: &ContextsFile) -> Option<String> {
+    if let Ok(value) = std::env::var(BROKER_ENV) {
+        let value = value.trim();
+        if !value.is_empty() && !value.starts_with("http://") && !value.starts_with("https://") {
+            return Some(value.to_string());
+        }
+    }
+    if let Some((_, value)) = repo_pin() {
+        if !value.starts_with("http://") && !value.starts_with("https://") {
+            return Some(value);
+        }
+    }
+    file.current.clone()
+}
+
+fn display_home_relative_path(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(relative) = path.strip_prefix(home) {
+            if relative.as_os_str().is_empty() {
+                return "~".into();
+            }
+            return format!("~/{}", relative.display());
+        }
+    }
+    path.display().to_string()
+}
+
+fn bare_shell_path(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(relative) = path.strip_prefix(home) {
+            if relative.as_os_str().is_empty() {
+                return "~".into();
+            }
+            let relative = relative.display().to_string();
+            if relative
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+            {
+                return format!("~/{relative}");
+            }
+            return format!("~/{}", shell_quote(&relative));
+        }
+    }
+    shell_quote(&path.display().to_string())
+}
+
+fn bare_setup_commands() -> Vec<(String, String)> {
+    vec![
+        bare_row(
+            "aka setup <client>",
+            "Show the client setup command or configuration",
+        ),
+        bare_row(
+            "aka setup <client> --write",
+            "Register CLI clients and configure this repository",
+        ),
+        bare_row("aka use", "Show or switch broker context"),
+        bare_row("aka status", "Show broker status"),
+    ]
+}
+
+fn bare_common_commands() -> Vec<(String, String)> {
+    vec![
+        bare_row("aka ls", "List available connections"),
+        bare_row("aka run <conn> -- <cmd>", "Run with brokered credentials"),
+        bare_row("aka approvals", "Review pending requests"),
+        bare_row("aka status", "Show broker status"),
+    ]
+}
+
+fn render_bare_rows(rows: &[(String, String)], width: usize, color: bool, faded: bool) -> String {
+    rows.iter()
+        .map(|(command, description)| {
+            let padding = " ".repeat(width.saturating_sub(command.chars().count()));
+            let command = if faded {
+                paint::dim(color, command)
+            } else {
+                paint::bold_cyan(color, command)
+            };
+            format!(
+                " {}{}  {}",
+                command,
+                padding,
+                paint::dim(color, description)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_bare_context(context: &str, status: &str, online: bool, color: bool) -> String {
+    let status = if online {
+        paint::bold_green(color, status)
+    } else {
+        paint::dim(color, status)
+    };
+    format!(
+        "{}{}{}",
+        paint::bold_cyan(color, context),
+        paint::dim(color, " - "),
+        status,
+    )
+}
+
+fn render_bare_home(home: BareHome, color: bool) -> String {
+    let mut contexts = render_bare_context(&home.context, &home.status, home.online, color);
+    if let Some(other) = &home.other_context {
+        contexts.push('\n');
+        contexts.push_str(&render_bare_context(
+            &other.name,
+            &other.status,
+            other.online,
+            color,
+        ));
+    }
+    let mut output = format!(
+        "{}\n\n{}\n\n{}\n",
+        paint::bold_green(color, format!("aka {}", env!("CARGO_PKG_VERSION"))),
+        contexts,
+        paint::bold_green(color, "NEXT"),
+    );
+    if let Some(intro) = home.next_intro {
+        output.push_str(&format!(" {}\n", paint::dim(color, intro)));
+    }
+    let next_width = home
+        .next
+        .iter()
+        .chain(&home.after)
+        .map(|(command, _)| command.chars().count())
+        .max()
+        .unwrap_or_default();
+    output.push_str(&render_bare_rows(&home.next, next_width, color, false));
+    if !home.after.is_empty() {
+        output.push('\n');
+        output.push_str(&render_bare_rows(&home.after, next_width, color, true));
+    }
+    let progression = home
+        .next
+        .iter()
+        .chain(&home.after)
+        .map(|(command, _)| command.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let setup_in_progression = progression
+        .iter()
+        .any(|command| command.starts_with("aka setup "));
+    let commands = home
+        .commands
+        .iter()
+        .filter(|(command, _)| {
+            !progression.contains(command.as_str())
+                && !(setup_in_progression && command.starts_with("aka setup "))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let commands_width = commands
+        .iter()
+        .map(|(command, _)| command.chars().count())
+        .max()
+        .unwrap_or_default();
+    if !commands.is_empty() {
+        output.push_str(&format!(
+            "\n\n{}\n{}",
+            paint::bold_green(color, "MORE"),
+            render_bare_rows(&commands, commands_width, color, false),
+        ));
+    }
+    output.push_str(&format!(
+        "\n\n{}",
+        paint::dim(
+            color,
+            "aka -h for common commands\naka --help for full reference"
+        )
+    ));
+    output
+}
+
+/// Bare `aka` is a fast, context-aware home screen. Local probes are
+/// unauthenticated and bounded; remote brokers are never probed, so glancing
+/// at the next action cannot hang or leave an audit trace.
+fn bare_home(color: bool) -> String {
     // An ambient context is the answer to "where do commands point", so it
     // outranks whatever happens to be running locally. No probe: reaching a
     // remote broker can be slow, and bare `aka` must stay instant.
@@ -3221,48 +3524,131 @@ fn bare_help_frame(color: bool) -> (String, Option<String>) {
         Some((source, ContextTarget::Broker(url))) => {
             let url = url.trim_end_matches('/').to_string();
             let joined = remote_agent_key(&url).is_some();
-            let header = format!(
-                "{} {}",
-                paint::bold_green(color, format!("● context → {url}")),
-                paint::dim(color, format!("({source})"))
-            );
-            let hint = if joined {
-                next("aka ls", "see what agents can reach there")
+            let (status, next) = if joined {
+                (
+                    "Agent key stored; remote reachability not checked".into(),
+                    vec![bare_row("aka ls", "See what agents can reach there")],
+                )
             } else {
-                next(
-                    &format!("aka login {url}"),
-                    "no agent key stored yet — redeem an invite",
+                (
+                    "No agent key stored".into(),
+                    vec![bare_row(
+                        format!("aka login {url}"),
+                        "Redeem an invite for this broker",
+                    )],
                 )
             };
-            return (header, Some(hint));
+            return render_bare_home(
+                BareHome {
+                    context: format!("{url} ({})", context_source_label(&source)),
+                    status,
+                    online: false,
+                    other_context: None,
+                    next_intro: None,
+                    next,
+                    after: if joined {
+                        vec![
+                            bare_row("aka run <conn> -- <cmd>", "Use a connection"),
+                            bare_row("aka approvals", "Review pending requests"),
+                        ]
+                    } else {
+                        vec![
+                            bare_row("aka setup <client> [--write]", "Connect an agent or app"),
+                            bare_row("aka ls", "List available connections"),
+                        ]
+                    },
+                    commands: if joined {
+                        bare_common_commands()
+                    } else {
+                        bare_setup_commands()
+                    },
+                },
+                color,
+            );
         }
         Some((source, ContextTarget::Root(root))) => {
             if broker_answers(&Paths::under(&root)) {
-                return (
-                    format!(
-                        "{} {}",
-                        paint::bold_green(color, "● broker running —"),
-                        paint::dim(color, format!("{} ({source})", root.display()))
-                    ),
-                    Some(next("aka ls", "see what agents can reach")),
+                return render_bare_home(
+                    BareHome {
+                        context: format!(
+                            "{} ({})",
+                            display_home_relative_path(&root),
+                            context_source_label(&source)
+                        ),
+                        status: "Broker running".into(),
+                        online: true,
+                        other_context: None,
+                        next_intro: None,
+                        next: vec![bare_row("aka ls", "See what agents can reach")],
+                        after: vec![
+                            bare_row("aka run <conn> -- <cmd>", "Use a connection"),
+                            bare_row("aka approvals", "Review pending requests"),
+                        ],
+                        commands: bare_common_commands(),
+                    },
+                    color,
                 );
             }
+            return render_bare_home(
+                BareHome {
+                    context: format!(
+                        "{} ({})",
+                        display_home_relative_path(&root),
+                        context_source_label(&source)
+                    ),
+                    status: "No broker running".into(),
+                    online: false,
+                    other_context: None,
+                    next_intro: None,
+                    next: vec![bare_row(
+                        format!("aka serve --root {}", bare_shell_path(&root)),
+                        "Start this broker",
+                    )],
+                    after: vec![
+                        bare_row("aka setup <client> [--write]", "Connect an agent or app"),
+                        bare_row("aka ls", "List available connections"),
+                    ],
+                    commands: bare_setup_commands(),
+                },
+                color,
+            );
         }
         Some((_, ContextTarget::Local)) | None => {}
     }
     if let Ok(paths) = Paths::default_locations() {
         if broker_answers(&paths) {
-            let header = format!(
-                "{} {}",
-                paint::bold_green(color, "● broker running —"),
-                paint::dim(color, paths.socket_file().display().to_string())
-            );
-            let hint = if Path::new(".claude/skills/multitool/SKILL.md").exists() {
-                next("aka ls", "see what agents can reach")
+            let skill_installed = Path::new(".claude/skills/multitool/SKILL.md").exists();
+            let next = if skill_installed {
+                bare_row("aka ls", "See what agents can reach")
             } else {
-                next("aka setup claude-code", "connect an agent to this repo")
+                bare_row(
+                    "aka setup codex --write",
+                    "Connect Codex to this repository",
+                )
             };
-            return (header, Some(hint));
+            return render_bare_home(
+                BareHome {
+                    context: format!("{} (local)", local_context_location()),
+                    status: "Broker running".into(),
+                    online: true,
+                    other_context: None,
+                    next_intro: None,
+                    next: vec![next],
+                    after: if skill_installed {
+                        vec![
+                            bare_row("aka run <conn> -- <cmd>", "Use a connection"),
+                            bare_row("aka approvals", "Review pending requests"),
+                        ]
+                    } else {
+                        vec![
+                            bare_row("aka ls", "List available connections"),
+                            bare_row("aka run <conn> -- <cmd>", "Use a connection"),
+                        ]
+                    },
+                    commands: bare_common_commands(),
+                },
+                color,
+            );
         }
     }
     let server_root = std::env::var(SERVER_ROOT_ENV)
@@ -3272,21 +3658,52 @@ fn bare_help_frame(color: bool) -> (String, Option<String>) {
         .or_else(|| default_server_root().ok());
     if let Some(root) = server_root {
         if broker_answers(&Paths::under(&root)) {
-            let header = format!(
-                "{} {}",
-                paint::bold_green(color, "● headless broker running —"),
-                paint::dim(color, root.display().to_string())
+            return render_bare_home(
+                BareHome {
+                    context: "local".into(),
+                    status: "No broker running".into(),
+                    online: false,
+                    other_context: Some(BareContext {
+                        name: format!("{} (server)", display_home_relative_path(&root)),
+                        status: "Broker running".into(),
+                        online: true,
+                    }),
+                    next_intro: None,
+                    next: vec![bare_row("aka use server", "Switch to the running broker")],
+                    after: vec![
+                        bare_row(
+                            format!("aka ls --root {}", bare_shell_path(&root)),
+                            "Inspect it without switching",
+                        ),
+                        bare_row("aka setup <client> --write", "Connect an agent or app"),
+                    ],
+                    commands: vec![
+                        bare_row("aka use", "Show or switch broker context"),
+                        bare_row("aka status", "Show broker status"),
+                    ],
+                },
+                color,
             );
-            let hint = next(
-                &format!("aka ls --root {}", root.display()),
-                "commands reach this broker with --root",
-            );
-            return (header, Some(hint));
         }
     }
-    (
-        paint::dim(color, "no local broker running").to_string(),
-        None,
+    render_bare_home(
+        BareHome {
+            context: "local".into(),
+            status: "No broker running".into(),
+            online: false,
+            other_context: None,
+            next_intro: None,
+            next: vec![
+                bare_row("aka serve", "Start a headless broker"),
+                bare_row("aka login <invite-url>", "Join an existing broker"),
+            ],
+            after: vec![
+                bare_row("aka setup <client> [--write]", "Connect an agent or app"),
+                bare_row("aka ls", "List available connections"),
+            ],
+            commands: bare_setup_commands(),
+        },
+        color,
     )
 }
 
@@ -3510,9 +3927,7 @@ fn login_keychain_expected() -> bool {
 }
 
 fn serve_launch_notice(login_keychain: bool) -> Option<&'static str> {
-    login_keychain.then_some(
-        "Launching broker… macOS may ask for your password to allow this unsigned aka build to access the login Keychain.",
-    )
+    login_keychain.then_some("Launching broker - macOS may ask for your password (unsigned build)")
 }
 
 fn print_serve_launch_notice() {
@@ -3540,12 +3955,18 @@ fn require_existing_root_for_read(root: Option<&Path>, remote: bool) {
     };
     let data_dir = Paths::under(root).data_dir;
     if !data_dir.is_dir() {
-        die(format!(
-            "{} is not an existing broker root (expected its data directory at {})",
-            root.display(),
-            data_dir.display()
-        ));
+        die(missing_broker_root_help(root, &data_dir));
     }
+}
+
+fn missing_broker_root_help(root: &Path, data_dir: &Path) -> String {
+    format!(
+        "{} is not a broker root.\n\
+         Expected a data directory at {}.\n\
+         Check `--root`, or choose another context with `aka use`.",
+        display_home_relative_path(root),
+        display_home_relative_path(data_dir)
+    )
 }
 
 fn open_vault(
@@ -3638,7 +4059,11 @@ fn normalize_secret_input(mut value: String, raw: bool) -> String {
 
 /// Read a secret value from `--value-env` or stdin — never argv, where it
 /// would sit in `ps` output and shell history.
-fn read_secret_value(value_env: &Option<String>, raw: bool) -> SecretValue {
+fn read_secret_value_with_prompt(
+    value_env: &Option<String>,
+    raw: bool,
+    prompt: &str,
+) -> SecretValue {
     let value = match value_env {
         Some(var) => match std::env::var(var) {
             Ok(value) => value,
@@ -3646,7 +4071,7 @@ fn read_secret_value(value_env: &Option<String>, raw: bool) -> SecretValue {
         },
         None => {
             if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                guide("  reading the secret value from stdin; end with Ctrl-D");
+                guide(prompt);
             }
             match std::io::read_to_string(std::io::stdin()) {
                 Ok(text) => text,
@@ -3659,6 +4084,10 @@ fn read_secret_value(value_env: &Option<String>, raw: bool) -> SecretValue {
         die("the secret value is empty");
     }
     value
+}
+
+fn read_secret_value(value_env: &Option<String>, raw: bool) -> SecretValue {
+    read_secret_value_with_prompt(value_env, raw, "Paste the secret value, then press Ctrl-D.")
 }
 
 fn cmd_secret_add(
@@ -3684,7 +4113,7 @@ fn cmd_secret_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         return;
     }
     if secrets.is_empty() {
-        ack_dim("no secrets configured (add one with `aka secret add <name>`)");
+        ack_dim("No secrets yet.\nAdd one with `aka secret add <name>`.");
         return;
     }
     let rows = secrets.into_iter().map(|dto| {
@@ -3708,6 +4137,7 @@ struct Managed {
     backend: Arc<dyn ManagementBackend>,
     remote: Option<Arc<RemoteBackend>>,
     profile: Option<serde_json::Value>,
+    target: CliManagementTarget,
 }
 
 impl Managed {
@@ -3716,7 +4146,7 @@ impl Managed {
     fn run<T>(&self, call: impl std::future::Future<Output = ManageResult<T>>) -> T {
         match self.runtime.block_on(call) {
             Ok(value) => value,
-            Err(e) => die_manage(e),
+            Err(error) => die_management_error(error, &self.target),
         }
     }
 
@@ -3812,6 +4242,10 @@ fn management_backend(root: Option<PathBuf>, url: Option<String>) -> Managed {
     management_backend_with_create(root, url, false)
 }
 
+fn management_backend_quiet(root: Option<PathBuf>, url: Option<String>) -> Managed {
+    management_backend_with_create_announcement(root, url, false, false)
+}
+
 fn effective_broker_url(url: Option<String>) -> Option<String> {
     url.or_else(|| {
         std::env::var("AKA_BROKER_URL")
@@ -3820,25 +4254,214 @@ fn effective_broker_url(url: Option<String>) -> Option<String> {
     })
 }
 
+#[derive(Clone, Debug)]
+struct CliManagementTarget {
+    using: String,
+    saved: String,
+    status: String,
+    remote_url: Option<String>,
+}
+
+struct ManagementSelection {
+    root: Option<PathBuf>,
+    url: Option<String>,
+    target: CliManagementTarget,
+}
+
+fn local_context_location() -> String {
+    Paths::default_locations()
+        .map(|paths| display_home_relative_path(&paths.socket_dir))
+        .unwrap_or_else(|_| "~/.aka".into())
+}
+
+fn management_selection(root: Option<PathBuf>, url: Option<String>) -> ManagementSelection {
+    let url = effective_broker_url(url);
+    if let Some(url) = url {
+        return ManagementSelection {
+            root,
+            target: CliManagementTarget {
+                using: format!("broker at {url}"),
+                saved: url.clone(),
+                status: url.clone(),
+                remote_url: Some(url.clone()),
+            },
+            url: Some(url),
+        };
+    }
+    if let Some(root) = root {
+        let display = display_home_relative_path(&root);
+        return ManagementSelection {
+            root: Some(root),
+            url: None,
+            target: CliManagementTarget {
+                using: format!("broker root at {display}"),
+                saved: display.clone(),
+                status: display,
+                remote_url: None,
+            },
+        };
+    }
+    match ambient_context() {
+        Some((source, ContextTarget::Root(root))) => {
+            let display = display_home_relative_path(&root);
+            ManagementSelection {
+                root: Some(root),
+                url: None,
+                target: CliManagementTarget {
+                    using: context_target_description(&source, &display),
+                    saved: context_saved_description(&source, &display),
+                    status: context_status_description(&source, &display),
+                    remote_url: None,
+                },
+            }
+        }
+        Some((source, ContextTarget::Broker(url))) => ManagementSelection {
+            root: None,
+            url: Some(url.clone()),
+            target: CliManagementTarget {
+                using: context_target_description(&source, &url),
+                saved: context_saved_description(&source, &url),
+                status: context_status_description(&source, &url),
+                remote_url: Some(url),
+            },
+        },
+        Some((_, ContextTarget::Local)) | None => {
+            let display = local_context_location();
+            ManagementSelection {
+                root: None,
+                url: None,
+                target: CliManagementTarget {
+                    using: format!("local context at {display}"),
+                    saved: format!("local ({display})"),
+                    status: format!("{display} (local)"),
+                    remote_url: None,
+                },
+            }
+        }
+    }
+}
+
+fn remote_management_token_help(url: &str) -> String {
+    format!(
+        "Live management requires a token.\n\
+         Issue one on the broker host with `aka admin token`, then save it here with \
+         `aka admin login --broker {url}`.\n\
+         Alternatively, set `AKA_MANAGE_TOKEN`."
+    )
+}
+
+fn agent_key_required_help(url: &str) -> String {
+    format!(
+        "Agent access requires a key.\n\
+         Join with `aka login {url}`, or set `AKA_AGENT_KEY`."
+    )
+}
+
+fn rejected_management_token_help(target: &CliManagementTarget, detail: Option<&str>) -> String {
+    let mut lines = vec!["Management token rejected.".to_string()];
+    if let Some(detail) = detail.filter(|detail| !detail.trim().is_empty()) {
+        lines.push(detail.trim().to_string());
+    }
+    if let Some(url) = &target.remote_url {
+        lines.push(format!(
+            "Issue a replacement on the broker host with `aka admin token`, then save it with \
+             `aka admin login --broker {url}`."
+        ));
+    } else {
+        lines.push(
+            "Run `aka admin token`, then save the replacement with `aka admin login`.".into(),
+        );
+    }
+    lines.push("If `AKA_MANAGE_TOKEN` is set, update or unset it.".into());
+    lines.join("\n")
+}
+
+fn unreachable_broker_help(target: &CliManagementTarget, detail: &str) -> String {
+    let mut lines = vec!["Broker is unreachable.".to_string()];
+    if !detail.trim().is_empty() {
+        lines.push(detail.trim().to_string());
+    }
+    lines.push(if target.remote_url.is_some() {
+        "Check the URL, network connection, and broker status, then retry.".into()
+    } else {
+        "Check that the broker is still running, then retry.".into()
+    });
+    lines.join("\n")
+}
+
+fn die_management_error(error: ManageError, target: &CliManagementTarget) -> ! {
+    match error {
+        ManageError::InvalidManageToken { detail } => die_with(
+            ExitCode::Authentication,
+            rejected_management_token_help(target, detail.as_deref()),
+        ),
+        ManageError::Unreachable { message } => die_with(
+            ExitCode::RemoteUnreachable,
+            unreachable_broker_help(target, &message),
+        ),
+        error => die_manage(error),
+    }
+}
+
+fn die_status_management_error(error: ManageError, target: &CliManagementTarget) -> ! {
+    match error {
+        ManageError::InvalidManageToken { detail } => die_with(
+            ExitCode::Authentication,
+            format!(
+                "{}\n\n{}",
+                status_heading(&target.status, "Management authentication failed"),
+                rejected_management_token_help(target, detail.as_deref())
+            ),
+        ),
+        ManageError::Unreachable { message } => die_with(
+            ExitCode::RemoteUnreachable,
+            format!(
+                "{}\n\n{}",
+                status_heading(&target.status, "Broker unreachable"),
+                unreachable_broker_help(target, &message)
+            ),
+        ),
+        error => die_manage(error),
+    }
+}
+
+fn offline_management_note() -> &'static str {
+    "Broker is stopped; editing its saved configuration offline."
+}
+
+fn broker_started_during_offline_help() -> &'static str {
+    "The broker started while this command was opening its saved configuration.\n\
+     Retry to manage it live, or stop the broker and retry the offline edit."
+}
+
+fn broker_state_busy_help(pid: Option<u32>) -> String {
+    format!(
+        "Another `aka` process{} is editing this broker.\n\
+         Wait for it to finish, then retry.",
+        pid.map(|pid| format!(" (PID {pid})")).unwrap_or_default()
+    )
+}
+
 fn management_backend_with_create(
     root: Option<PathBuf>,
     url: Option<String>,
     create_root: bool,
 ) -> Managed {
-    let mut root = root;
-    let mut url = effective_broker_url(url);
-    if root.is_none() && url.is_none() {
-        match ambient_context() {
-            Some((source, ContextTarget::Root(path))) => {
-                guide(format!("  managing the broker rooted at {} ({source})", path.display()));
-                root = Some(path);
-            }
-            Some((_, ContextTarget::Broker(broker))) => url = Some(broker),
-            Some((_, ContextTarget::Local)) | None => {}
-        }
-    }
+    management_backend_with_create_announcement(root, url, create_root, true)
+}
+
+fn management_backend_with_create_announcement(
+    root: Option<PathBuf>,
+    url: Option<String>,
+    create_root: bool,
+    announce: bool,
+) -> Managed {
+    let ManagementSelection { root, url, target } = management_selection(root, url);
     if !create_root {
         require_existing_root_for_read(root.as_deref(), url.is_some());
+    }
+    if announce {
+        guide_compact(format!("Using {}", target.using));
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -3851,30 +4474,40 @@ fn management_backend_with_create(
             Err(e) => die_with(ExitCode::Usage, e),
         };
         let Some(token) = manage_token(&paths, &url) else {
+            let help = remote_management_token_help(&url);
             die_with(
                 ExitCode::Authentication,
-                format!(
-                    "no management token for {url} — set AKA_MANAGE_TOKEN, or store \
-                 one with `aka admin login --broker {url}` (issued by `aka \
-                 admin token` on the broker host)"
-                ),
+                if announce {
+                    help
+                } else {
+                    format!(
+                        "{}\n\n{help}",
+                        status_heading(&target.status, "Management token required")
+                    )
+                },
             );
         };
         let config = match RemoteConfig::new(&url, &token) {
             Ok(config) => config,
             Err(e) => die_with(ExitCode::Usage, e),
         };
-        guide(format!("  managing the broker at {url}"));
         let remote = Arc::new(RemoteBackend::new(config));
-        let profile = runtime
-            .block_on(remote.whoami())
-            .unwrap_or_else(|error| die_manage(error));
-        warn_version_skew(&profile);
+        let profile = runtime.block_on(remote.whoami()).unwrap_or_else(|error| {
+            if announce {
+                die_management_error(error, &target)
+            } else {
+                die_status_management_error(error, &target)
+            }
+        });
+        if announce {
+            warn_version_skew(&profile);
+        }
         return Managed {
             runtime,
             backend: remote.clone(),
             remote: Some(remote),
             profile: Some(profile),
+            target,
         };
     }
     let socket = paths.socket_file();
@@ -3884,28 +4517,25 @@ fn management_backend_with_create(
     if broker_running {
         let key = socket.display().to_string();
         let Some(token) = manage_token(&paths, &key) else {
-            die_with(
-                ExitCode::Authentication,
-                format!(
-                    "a broker is running on {key}.\n\
-                 To edit it live, run `aka admin token` to consume its \
-                 first-start credential or rotate a saved token, store a token \
-                 with `aka admin login`, or set AKA_MANAGE_TOKEN."
-                ),
-            );
+            die_with(ExitCode::Authentication, live_management_token_help());
         };
-        guide(format!("  managing the running broker over {key}"));
         let remote = Arc::new(RemoteBackend::over_unix_socket(socket, &token));
         let profile = runtime
             .block_on(remote.whoami())
-            .unwrap_or_else(|error| die_manage(error));
-        warn_version_skew(&profile);
+            .unwrap_or_else(|error| die_management_error(error, &target));
+        if announce {
+            warn_version_skew(&profile);
+        }
         return Managed {
             runtime,
             backend: remote.clone(),
             remote: Some(remote),
             profile: Some(profile),
+            target,
         };
+    }
+    if announce {
+        guide_compact(offline_management_note());
     }
     let vault = match open_vault(&paths, root.as_deref()) {
         Ok(vault) => vault,
@@ -3919,15 +4549,8 @@ fn management_backend_with_create(
         events,
     )) {
         Ok(broker) => broker,
-        Err(CoreError::BrokerAlreadyRunning(_)) => die(format!(
-            "a broker started on {} while this command was connecting — retry \
-             to manage it live, or stop it for an offline edit",
-            paths.socket_file().display()
-        )),
-        Err(CoreError::BrokerStateBusy(pid)) => die(format!(
-            "another CLI process{} is editing this broker state — wait for it to finish, then retry",
-            pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
-        )),
+        Err(CoreError::BrokerAlreadyRunning(_)) => die(broker_started_during_offline_help()),
+        Err(CoreError::BrokerStateBusy(pid)) => die(broker_state_busy_help(pid)),
         Err(e) => die(format!("could not open the broker state: {e}")),
     };
     Managed {
@@ -3935,7 +4558,23 @@ fn management_backend_with_create(
         backend: Arc::new(LocalBackend::new(broker)),
         remote: None,
         profile: None,
+        target,
     }
+}
+
+fn live_management_token_help() -> &'static str {
+    "This broker is running, so live management requires a token.\n\
+     Run `aka admin token`, then save the token with `aka admin login`.\n\
+     Alternatively, set `AKA_MANAGE_TOKEN`."
+}
+
+fn verified_management_token_message(target: &CliManagementTarget) -> String {
+    format!("Management token verified and saved for {}.", target.saved)
+}
+
+fn unverified_management_token_message() -> &'static str {
+    "Broker unreachable - management token saved without verification.\n\
+     It will be checked the next time you manage this broker."
 }
 
 struct OfflineEvents;
@@ -3954,7 +4593,10 @@ fn secret_dto(managed: &Managed, name: &str) -> SecretDto {
         Some(dto) => dto,
         None => die_with(
             ExitCode::NotFound,
-            format!("no secret named {name:?} (see `aka secret list`)"),
+            format!(
+                "Secret {name:?} not found.\n\
+                 Run `aka secret list` to see available secrets."
+            ),
         ),
     }
 }
@@ -4042,9 +4684,8 @@ fn cmd_conn_add(args: ConnAdd) -> Option<serde_json::Value> {
                 None => die_with(
                     ExitCode::NotFound,
                     format!(
-                        "no secret named {name:?} — add it first: \
-                         `aka secret add {name}` (value read from stdin; \
-                         see `aka secret list`)"
+                        "Secret {name:?} not found.\n\
+                         Add it with `aka secret add {name}`, then retry."
                     ),
                 ),
             }
@@ -4059,7 +4700,7 @@ fn cmd_conn_add(args: ConnAdd) -> Option<serde_json::Value> {
     }));
     let dto = conn_dto(&managed, &name);
     ack(format!(
-        "added connection {} ({} · {})",
+        "added connection: {} ({} - {})",
         dto.name, dto.kind, dto.target
     ));
     let report = (!args.no_test).then(|| {
@@ -4081,10 +4722,13 @@ fn cmd_conn_add(args: ConnAdd) -> Option<serde_json::Value> {
         if ok {
             ack(format!("test: {detail}"));
         } else {
-            eprintln!("{} {detail}", paint::bold_yellow(color, "test failed:"));
+            eprintln!(
+                "{} {detail}",
+                paint::bold_yellow(color, "Connection added, but its test failed:")
+            );
             guide(format!(
-                "the connection was added; fix the destination or credential, \
-                 then `aka conn test {name}`"
+                "Fix the destination or credentials, then run \
+                 `aka conn test {name}`."
             ));
         }
         serde_json::json!({ "ok": ok, "detail": detail })
@@ -4105,7 +4749,7 @@ fn cmd_conn_add(args: ConnAdd) -> Option<serde_json::Value> {
 fn conn_add_next_step(args: &ConnAdd) -> String {
     let name = &args.name;
     if let Some(url) = &args.broker {
-        return format!("try: aka conn test {name} --broker {url}");
+        return format!("Next: aka conn test {name} --broker {url}");
     }
     let root = args
         .root
@@ -4113,15 +4757,15 @@ fn conn_add_next_step(args: &ConnAdd) -> String {
         .map(|root| format!(" --root {}", shell_quote(&root.display().to_string())))
         .unwrap_or_default();
     match args.kind {
-        ConnKind::Api => format!("try: aka conn test {name}{root}"),
-        ConnKind::Pg => format!("try: aka run {name}{root} -- psql"),
-        ConnKind::Ssh => format!("try: aka run {name}{root} -- ssh {name}"),
+        ConnKind::Api => format!("Next: aka conn test {name}{root}"),
+        ConnKind::Pg => format!("Next: aka run {name}{root} -- psql"),
+        ConnKind::Ssh => format!("Next: aka run {name}{root} -- ssh {name}"),
         ConnKind::Cloud => match args.cloud_provider.as_deref() {
             Some("aws") => {
-                format!("try: aka run {name}{root} -- aws sts get-caller-identity")
+                format!("Next: aka run {name}{root} -- aws sts get-caller-identity")
             }
-            Some("gcp") => format!("try: aka run {name}{root} -- gcloud storage ls"),
-            _ => format!("try: aka env {name}{root}"),
+            Some("gcp") => format!("Next: aka run {name}{root} -- gcloud storage ls"),
+            _ => format!("Next: aka env {name}{root}"),
         },
     }
 }
@@ -4401,7 +5045,7 @@ fn cmd_conn_list(root: Option<PathBuf>, url: Option<String>, json: bool) {
         return;
     }
     if connections.is_empty() {
-        ack_dim("no connections configured (add one with `aka conn add`)");
+        ack_dim("No connections yet.\nRun `aka conn add --help` to add one.");
         return;
     }
     let rows = connections.into_iter().map(|dto| {
@@ -4583,12 +5227,15 @@ fn cmd_sessions(close: Option<u64>, root: Option<PathBuf>, url: Option<String>, 
     if let Some(id) = close {
         let closed = managed.run(managed.backend.close_session(id));
         if !closed {
-            die_with(ExitCode::NotFound, format!("no live session with id {id}"));
+            die_with(
+                ExitCode::NotFound,
+                format!("Session {id} is no longer active."),
+            );
         }
         if json {
             print_json(&serde_json::json!({ "closed": true, "id": id }));
         } else {
-            ack(format!("closed session {id}"));
+            ack(format!("closed session: {id}"));
         }
         return;
     }
@@ -4596,7 +5243,7 @@ fn cmd_sessions(close: Option<u64>, root: Option<PathBuf>, url: Option<String>, 
     if json {
         print_json(&sessions);
     } else if sessions.is_empty() {
-        ack_dim("no live sessions");
+        ack_dim("No live sessions.");
     } else {
         let rows = sessions.into_iter().map(|session| {
             vec![
@@ -4642,7 +5289,10 @@ fn cmd_requests(
     if json {
         print_json(&requests);
     } else if requests.is_empty() {
-        ack_dim("no pending or recent requests");
+        ack_dim(
+            "No pending or recent approval requests.\n\
+             Run `aka approvals --watch` to wait for new requests.",
+        );
     } else {
         let rows = requests.into_iter().map(|request| {
             let at = request
@@ -4673,7 +5323,8 @@ fn answer_request(managed: &Managed, id: Uuid, approve: bool, values: Vec<String
     let Some(remote) = managed.remote.clone() else {
         die_with(
             ExitCode::NoBroker,
-            "request decisions require a running broker",
+            "No broker running for this context.\n\
+             Start the Multitool app or `aka serve`, then retry.",
         );
     };
     let surface = managed.run(remote.open_approval_surface());
@@ -4719,14 +5370,20 @@ fn answer_request(managed: &Managed, id: Uuid, approve: bool, values: Vec<String
         let _ = managed.run(remote.close_approval_surface(surface_id));
         die_with(
             ExitCode::NotFound,
-            format!("no pending approval or elicitation with id {id}"),
+            format!(
+                "Approval request {id} not found.\n\
+                 It may have already been answered, revoked, or expired."
+            ),
         );
     };
     let _ = managed.run(remote.close_approval_surface(surface_id));
     if !answered {
         die_with(
             ExitCode::Conflict,
-            format!("request {id} was already answered, revoked, or expired"),
+            format!(
+                "Approval request {id} not found.\n\
+                 It may have already been answered, revoked, or expired."
+            ),
         );
     }
     let decision = if approve { "approved" } else { "denied" };
@@ -4745,15 +5402,13 @@ fn watch_requests(managed: &Managed) {
     let Some(remote) = managed.remote.clone() else {
         die_with(
             ExitCode::NoBroker,
-            "the request inbox requires a running broker",
+            "No broker running for this context.\n\
+             Start the Multitool app or `aka serve`, then retry.",
         );
     };
     let surface = managed.run(remote.open_approval_surface());
     let surface_id = dto_id(&surface.id);
-    guide(
-        "request inbox attached; press Ctrl-C to detach\n\
-         answer from another terminal with `aka approve <id>` or `aka deny <id>`",
-    );
+    guide("Watching approval requests. Press Ctrl-C to stop.");
 
     let backend = managed.backend.clone();
     let result: ManageResult<()> = managed.runtime.block_on(async {
@@ -4775,28 +5430,38 @@ fn watch_requests(managed: &Managed) {
                 _ = poll.tick() => {
                     for request in backend.approvals().await? {
                         if seen.insert(request.id.clone()) {
-                            println!(
-                                "{}  approval  {}  {}  {}",
-                                request.id, request.connection, request.agent, request.summary
-                            );
+                            println!("Approval request {}", request.id);
+                            println!("  Connection  {}", request.connection);
+                            println!("  Agent       {}", request.agent);
+                            println!("  Summary     {}", request.summary);
                             if let Some(detail) = request.detail {
-                                println!("  {detail}");
+                                println!("  Detail      {detail}");
                             }
                             if let Some(consequence) = request.consequence {
-                                println!("  {consequence}");
+                                println!("  Consequence {consequence}");
                             }
+                            println!("  Approve     aka approve {}", request.id);
+                            println!("  Deny        aka deny {}", request.id);
+                            println!();
                         }
                     }
                     for request in backend.elicitations().await? {
                         if seen.insert(request.id.clone()) {
-                            println!(
-                                "{}  elicitation  {}  {}  {}",
-                                request.id, request.connection, request.agent, request.prompt
-                            );
-                            for field in request.fields {
+                            println!("Elicitation request {}", request.id);
+                            println!("  Connection  {}", request.connection);
+                            println!("  Agent       {}", request.agent);
+                            println!("  Prompt      {}", request.prompt);
+                            let mut value_flags = String::new();
+                            for field in &request.fields {
                                 let required = if field.required { " (required)" } else { "" };
-                                println!("  {}{required}", field.name);
+                                println!("  Field       {}{required}", field.name);
+                                if field.required {
+                                    value_flags.push_str(&format!(" --value {}=<value>", field.name));
+                                }
                             }
+                            println!("  Approve     aka approve {}{value_flags}", request.id);
+                            println!("  Deny        aka deny {}", request.id);
+                            println!();
                         }
                     }
                 }
@@ -4808,7 +5473,15 @@ fn watch_requests(managed: &Managed) {
     if let Err(error) = result {
         die_manage(error);
     }
-    ack_dim("request inbox detached");
+    ack_dim("stopped watching approval requests");
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value {
+        "On"
+    } else {
+        "Off"
+    }
 }
 
 fn cmd_settings_get(root: Option<PathBuf>, url: Option<String>, json: bool) {
@@ -4817,10 +5490,13 @@ fn cmd_settings_get(root: Option<PathBuf>, url: Option<String>, json: bool) {
     if json {
         print_json(&settings);
     } else {
-        println!("menu bar hides Dock: {}", settings.menu_bar_hides_dock);
         println!(
-            "confirm new SSH host keys: {}",
-            settings.confirm_ssh_host_keys
+            "Menu bar hides Dock: {}",
+            on_off(settings.menu_bar_hides_dock)
+        );
+        println!(
+            "Confirm new SSH host keys: {}",
+            on_off(settings.confirm_ssh_host_keys)
         );
     }
 }
@@ -4853,10 +5529,13 @@ fn cmd_settings_set(
         print_json(&settings);
     } else {
         ack("settings updated");
-        println!("menu bar hides Dock: {}", settings.menu_bar_hides_dock);
         println!(
-            "confirm new SSH host keys: {}",
-            settings.confirm_ssh_host_keys
+            "Menu bar hides Dock: {}",
+            on_off(settings.menu_bar_hides_dock)
+        );
+        println!(
+            "Confirm new SSH host keys: {}",
+            on_off(settings.confirm_ssh_host_keys)
         );
     }
 }
@@ -4996,11 +5675,11 @@ fn cmd_conn_update(expected_kind: ConnKind, args: ConnUpdate) {
     ));
     let updated = conn_dto(&managed, &dto.name);
     ack(format!(
-        "updated connection {} ({} · {})",
+        "updated connection: {} ({} - {})",
         updated.name, updated.kind, updated.target
     ));
     if updated.target != dto.target {
-        warn_line("  target changed: its direct endpoints are revoked");
+        warn_line("Target changed. Existing direct endpoints were revoked.");
     }
 }
 
@@ -5019,9 +5698,8 @@ fn cmd_conn_rm(name: String, root: Option<PathBuf>, url: Option<String>) {
     let managed = management_backend(root, url);
     let dto = conn_dto(&managed, &name);
     managed.run(managed.backend.delete_connection(dto_id(&dto.id)));
-    ack(format!(
-        "deleted connection {name} (its secrets stay in the vault)"
-    ));
+    ack(format!("deleted connection: {name}"));
+    ack_dim("Secrets remain in the vault.");
 }
 
 fn cmd_conn_access(name: String, root: Option<PathBuf>, url: Option<String>, enabled: bool) {
@@ -5053,10 +5731,8 @@ fn cmd_conn_policy(args: ConnPolicyArgs, json: bool) {
         die_with(
             ExitCode::Usage,
             format!(
-                "nothing to change for {name} — pass --confirm/--no-confirm, \
-                 --response-credentials <allow|contain>, or --audit-statements \
-                 <on|off|default>; capability fields go through \
-                 `aka conn update <kind> {name} …`"
+                "No changes requested for {name}.\n\
+                 Pass a policy option, or run `aka conn update --help`."
             ),
         );
     }
@@ -5112,7 +5788,7 @@ fn cmd_conn_confirm(name: String, root: Option<PathBuf>, url: Option<String>, on
         ack(format!("traffic confirmation {state} for {name}"));
         if on {
             warn_line(
-                "  prompts are answered in the Multitool app; without it, this tool's traffic is refused",
+                "Approve traffic in the Multitool app. If the app disconnects, traffic is refused.",
             );
         }
     } else {
@@ -5186,7 +5862,7 @@ fn cmd_conn_response_credentials(
         ));
         if expose {
             warn_line(
-                "  warning: Set-Cookie and authentication response headers can now reach agents",
+                "Response credentials can now reach agents, including Set-Cookie and authentication headers.",
             );
         }
     } else {
@@ -5270,9 +5946,7 @@ fn cmd_conn_audit_statements(
     if changed {
         ack(format!("statement recording {state} for {name}"));
         if updated.agent_access.audit_statements_effective {
-            warn_line(
-                "  statement text can carry credentials and personal data into the activity log",
-            );
+            warn_line("Recorded statements may include credentials or personal data.");
         }
     } else {
         ack_dim(format!(
@@ -5372,7 +6046,7 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
         let Some(endpoint) = dto.agent_access.endpoint.as_ref() else {
             die_with(
                 ExitCode::NotFound,
-                format!("no direct endpoint is issued for {name}"),
+                format!("{name} has no direct endpoint."),
             );
         };
         let endpoint_id = endpoint.endpoint_id.clone();
@@ -5384,7 +6058,7 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
         if !revoked {
             die_with(
                 ExitCode::NotFound,
-                format!("the direct endpoint for {name} was already revoked"),
+                format!("Direct endpoint for {name} is already revoked."),
             );
         }
         if json {
@@ -5394,7 +6068,7 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
                 "revoked": true,
             }));
         } else {
-            ack(format!("revoked direct endpoint for {name}"));
+            ack(format!("revoked direct endpoint: {name}"));
         }
         return;
     }
@@ -5407,8 +6081,8 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
             None => die_with(
                 ExitCode::NotFound,
                 format!(
-                    "no direct endpoint issued for {name} — start the broker and retry with \
-                         `aka endpoint {name} --issue`"
+                    "{name} has no direct endpoint.\n\
+                     Create one with `aka endpoint {name} --issue`."
                 ),
             ),
         },
@@ -5429,14 +6103,14 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
             managed.run_gated(call)
         };
         if changed {
-            guide(format!(
-                "the agent socket for {name} {}",
-                if require_auth {
-                    "now requires the endpoint secret — reach it through `aka ssh-agent`"
-                } else {
-                    "no longer requires the endpoint secret"
-                }
-            ));
+            if require_auth {
+                guide(format!(
+                    "Endpoint authentication enabled for {name}.\n\
+                     Connect with `aka ssh-agent {name}`."
+                ));
+            } else {
+                guide(format!("Endpoint authentication disabled for {name}."));
+            }
             if let Some(reread) = managed.run(managed.backend.get_endpoint(connection_id)) {
                 info = reread;
             }
@@ -5451,21 +6125,21 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
         die_with(
             ExitCode::Usage,
             format!(
-                "the direct endpoint for {name} has expired — renew it with \
-                 `aka endpoint {name} --renew`"
+                "Direct endpoint expired.\n\
+                 Renew it with `aka endpoint {name} --renew`."
             ),
         );
     }
     if expired {
         warn_line(format!(
-            "expired — renew without changing this address with \
-             `aka endpoint {name} --renew`"
+            "Direct endpoint expired.\n\
+             Renew it with `aka endpoint {name} --renew`."
         ));
     }
     if action == EndpointAction::Issue {
-        ack(format!("issued direct endpoint for {name}"));
+        ack(format!("issued direct endpoint: {name}"));
     } else if action == EndpointAction::Renew {
-        ack(format!("renewed direct endpoint for {name}"));
+        ack(format!("renewed direct endpoint: {name}"));
     }
     // Selectors print exactly one field with no decoration, so a `$(...)`
     // capture carries only the value. `--url` prefers the TCP form when the
@@ -5480,23 +6154,61 @@ fn cmd_conn_endpoint(request: ConnEndpointRequest, json: bool) {
         println!("{}", info.secret);
         return;
     }
-    // Default: the copy-ready example on stderr (guidance), the address on
-    // stdout (the pasteable value), and the secret when the kind has one.
+    // Default: show a labeled block interactively. When stdout is captured,
+    // keep the primary address as its one undecorated value and put supporting
+    // guidance on stderr, preserving the command's existing shell contract.
     let color = stderr_use_color();
-    eprintln!("{}", paint::dim(color, &info.example));
-    println!("{}", info.dsn);
-    if let Some(tcp) = &info.tcp_dsn {
-        guide("tcp (drivers without unix-socket support, and remote clients):");
-        eprintln!("{tcp}");
-    }
-    if !info.secret.is_empty() {
-        eprintln!(
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        println!("Direct endpoint: {name}");
+        println!(
             "{}",
-            colon_field(color, "", "endpoint secret", &info.secret)
+            colon_field(stdout_use_color(), "  ", "Address", &info.dsn)
         );
-    }
-    if !info.expires_at.is_empty() {
-        eprintln!("{}", colon_field(color, "", "expires", &info.expires_at));
+        if let Some(tcp) = &info.tcp_dsn {
+            println!(
+                "{}",
+                colon_field(stdout_use_color(), "  ", "TCP address", tcp)
+            );
+        }
+        println!(
+            "{}",
+            colon_field(
+                stdout_use_color(),
+                "  ",
+                "Authentication",
+                if info.secret.is_empty() {
+                    "Not required".to_string()
+                } else {
+                    format!("Required - {}", info.secret)
+                }
+            )
+        );
+        if !info.expires_at.is_empty() {
+            println!(
+                "{}",
+                colon_field(stdout_use_color(), "  ", "Expires", &info.expires_at)
+            );
+        }
+        println!(
+            "{}",
+            colon_field(stdout_use_color(), "  ", "Example", &info.example)
+        );
+    } else {
+        eprintln!("{}", paint::dim(color, &info.example));
+        println!("{}", info.dsn);
+        if let Some(tcp) = &info.tcp_dsn {
+            guide("TCP address (for remote clients and drivers without Unix socket support)");
+            eprintln!("{tcp}");
+        }
+        if !info.secret.is_empty() {
+            eprintln!(
+                "{}",
+                colon_field(color, "", "Authentication secret", &info.secret)
+            );
+        }
+        if !info.expires_at.is_empty() {
+            eprintln!("{}", colon_field(color, "", "Expires", &info.expires_at));
+        }
     }
 }
 
@@ -5558,6 +6270,9 @@ fn cmd_skill(args: SkillArgs, json: bool) {
         if json {
             print_json(&serde_json::json!({ "content": content }));
         } else {
+            ack_dim(
+                "Agent skill preview (no changes made; use `aka setup skill --write` to install):",
+            );
             print!("{content}");
         }
         return;
@@ -5574,12 +6289,7 @@ fn cmd_skill(args: SkillArgs, json: bool) {
 /// clobber a file this CLI did not generate. Returns the path written, so
 /// callers own their own reporting — `aka setup <client> --write` folds it
 /// into one envelope rather than emitting a second.
-fn write_skill_file(
-    content: &str,
-    path: Option<PathBuf>,
-    user: bool,
-    force: bool,
-) -> PathBuf {
+fn write_skill_file(content: &str, path: Option<PathBuf>, user: bool, force: bool) -> PathBuf {
     let path = match (path, user) {
         (Some(path), _) => path,
         (None, true) => dirs::home_dir()
@@ -5621,7 +6331,7 @@ impl BrokerEvents for CliEvents {}
 /// broker's manage URL, or by the local socket path. Verified against the
 /// broker when it is reachable — a rejected token is never stored.
 fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option<PathBuf>) {
-    let url = effective_broker_url(url);
+    let ManagementSelection { root, url, target } = management_selection(root, url);
     require_existing_root_for_read(root.as_deref(), url.is_some());
     let token = if token_env.is_none()
         && presentation::stdin_is_tty()
@@ -5631,10 +6341,11 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
             .unwrap_or_else(|error| die(format!("could not read the management token: {error}")));
         Zeroizing::new(value)
     } else {
-        if std::io::IsTerminal::is_terminal(&std::io::stdin()) && token_env.is_none() {
-            guide("paste the management token (akamgr_…); end with Ctrl-D");
-        }
-        read_secret_value(&token_env, false)
+        read_secret_value_with_prompt(
+            &token_env,
+            false,
+            "Paste the management token, then press Ctrl-D.",
+        )
     };
     let paths = store_paths(root.as_deref());
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -5659,48 +6370,48 @@ fn cmd_manage_login(url: Option<String>, token_env: Option<String>, root: Option
             (key, RemoteBackend::over_unix_socket(socket, &token))
         }
     };
-    match runtime.block_on(backend.whoami()) {
+    let verified = match runtime.block_on(backend.whoami()) {
         Ok(profile) => {
             warn_version_skew(&profile);
-            ack("token verified against the running broker");
+            true
         }
         Err(ManageError::InvalidManageToken { detail }) => die_with(
             ExitCode::Authentication,
-            detail.unwrap_or_else(|| {
-                "the broker rejected this management token — issue a fresh one with `aka admin token`"
-                    .into()
-            }),
+            rejected_management_token_help(&target, detail.as_deref()),
         ),
-        Err(ManageError::Unreachable { .. }) => {
-            warn_line("the broker is not reachable right now; storing the token unverified");
-        }
-        Err(e) => die_manage(e),
-    }
+        Err(ManageError::Unreachable { .. }) => false,
+        Err(error) => die_manage(error),
+    };
     let token_store = manage_token_store(&paths);
     if let Err(e) = token_store.save(&key, &token) {
         die(format!("could not store the token: {e}"));
     }
-    ack(format!(
-        "management token stored for {key} ({})",
-        token_store.storage_description(&key)
-    ));
+    if verified {
+        ack(verified_management_token_message(&target));
+    } else {
+        warn_line(unverified_management_token_message());
+    }
 }
 
 fn cmd_manage_logout(url: Option<String>, root: Option<PathBuf>) {
     let url = effective_broker_url(url);
     require_existing_root_for_read(root.as_deref(), url.is_some());
     let paths = store_paths(root.as_deref());
-    let key = match url {
+    let (key, target) = match url {
         Some(url) => match RemoteConfig::normalize_url(&url) {
-            Ok(url) => url,
+            Ok(url) => (url.clone(), url),
             Err(e) => die_with(ExitCode::Usage, e),
         },
-        None => paths.socket_file().display().to_string(),
+        None => (
+            paths.socket_file().display().to_string(),
+            display_home_relative_path(&paths.socket_dir),
+        ),
     };
     if let Err(e) = manage_token_store(&paths).delete(&key) {
         die(format!("could not forget the management token: {e}"));
     }
-    ack(format!("management token forgotten for {key}"));
+    ack(format!("removed saved management access for {target}"));
+    ack_dim("Broker access is unchanged.");
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -5718,7 +6429,7 @@ fn online_manage_token(
     runtime: &tokio::runtime::Runtime,
     json: bool,
 ) {
-    let (key, backend, source) = match url {
+    let (key, backend, source, target) = match url {
         Some(url) => {
             let url = match RemoteConfig::normalize_url(&url) {
                 Ok(url) => url,
@@ -5742,20 +6453,23 @@ fn online_manage_token(
             } else if let Some(token) = manage_token_store(paths).load(&url) {
                 (token, ManageTokenSource::Stored)
             } else {
-                die_with(
-                    ExitCode::Authentication,
-                    format!(
-                        "no current management token for {url} — set AKA_MANAGE_TOKEN \
-                         or store one with `aka admin login --broker {url}`; initial \
-                         bootstrap must be run on the broker host"
-                    ),
-                );
+                die_with(ExitCode::Authentication, remote_management_token_help(&url));
             };
             let config = match RemoteConfig::new(&url, &token) {
                 Ok(config) => config,
                 Err(error) => die_with(ExitCode::Usage, error),
             };
-            (url, RemoteBackend::new(config), source)
+            (
+                url.clone(),
+                RemoteBackend::new(config),
+                source,
+                CliManagementTarget {
+                    using: format!("broker at {url}"),
+                    saved: url.clone(),
+                    status: url.clone(),
+                    remote_url: Some(url),
+                },
+            )
         }
         None => {
             let socket = paths.socket_file();
@@ -5799,7 +6513,17 @@ fn online_manage_token(
                     ManageTokenSource::Bootstrap,
                 )
             };
-            (key, RemoteBackend::over_unix_socket(socket, &token), source)
+            (
+                key.clone(),
+                RemoteBackend::over_unix_socket(socket, &token),
+                source,
+                CliManagementTarget {
+                    using: "local broker".into(),
+                    saved: display_home_relative_path(&paths.socket_dir),
+                    status: display_home_relative_path(&paths.socket_dir),
+                    remote_url: None,
+                },
+            )
         }
     };
 
@@ -5808,20 +6532,24 @@ fn online_manage_token(
             Ok(true) => {
                 if let Err(error) = manage_token_store(paths).delete(&key) {
                     warn_line(format!(
-                        "warning: could not forget the saved token for {key}: {error}"
+                        "Could not forget the saved token for {key}: {error}"
                     ));
                 }
                 if source == ManageTokenSource::Environment {
-                    warn_line("warning: unset AKA_MANAGE_TOKEN; its value is now revoked");
+                    warn_line(
+                        "AKA_MANAGE_TOKEN contains the revoked token.\n\
+                         Update or unset it before the next command.",
+                    );
                 }
-                ack("management token revoked; the manage API is closed");
+                ack("management token revoked");
+                ack_dim("Token-based management access is disabled.");
                 true
             }
             Ok(false) => {
-                ack_dim("no management token was issued");
+                ack_dim("No management token is active.");
                 false
             }
-            Err(error) => die_manage(error),
+            Err(error) => die_management_error(error, &target),
         };
         mutation_ok(
             "manage.token.revoke",
@@ -5833,25 +6561,26 @@ fn online_manage_token(
     let days = ttl_days.expect("the CLI always supplies a bounded management-token TTL");
     let issued = runtime
         .block_on(backend.rotate_management_token(days))
-        .unwrap_or_else(|error| die_manage(error));
+        .unwrap_or_else(|error| die_management_error(error, &target));
     if !json {
-        guide("management token (shown once — the broker stores only its hash):\n");
+        guide("Management token rotated\nToken (shown once)");
         println!("{}", issued.token.as_str());
     }
     if source == ManageTokenSource::Environment {
         warn_line(
-            "\nwarning: AKA_MANAGE_TOKEN still contains the superseded token; update or unset it",
+            "AKA_MANAGE_TOKEN contains the previous token.\n\
+             Update or unset it before the next command.",
         );
     } else {
         let store = manage_token_store(paths);
         if let Err(error) = store.save(&key, &issued.token) {
             warn_line(format!(
-                "\nwarning: the token was rotated but could not be saved ({error}); \
-                 capture the value printed above before it is lost"
+                "Management token rotated but could not be saved: {error}\n\
+                 Copy the token above before it is lost."
             ));
         } else {
             ack(format!(
-                "\nmanagement token stored for {key} ({})",
+                "Saved for: {key} ({})",
                 store.storage_description(&key)
             ));
         }
@@ -5868,7 +6597,7 @@ fn online_manage_token(
     } else {
         eprintln!(
             "{}",
-            colon_field(stderr_use_color(), "", "expires", &issued.expires_at)
+            colon_field(stderr_use_color(), "", "Expires", &issued.expires_at)
         );
     }
 }
@@ -5911,21 +6640,12 @@ fn cmd_manage_token(
 
     let _lock = match acquire_offline_store_lock(&paths) {
         Ok(lock) => lock,
-        Err(CoreError::BrokerAlreadyRunning(_)) => die_with(
-            ExitCode::Conflict,
-            format!(
-                "a broker is running on {} — stop it first (its in-memory \
-                 identity would overwrite this change)",
-                paths.socket_file().display()
-            ),
-        ),
-        Err(CoreError::BrokerStateBusy(pid)) => die_with(
-            ExitCode::Conflict,
-            format!(
-                "another CLI process{} is editing this broker state — wait for it to finish, then retry",
-                pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
-            ),
-        ),
+        Err(CoreError::BrokerAlreadyRunning(_)) => {
+            die_with(ExitCode::Conflict, broker_started_during_offline_help())
+        }
+        Err(CoreError::BrokerStateBusy(pid)) => {
+            die_with(ExitCode::Conflict, broker_state_busy_help(pid))
+        }
         Err(error) => die(format!("could not acquire the broker state lease: {error}")),
     };
     let vault = match open_vault(&paths, root.as_deref()) {
@@ -5961,7 +6681,7 @@ fn cmd_manage_token(
             Ok(true) => {
                 if let Err(error) = paths.remove_manage_bootstrap_token() {
                     warn_line(format!(
-                        "warning: could not remove {}: {error}",
+                        "Could not remove {}: {error}",
                         paths.manage_bootstrap_token_file().display()
                     ));
                 }
@@ -5969,11 +6689,12 @@ fn cmd_manage_token(
                     aka_core::audit::AuditKind::ManagementTokenRevoked,
                     "Management token revoked",
                 ));
-                ack("management token revoked; the manage API is closed");
+                ack("management token revoked");
+                ack_dim("Token-based management access is disabled.");
                 true
             }
             Ok(false) => {
-                ack_dim("no management token was issued");
+                ack_dim("No management token is active.");
                 false
             }
             Err(e) => die(e),
@@ -5990,7 +6711,7 @@ fn cmd_manage_token(
             let token = Zeroizing::new(token);
             if let Err(error) = paths.remove_manage_bootstrap_token() {
                 warn_line(format!(
-                    "warning: could not remove {}: {error}",
+                    "Could not remove {}: {error}",
                     paths.manage_bootstrap_token_file().display()
                 ));
             }
@@ -6014,12 +6735,12 @@ fn cmd_manage_token(
                     }),
                 );
             } else {
-                guide("management token (shown once — only its hash is stored):\n");
+                guide("Management token issued\nToken (shown once)");
                 println!("{}", token.as_str());
-                guide("\nEnter it in the Multitool app to manage this broker remotely.");
+                guide("Enter it in the Multitool app to manage this broker remotely.");
                 match ttl_days {
                     Some(days) => guide(format!(
-                        "Expires in {days} day{}; re-run to rotate, or --revoke to close the manage API.",
+                        "Expires: {days} day{}\nRe-run to rotate, or use --revoke to disable token-based management access.",
                         if days == 1 { "" } else { "s" }
                     )),
                     None => unreachable!("the CLI always supplies a bounded management-token TTL"),
@@ -6055,13 +6776,10 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>, json: bool) {
         None,
     )) {
         Ok(response) => response,
-        Err(error) => die_with(
+        Err(_) => die_with(
             ExitCode::NoBroker,
-            format!(
-                "could not reach this machine's broker at {}: {error}\n\
-                 Enrollment is opened on the broker host, so the broker has to be running there.",
-                socket.display()
-            ),
+            "No broker running for this context.\n\
+             Start the broker on this host, then retry. Passkey enrollment must be opened on the broker host.",
         ),
     };
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
@@ -6073,7 +6791,8 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>, json: bool) {
         die(format!("could not change enrollment: {detail}"));
     }
     if cancel {
-        ack("passkey enrollment closed; any outstanding secret is void");
+        ack("passkey enrollment closed");
+        ack_dim("Outstanding enrollment secrets are no longer valid.");
         mutation_ok(
             "manage.enroll.cancel",
             serde_json::json!({ "cancelled": true }),
@@ -6089,7 +6808,7 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>, json: bool) {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if already && !json {
-        guide("This broker already has a passkey; this enrolls an additional one.\n");
+        guide("A passkey is already enrolled. This will add another.");
     }
     let sign_in_url = parsed.get("sign_in_url").and_then(|value| value.as_str());
     if json {
@@ -6106,22 +6825,20 @@ fn cmd_manage_enroll(cancel: bool, root: Option<PathBuf>, json: bool) {
     }
     match sign_in_url {
         Some(url) => {
-            guide("Open this on the device you want to enroll:\n");
+            guide("Passkey enrollment opened\nOpen");
             println!("{url}");
-            guide("\nand paste this one-use secret when it asks:\n");
+            guide("One-use secret");
+            println!("{secret}");
+            guide("Expires in 15 minutes.");
         }
         // Without --public-url there is no origin a passkey could be bound
         // to. The secret is still issued — the operator may be about to add
         // one — but saying nothing about the missing URL would be a mystery.
         None => warn_line(
-            "Note: this broker has no --public-url, so there is no address a browser \
-             can enroll against yet. Bare `aka serve` defaults TCP and its public URL \
-             to localhost; otherwise configure --listen and --public-url together.\n\n\
-             One-use enrollment secret:\n",
+            "No browser enrollment URL is available.\n\
+             Restart the broker with `--public-url`, then retry.",
         ),
     }
-    println!("{secret}");
-    guide("\nIt expires in 15 minutes. Re-run to issue a fresh one, or --cancel to close it.");
 }
 
 /// Retire (or restore) the global management token on this machine's broker.
@@ -6152,12 +6869,10 @@ fn cmd_manage_legacy(restore: bool, retire: bool, root: Option<PathBuf>) {
         None,
     )) {
         Ok(response) => response,
-        Err(error) => die_with(
+        Err(_) => die_with(
             ExitCode::NoBroker,
-            format!(
-                "could not reach this machine's broker at {}: {error}",
-                socket.display()
-            ),
+            "No broker running for this context.\n\
+             Start the broker on this host, then retry.",
         ),
     };
     if status != 200 {
@@ -6171,12 +6886,12 @@ fn cmd_manage_legacy(restore: bool, retire: bool, root: Option<PathBuf>) {
         die(format!("could not change the setting: {detail}"));
     }
     if retire {
-        ack(
-            "the management token is retired; this broker now accepts only passkey \n\
-             sign-ins, device grants, and automation tokens",
+        ack("management token sign-in disabled");
+        ack_dim(
+            "Management remains available through passkeys, device grants, and automation tokens.",
         );
     } else {
-        ack("the management token is accepted again");
+        ack("management token sign-in enabled");
     }
 }
 
@@ -6207,17 +6922,16 @@ fn remote_capability_reality(endpoint: &str) -> &'static str {
     }
 }
 
-/// A usage command was pointed at a remote broker. Each capability has a
-/// different remote story — tell it instead of clap's generic unknown-flag
-/// tip or a "start a broker" hint.
-fn refuse_remote_usage(command: &str, endpoint: &str, url: &str) -> ! {
+/// A usage command was pointed directly at a remote broker even though usage
+/// commands open sessions through the broker selected on this machine.
+fn refuse_remote_usage(command: &str, url: &str) -> ! {
     let url = url.trim_end_matches('/');
     die_with(
         ExitCode::Usage,
         format!(
-            "`aka {command}` opens sessions on this machine's broker and cannot \
-             target {url}. {} — see {url}/instructions",
-            remote_capability_reality(endpoint)
+            "`aka {command}` uses a broker running on this Mac and cannot use \
+             `--broker {url}`.\n\
+             See {url}/instructions for remote connection options."
         ),
     )
 }
@@ -6420,7 +7134,8 @@ fn connection_kind(connection: &str, root: Option<&Path>, label: Option<&str>) -
         None => die_with(
             ExitCode::NotFound,
             format!(
-                "no connection is named {connection} — `aka ls` shows what exists"
+                "Connection {connection:?} not found.\n\
+                 Run `aka ls` to see available connections."
             ),
         ),
     }
@@ -6471,12 +7186,21 @@ fn cmd_env(
         die_with(
             ExitCode::Usage,
             format!(
-                "--format and --password-only apply to pg connections; {connection} is {kind}"
+                "--format and --password-only only work with Postgres connections.\n\
+                 {connection} is a {kind} connection."
             ),
         );
     }
     match kind.as_str() {
-        "pg" => cmd_dsn(connection, root, client, format, password_only, vec![], json),
+        "pg" => cmd_dsn(
+            connection,
+            root,
+            client,
+            format,
+            password_only,
+            vec![],
+            json,
+        ),
         "ssh" => cmd_ssh(connection, root, client, vec![], json),
         "cloud" => cmd_cloud_env(connection, root, client, vec![], json),
         "api" => {
@@ -6490,8 +7214,7 @@ fn cmd_env(
                 return;
             }
             guide(
-                "send AKA_TOKEN in place of the real credential; the broker \
-                 swaps it in on the upstream leg",
+                "Send AKA_TOKEN to AKA_URL. The broker replaces it with the upstream credential.",
             );
             for (name, value) in env {
                 println!("export {name}={}", shell_quote(&value));
@@ -6514,17 +7237,17 @@ fn cmd_env(
 /// before the generic "no management token" refusal does.
 fn api_endpoint_env(connection: &str, root: Option<PathBuf>) -> Vec<(String, String)> {
     if root.is_none() && effective_broker_url(None).is_none() {
-        if let Some((source, ContextTarget::Broker(url))) = ambient_context() {
+        if let Some((_, ContextTarget::Broker(url))) = ambient_context() {
             let url = url.trim_end_matches('/');
             if manage_token(&store_paths(None), url).is_none() {
                 die_with(
                     ExitCode::Authentication,
                     format!(
-                        "API connections are reached through a direct endpoint, \
-                         which is read from {url}'s management plane ({source}) — \
-                         `aka login` stores only the agent key. Store a \
-                         management token with `aka admin login --broker {url}`, \
-                         or ask the operator for the endpoint's URL and secret."
+                        "Management access required for {url}.\n\
+                         `aka login` stores agent access, but API endpoints require a \
+                         management token.\n\
+                         Run `aka admin login --broker {url}`, or ask the operator \
+                         for the endpoint URL and secret."
                     ),
                 );
             }
@@ -6535,8 +7258,8 @@ fn api_endpoint_env(connection: &str, root: Option<PathBuf>) -> Vec<(String, Str
     if managed.remote.is_none() {
         die_with(
             ExitCode::NoBroker,
-            "direct endpoints are served by a running broker; start Multitool \
-             for the local store, or `aka serve` for a headless root, then retry",
+            "No broker running for this context.\n\
+             Start the Multitool app or `aka serve`, then retry.",
         );
     }
     let connection_id = dto_id(&dto.id);
@@ -6544,8 +7267,8 @@ fn api_endpoint_env(connection: &str, root: Option<PathBuf>) -> Vec<(String, Str
         die_with(
             ExitCode::NotFound,
             format!(
-                "no direct endpoint is issued for {connection} — issue one \
-                 with `aka endpoint {connection} --issue`"
+                "{connection} has no direct endpoint.\n\
+                 Create one with `aka endpoint {connection} --issue`."
             ),
         );
     };
@@ -6553,15 +7276,12 @@ fn api_endpoint_env(connection: &str, root: Option<PathBuf>) -> Vec<(String, Str
         die_with(
             ExitCode::Usage,
             format!(
-                "the direct endpoint for {connection} has expired — renew it \
-                 with `aka endpoint {connection} --renew`"
+                "Direct endpoint expired.\n\
+                 Renew it with `aka endpoint {connection} --renew`."
             ),
         );
     }
-    let url = info
-        .tcp_dsn
-        .clone()
-        .unwrap_or_else(|| info.dsn.clone());
+    let url = info.tcp_dsn.clone().unwrap_or_else(|| info.dsn.clone());
     vec![
         ("AKA_URL".to_string(), url),
         ("AKA_TOKEN".to_string(), info.secret),
@@ -6594,10 +7314,13 @@ fn cmd_dsn(
         return;
     }
     if let Some(secs) = body["expires_in_seconds"].as_u64() {
-        eprintln!("  ticket expires in {secs}s — connect before then; a later connection needs a fresh open");
+        guide(format!(
+            "Ticket expires in {secs}s. Connect before then.\n\
+             Open a new session for later connections."
+        ));
     }
     if let Some(note) = body["sslmode_note"].as_str() {
-        eprintln!("  note: {note}");
+        guide(format!("Note: {note}"));
     }
     if !command.is_empty() {
         let env = pg_env(dsn, ticket)
@@ -6618,7 +7341,7 @@ fn cmd_dsn(
         },
         DsnFormat::Uri => match embed_ticket(dsn, ticket) {
             Ok(dsn) => {
-                eprintln!("  warning: --format uri puts the ticket in process-visible argv");
+                warn_line("Warning: --format uri exposes the ticket in process arguments.");
                 println!("{dsn}");
             }
             Err(message) => die(message),
@@ -6644,27 +7367,7 @@ fn ssh_open_hints(
     now: chrono::DateTime<chrono::Local>,
     include_setup: bool,
 ) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let (Some(user), Some(host)) = (body["user"].as_str(), body["host"].as_str()) {
-        lines.push(format!("signs only for {user}@{host}"));
-    }
-    if let Some(secs) = body["expires_in_seconds"].as_u64() {
-        // Relative alone leaves nothing to compare a later failure against. The
-        // agent protocol has no error channel, so a 61-second-old export reads
-        // as "Permission denied (publickey)" and nothing else.
-        let deadline = now + chrono::Duration::seconds(secs as i64);
-        lines.push(format!(
-            "connect within {secs}s — by {} (a later connection needs a fresh open)",
-            deadline.format("%H:%M:%S %Z")
-        ));
-    }
-    lines.push(match body["host_key_fingerprint"].as_str() {
-        Some(fingerprint) if !fingerprint.is_empty() => {
-            format!("server host key pinned to {fingerprint}")
-        }
-        _ => "server host key not pinned — the first server key seen will be trusted and pinned"
-            .to_string(),
-    });
+    let mut lines = vec!["SSH session".to_string()];
     let destination = body["destination"]
         .as_str()
         .filter(|value| !value.is_empty())
@@ -6673,6 +7376,30 @@ fn ssh_open_hints(
             let (user, host) = (body["user"].as_str()?, body["host"].as_str()?);
             Some(format!("{user}@{host}"))
         });
+    if let Some(destination) = &destination {
+        let signs_for = match (body["user"].as_str(), body["host"].as_str()) {
+            (Some(user), Some(host)) => format!(" ({user}@{host})"),
+            _ => String::new(),
+        };
+        lines.push(format!("  Destination  {destination}{signs_for}"));
+    }
+    lines.push(match body["host_key_fingerprint"].as_str() {
+        Some(fingerprint) if !fingerprint.is_empty() => {
+            format!("  Host key     {fingerprint}")
+        }
+        _ => "  Host key     Not pinned - the first server key will be trusted and pinned"
+            .to_string(),
+    });
+    if let Some(secs) = body["expires_in_seconds"].as_u64() {
+        // Relative alone leaves nothing to compare a later failure against. The
+        // agent protocol has no error channel, so a 61-second-old export reads
+        // as "Permission denied (publickey)" and nothing else.
+        let deadline = now + chrono::Duration::seconds(secs as i64);
+        lines.push(format!(
+            "  Expires      in {secs}s - by {}. Open a new session for later connections.",
+            deadline.format("%H:%M:%S %Z")
+        ));
+    }
     if include_setup {
         let Some(destination) = destination else {
             return lines;
@@ -6686,8 +7413,10 @@ fn ssh_open_hints(
             .map(|option| format!("-o {option}"))
             .collect::<Vec<_>>()
             .join(" ");
-        lines.push(format!("export SSH_AUTH_SOCK=\"{auth_sock}\""));
-        lines.push(format!("ssh{port} {flags} {destination}"));
+        lines.push(String::new());
+        lines.push("Run now".to_string());
+        lines.push(format!("  export SSH_AUTH_SOCK=\"{auth_sock}\""));
+        lines.push(format!("  ssh{port} {flags} {destination}"));
         // The flags above are not optional decoration. `SSH_AUTH_SOCK` alone
         // leaves the default IdentityFile list in place, so a user with a
         // working ~/.ssh/id_ed25519 logs in with no broker involvement and no
@@ -6696,7 +7425,8 @@ fn ssh_open_hints(
         // ssh-config-aware clients (VS Code Remote-SSH, plain `ssh <name>`)
         // can use at all.
         lines.push(String::new());
-        lines.push("or add to ~/.ssh/config so plain `ssh` and editors use it too:".to_string());
+        lines.push("Persistent setup".to_string());
+        lines.push("  Add this to ~/.ssh/config:".to_string());
         lines.extend(ssh_config_block(body, auth_sock, &destination));
     }
     lines
@@ -6820,9 +7550,10 @@ fn cmd_cloud_env(
         return;
     }
     if let Some(secs) = body["expires_in_seconds"].as_u64() {
-        eprintln!(
-            "  session expires in {secs}s — re-run before then; Multitool cannot revoke minted credentials"
-        );
+        guide(format!(
+            "Cloud credentials expire in {secs}s.\n\
+             Run the command again to mint new credentials. Minted credentials cannot be revoked."
+        ));
     }
     let env = cloud_session_env(&body);
     if !command.is_empty() {
@@ -6900,21 +7631,22 @@ fn cmd_cloud_creds(
     }
 }
 
-fn cmd_cloud_install(
+fn cmd_cloud_config(
     connection: String,
     profile: Option<String>,
     root: Option<PathBuf>,
     json: bool,
 ) {
-    // Install only needs to know the connection exists and which provider it
-    // is; minting is deferred to credential_process at CLI use time.
+    // Configuration generation only needs to know the connection exists and
+    // which provider it is; minting is deferred to credential_process at CLI
+    // use time.
     let managed = management_backend(root.clone(), None);
     let dto = conn_dto(&managed, &connection);
     if dto.kind != "cloud" {
         die_with(
             ExitCode::Usage,
             format!(
-                "{connection} is a {} connection; cloud install only applies to cloud connections",
+                "{connection} is a {} connection; cloud config only applies to cloud connections",
                 dto.kind
             ),
         );
@@ -6979,7 +7711,9 @@ fn cmd_cloud_install(
                 }));
                 return;
             }
-            println!("# Append to ~/.aws/config (or AWS_CONFIG_FILE)");
+            ack_dim(
+                "AWS profile preview (no changes made; append it to ~/.aws/config or AWS_CONFIG_FILE):",
+            );
             println!("[profile {profile_name}]");
             print!("{region_line}");
             println!("credential_process = {process}");
@@ -7004,6 +7738,7 @@ fn cmd_cloud_install(
                 }));
                 return;
             }
+            ack_dim("Cloud CLI setup preview (no changes made; run the printed commands):");
             match provider {
                 "azure" => {
                     println!("# Short-lived Azure access token (client secret stays in Multitool)");
@@ -7026,7 +7761,7 @@ fn cmd_cloud_install(
         }
         other => die_with(
             ExitCode::Usage,
-            format!("cloud install does not support provider {other:?}"),
+            format!("cloud config does not support provider {other:?}"),
         ),
     }
 }
@@ -7049,7 +7784,7 @@ fn cmd_ssh(
         return;
     }
     for line in ssh_open_hints(&body, auth_sock, chrono::Local::now(), command.is_empty()) {
-        eprintln!("  {line}");
+        eprintln!("{line}");
     }
     if !command.is_empty() {
         let status = ssh_scoped_command(&command, auth_sock)
@@ -7089,8 +7824,8 @@ fn cmd_ssh_agent(
     if managed.remote.is_none() {
         die_with(
             ExitCode::NoBroker,
-            "the endpoint socket is served by a running broker; start Multitool for the local \
-             store, or `aka serve` / `aka serve --root …` for a headless root, then retry",
+            "No broker running for this context.\n\
+             Start the Multitool app or `aka serve`, then retry.",
         );
     }
     let connection_id = dto_id(&dto.id);
@@ -7098,8 +7833,8 @@ fn cmd_ssh_agent(
         die_with(
             ExitCode::NotFound,
             format!(
-                "no direct endpoint is issued for {connection} — issue one with \
-                 `aka endpoint {connection} --issue --require-auth`"
+                "{connection} has no direct endpoint.\n\
+                 Create one with `aka endpoint {connection} --issue --require-auth`."
             ),
         );
     };
@@ -7107,8 +7842,8 @@ fn cmd_ssh_agent(
         die_with(
             ExitCode::Usage,
             format!(
-                "the direct endpoint for {connection} has expired — renew it with \
-                 `aka endpoint {connection} --renew`"
+                "Direct endpoint expired.\n\
+                 Renew it with `aka endpoint {connection} --renew`."
             ),
         );
     }
@@ -7225,7 +7960,8 @@ fn cmd_key(rotate: bool, root: Option<PathBuf>, url: Option<String>, json: bool)
     let managed = management_backend(root, url);
     if rotate {
         managed.run_gated(managed.backend.rotate_key());
-        ack("key rotated; agents that read the token file reconnect on their own");
+        ack("agent key rotated");
+        ack_dim("File-based agents will reconnect automatically. Other agents need the new key.");
     }
     let key = Zeroizing::new(managed.run(managed.backend.agent_key()));
     print_key(&key, json);
@@ -7298,7 +8034,16 @@ struct StatusReport {
 struct StatusFailure {
     report: Box<StatusReport>,
     code: ExitCode,
-    diagnostic: String,
+    kind: StatusFailureKind,
+    detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusFailureKind {
+    NotRunning,
+    InvalidSocket,
+    PermissionDenied,
+    InspectionFailed,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -7336,90 +8081,71 @@ fn status_tools(connections: &[ConnectionDto]) -> Vec<StatusTool> {
     connections.iter().map(StatusTool::from).collect()
 }
 
-fn status_heading(transport: &str, location: &str) -> String {
-    let desktop_socket = Paths::default_locations()
-        .ok()
-        .map(|paths| paths.socket_file().display().to_string());
-    let broker = if transport == "unix"
-        && desktop_socket
-            .as_deref()
-            .is_some_and(|socket| socket == location)
-    {
-        "desktop broker"
-    } else {
-        "broker"
-    };
-    let location_note = if transport == "manage_api" {
-        " (manage API)"
-    } else {
-        ""
-    };
-    format!("{broker} running on {location}{location_note}")
+fn status_heading(target: &str, state: &str) -> String {
+    format!("{target} - {state}")
 }
 
-fn print_status_report(report: &StatusReport) {
+fn status_field(label: &str, value: impl std::fmt::Display) -> String {
+    format!("  {label:<16} {value}")
+}
+
+fn print_status_report(report: &StatusReport, target: &str) {
     let color = stdout_use_color();
     println!(
         "{}",
-        paint::bold_green(color, status_heading(&report.transport, &report.location))
+        paint::bold_green(color, status_heading(target, "Broker running"))
     );
     if let Some(version) = &report.broker_version {
         match report.protocol_version {
             Some(protocol) => println!(
                 "{}",
-                colon_field(
-                    color,
-                    "  ",
-                    "version",
+                status_field(
+                    "Version",
                     format!(
-                        "broker {version}, aka CLI {} (protocol {protocol})",
+                        "broker {version}, aka {} (protocol {protocol})",
                         report.cli_version
                     )
                 )
             ),
             None => println!(
                 "{}",
-                colon_field(
-                    color,
-                    "  ",
-                    "version",
-                    format!("broker {version}, aka CLI {}", report.cli_version)
+                status_field(
+                    "Version",
+                    format!("broker {version}, aka {}", report.cli_version)
                 )
             ),
         }
     }
     if let Some(url) = &report.mcp_url {
-        println!("{}", colon_field(color, "  ", "MCP host", url));
+        println!("{}", status_field("MCP host", url));
     } else if report.transport == "unix" {
         println!(
             "{}",
-            colon_field(
-                color,
-                "  ",
-                "MCP host",
-                paint::bold_yellow(color, "not running")
-            )
+            status_field("MCP host", paint::bold_yellow(color, "Not running"))
         );
     }
     if let Some(client_id) = &report.client_id {
-        println!("{}", colon_field(color, "  ", "client id", client_id));
+        println!("{}", status_field("Client ID", client_id));
     }
     if let Some(path) = &report.shared_key_path {
         let qualifier = match report.shared_key_present {
             Some(true) => "",
-            Some(false) => " (not minted yet)",
-            None => " (on the broker host)",
+            Some(false) => " (not created yet)",
+            None => " (on broker host)",
         };
         println!(
             "{}",
-            colon_field(color, "  ", "shared key", format!("{path}{qualifier}"))
+            status_field(
+                "Agent key",
+                format!("{}{qualifier}", display_home_relative_path(Path::new(path)))
+            )
         );
     }
     if let Some(vault) = &report.vault {
-        println!("{}", colon_field(color, "  ", "vault", vault));
+        println!("{}", status_field("Vault", vault));
     }
     if !report.recent_ssh_refusals.is_empty() {
-        println!("{}", colon_field(color, "  ", "recent SSH refusals", ""));
+        println!("{}", status_field("SSH refusals", ""));
         let rows = report.recent_ssh_refusals.iter().map(|refusal| {
             vec![
                 refusal.connection.clone(),
@@ -7436,28 +8162,23 @@ fn print_status_report(report: &StatusReport) {
     if let Some(error) = &report.tools_error {
         println!(
             "{}",
-            colon_field(
-                color,
-                "  ",
-                "tools",
-                paint::bold_yellow(color, format!("unavailable ({error})"))
-            )
+            status_field("Tools", paint::bold_yellow(color, "Unavailable"))
         );
+        if error.contains("no management token") {
+            println!();
+            println!("Run `aka admin login` to include tools and recent SSH refusals.");
+        } else {
+            println!("  {error}");
+        }
         return;
     }
     if report.tools.is_empty() {
-        println!(
-            "{}",
-            colon_field(
-                color,
-                "  ",
-                "tools",
-                "none configured — add one with `aka conn add pg --help` or the desktop app"
-            )
-        );
+        println!("{}", status_field("Tools", "None configured"));
+        println!();
+        println!("Add one in the Multitool app or run `aka conn add --help`.");
         return;
     }
-    println!("{}", colon_field(color, "  ", "tools", ""));
+    println!("{}", status_field("Tools", ""));
     let approval_surface_attached = report.approval_surface_attached.unwrap_or(false);
     let rows = report.tools.iter().map(|tool| {
         let mut policy = Vec::new();
@@ -7483,7 +8204,7 @@ fn print_status_report(report: &StatusReport) {
             if policy.is_empty() {
                 "—".into()
             } else {
-                policy.join(" · ")
+                policy.join(", ")
             },
         ]
     });
@@ -7492,10 +8213,16 @@ fn print_status_report(report: &StatusReport) {
         presentation::table(&["name", "kind", "target", "access", "policy"], rows)
     );
     if !approval_surface_attached {
-        if let Some(warning) =
-            headless_confirmation_warning(report.tools.iter().filter(|tool| tool.confirm).count())
-        {
-            eprintln!("{}", paint::bold_yellow(stderr_use_color(), &warning));
+        let count = report.tools.iter().filter(|tool| tool.confirm).count();
+        if count > 0 {
+            warn_line(format!(
+                "{count} tool{} require{} confirmation, but no approval surface is attached.\n\
+                 {} calls will be refused.\n\n\
+                 Start the Multitool app or run `aka approvals --watch`.",
+                if count == 1 { "" } else { "s" },
+                if count == 1 { "s" } else { "" },
+                if count == 1 { "Its" } else { "Their" },
+            ));
         }
     }
 }
@@ -7514,7 +8241,7 @@ fn headless_confirmation_warning(count: usize) -> Option<String> {
 
 /// `status --broker`: the broker as its manage API reports it.
 fn remote_status(root: Option<PathBuf>, url: String) -> StatusReport {
-    let managed = management_backend(root, Some(url.clone()));
+    let managed = management_backend_quiet(root, Some(url.clone()));
     let identity = managed.run(managed.backend.identity());
     let connections = managed.run(managed.backend.list_connections());
     let activity = managed.run(managed.backend.activity(100));
@@ -7584,22 +8311,23 @@ fn vault_description(paths: &Paths) -> String {
     }
 }
 
-fn socket_status_error(socket: &Path, error: &std::io::Error) -> String {
+fn classify_status_failure(socket: &Path, error: &std::io::Error) -> (StatusFailureKind, String) {
+    let socket = display_home_relative_path(socket);
     if error.raw_os_error() == Some(libc::ENOTSOCK) {
-        return format!("{} exists but is not a Unix socket", socket.display());
+        return (
+            StatusFailureKind::InvalidSocket,
+            format!("A file at {socket} is blocking the broker socket."),
+        );
     }
     match error.kind() {
         std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
-            format!("no broker is running at {}", socket.display())
+            (StatusFailureKind::NotRunning, String::new())
         }
-        std::io::ErrorKind::PermissionDenied => format!(
-            "permission denied opening broker socket {}; check its owner and mode",
-            socket.display()
+        std::io::ErrorKind::PermissionDenied => (
+            StatusFailureKind::PermissionDenied,
+            format!("Permission denied opening {socket}."),
         ),
-        _ => format!(
-            "could not inspect broker socket {}: {error}",
-            socket.display()
-        ),
+        _ => (StatusFailureKind::InspectionFailed, error.to_string()),
     }
 }
 
@@ -7656,10 +8384,12 @@ fn local_status(root: Option<PathBuf>) -> Result<StatusReport, StatusFailure> {
         )),
         Err(error) => {
             let report = base();
+            let (kind, detail) = classify_status_failure(&socket, &error);
             return Err(StatusFailure {
                 report: Box::new(report),
                 code: socket_status_exit_code(&error),
-                diagnostic: socket_status_error(&socket, &error),
+                kind,
+                detail,
             });
         }
     };
@@ -7700,8 +8430,7 @@ fn local_status(root: Option<PathBuf>) -> Result<StatusReport, StatusFailure> {
                 Vec::new(),
                 Vec::new(),
                 Some(
-                    "no management token configured; run `aka admin login` to include tools"
-                        .into(),
+                    "no management token configured; run `aka admin login` to include tools".into(),
                 ),
             ),
         };
@@ -7725,11 +8454,11 @@ fn local_status(root: Option<PathBuf>) -> Result<StatusReport, StatusFailure> {
 }
 
 fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
-    let (root, url) = ambient_management_target(root, url);
+    let ManagementSelection { root, url, target } = management_selection(root, url);
     require_existing_root_for_read(root.as_deref(), url.is_some());
     let result = match url {
-        Some(url) => Ok(remote_status(root, url)),
-        None => local_status(root),
+        Some(url) => Ok(remote_status(root.clone(), url)),
+        None => local_status(root.clone()),
     };
     match result {
         Ok(report) => {
@@ -7739,76 +8468,105 @@ fn cmd_status(json: bool, root: Option<PathBuf>, url: Option<String>) {
                     .as_deref()
                     .is_some_and(|version| version != report.cli_version)
             {
-                eprintln!(
-                    "{}",
-                    paint::bold_yellow(
-                        stderr_use_color(),
-                        format!(
-                            "warning: broker version {} differs from aka CLI version {}; update them together before making changes",
-                            report.broker_version.as_deref().unwrap_or("unknown"),
-                            report.cli_version
-                        )
-                    )
-                );
+                warn_line(format!(
+                    "Broker and CLI versions differ.\n\
+                     Broker: {}\n\
+                     aka: {}\n\
+                     Update them together before making changes.",
+                    report.broker_version.as_deref().unwrap_or("unknown"),
+                    report.cli_version
+                ));
             }
             if json {
                 print_json(&report);
             } else {
-                print_status_report(&report);
+                print_status_report(&report, &target.status);
             }
         }
         Err(StatusFailure {
             report,
             code,
-            diagnostic,
+            kind,
+            detail,
         }) => {
             if json {
                 print_json(&report);
-            } else {
-                let color = stderr_use_color();
-                if let Some(vault) = &report.vault {
-                    eprintln!("{}", colon_field(color, "  ", "vault", vault));
-                }
-                if let Some(path) = &report.shared_key_path {
-                    let state = if report.shared_key_present == Some(true) {
-                        "present"
-                    } else {
-                        "not minted yet"
-                    };
-                    eprintln!(
-                        "{}",
-                        colon_field(color, "  ", "shared key", format!("{state} at {path}"))
-                    );
-                }
+                exit_with(code);
             }
-            die_with(code, diagnostic);
+            let message = match kind {
+                StatusFailureKind::NotRunning => {
+                    let mut lines = vec![status_heading(&target.status, "No broker running")];
+                    if let Some(vault) = &report.vault {
+                        lines.push(String::new());
+                        lines.push(status_field("Vault", vault));
+                    }
+                    if let Some(path) = &report.shared_key_path {
+                        let state = if report.shared_key_present == Some(true) {
+                            "Present"
+                        } else {
+                            "Not created"
+                        };
+                        lines.push(status_field(
+                            "Agent key",
+                            format!(
+                                "{state} at {}",
+                                display_home_relative_path(Path::new(path))
+                            ),
+                        ));
+                    }
+                    lines.push(String::new());
+                    lines.push(if target.status.ends_with("(local)") {
+                        "Start the Multitool app.".into()
+                    } else if target.status.ends_with("(server)") {
+                        "Start it with `aka serve`.".into()
+                    } else if let Some(root) = root.as_deref() {
+                        format!("Start it with `aka serve --root {}`.", bare_shell_path(root))
+                    } else {
+                        "Start the broker, then retry.".into()
+                    });
+                    lines.join("\n")
+                }
+                StatusFailureKind::InvalidSocket => format!(
+                    "{}\n\n{detail}\nMove it, then start the broker again.",
+                    status_heading(&target.status, "Broker socket is invalid")
+                ),
+                StatusFailureKind::PermissionDenied => format!(
+                    "{}\n\n{detail}\nCheck that the broker root and socket are owned by your user, then retry.",
+                    status_heading(&target.status, "Broker status unavailable")
+                ),
+                StatusFailureKind::InspectionFailed => format!(
+                    "{}\n\n{detail}\nRetry, or restart the broker if the problem continues.",
+                    status_heading(&target.status, "Broker status unavailable")
+                ),
+            };
+            die_with(code, message);
         }
     }
 }
 
-/// One formatted line per projected activity entry: timestamp (seconds
-/// precision), summary, detail, and the acting agent when recorded.
-/// When `color` is on, the timestamp and agent tag are dimmed.
-fn format_activity_line(entry: &ActivityDto, color: bool) -> String {
+/// One table row per projected activity entry: timestamp (seconds precision),
+/// summary, detail, and the acting agent when recorded.
+fn activity_row(entry: &ActivityDto) -> Vec<String> {
     let ts = entry.at.get(..19).unwrap_or(&entry.at);
-    let mut line = format!("{}  {}", paint::dim(color, ts), entry.text);
-    if let Some(detail) = &entry.detail {
-        line.push_str(&format!(" — {detail}"));
-    }
-    if let Some(agent) = &entry.agent {
-        line.push_str(&format!("  {}", paint::dim(color, format!("[{agent}]"))));
-    }
-    line
+    vec![
+        ts.to_string(),
+        entry.text.clone(),
+        entry.detail.clone().unwrap_or_else(|| "—".into()),
+        entry.agent.clone().unwrap_or_else(|| "—".into()),
+    ]
 }
 
 fn print_activity(entries: &[ActivityDto], json: bool) {
     if json {
         print_json(&entries);
+    } else if entries.is_empty() {
+        ack_dim("No activity yet.");
     } else {
-        let color = stdout_use_color();
-        for entry in entries {
-            println!("{}", format_activity_line(entry, color));
-        }
+        let rows = entries.iter().map(activity_row);
+        println!(
+            "{}",
+            presentation::table(&["at", "event", "detail", "agent"], rows)
+        );
     }
 }
 
@@ -7834,14 +8592,7 @@ fn cmd_activity(limit: usize, json: bool, root: Option<PathBuf>, url: Option<Str
     match std::fs::metadata(&file) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if json {
-                print_activity(&[], true);
-            } else {
-                ack_dim(format!(
-                    "no activity recorded yet ({} does not exist)",
-                    file.display()
-                ));
-            }
+            print_activity(&[], json);
             return;
         }
         Err(e) => die(format!("could not inspect {}: {e}", file.display())),
@@ -7876,11 +8627,15 @@ fn cmd_activity(limit: usize, json: bool, root: Option<PathBuf>, url: Option<Str
     let verification = audit.verify();
     match &verification {
         aka_core::audit::AuditIntegrity::Tampered { .. } => die(verification.summary()),
-        aka_core::audit::AuditIntegrity::Unsealed { .. } => {
-            warn_line(format!("warning: {}", verification.summary()))
-        }
+        aka_core::audit::AuditIntegrity::Unsealed { .. } => warn_line(format!(
+            "Activity log verification warning: {}",
+            verification.summary()
+        )),
         aka_core::audit::AuditIntegrity::Verified { legacy, .. } if *legacy > 0 => {
-            warn_line(format!("warning: {}", verification.summary()))
+            warn_line(format!(
+                "Activity log verification warning: {}",
+                verification.summary()
+            ))
         }
         aka_core::audit::AuditIntegrity::Verified { .. } => {}
     }
@@ -7906,14 +8661,27 @@ fn cmd_mcp(root: Option<PathBuf>, client: Option<String>) {
 /// agent skill, and pin this directory to the current context.
 ///
 /// Each step reports separately and a failure in one does not abandon the
-/// others: the client registration is the only step that shells out, and a
-/// missing CLI is a normal outcome (Claude Desktop is configured by editing
-/// JSON, not by a command) rather than a reason to skip the skill file.
+/// others: client registration is the only step that shells out, and a
+/// missing client CLI is a normal outcome rather than a reason to skip the
+/// skill file. Claude Desktop is configured by editing JSON, not by a command.
 fn cmd_setup_apply(client: McpSetupClient, json: bool) {
     let label = client.label();
     let mut done: Vec<serde_json::Value> = Vec::new();
 
     match client {
+        McpSetupClient::Codex => match register_codex() {
+            Ok(()) => {
+                ack("registered MCP server multitool with Codex");
+                done.push(serde_json::json!({ "step": "mcp", "applied": true }));
+            }
+            Err(message) => {
+                warn_line(format!("could not register with Codex: {message}"));
+                guide("register it yourself: codex mcp add multitool -- aka mcp --client codex");
+                done.push(
+                    serde_json::json!({ "step": "mcp", "applied": false, "detail": message }),
+                );
+            }
+        },
         McpSetupClient::ClaudeCode => match register_claude_code() {
             Ok(()) => {
                 ack("registered MCP server multitool with Claude Code");
@@ -7927,12 +8695,14 @@ fn cmd_setup_apply(client: McpSetupClient, json: bool) {
                 );
             }
         },
-        // Codex and Claude Desktop are configured by editing a file the user
-        // owns and that carries their other servers. Rewriting TOML/JSON in
-        // place risks clobbering that, so print the stanza and say where.
-        _ => {
+        // Claude Desktop is configured by editing a file the user owns and
+        // that carries their other servers. Rewriting JSON in place risks
+        // clobbering that, so print the stanza and say where.
+        McpSetupClient::ClaudeDesktop => {
             let (target, content) = client_config(client);
-            warn_line(format!("{label} is configured by editing {target}"));
+            warn_line(format!(
+                "Claude Desktop requires a manual edit to {target}; --write only prepares this repository"
+            ));
             eprintln!("{content}");
             done.push(serde_json::json!({
                 "step": "mcp", "applied": false, "target": target,
@@ -7996,6 +8766,42 @@ fn cmd_setup_apply(client: McpSetupClient, json: bool) {
     }
 }
 
+/// Register the MCP server through the Codex CLI, which owns the config
+/// file's format and location.
+fn register_codex() -> Result<(), String> {
+    let output = std::process::Command::new("codex")
+        .args([
+            "mcp",
+            "add",
+            "multitool",
+            "--",
+            "aka",
+            "mcp",
+            "--client",
+            "codex",
+        ])
+        .output()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => "the `codex` CLI is not on PATH".to_string(),
+            _ => error.to_string(),
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    let detail = detail.trim();
+    // Already-registered is success for our purposes: the requested end state
+    // already exists, even if the Codex CLI reports that as an error.
+    if detail.contains("already exists") {
+        return Ok(());
+    }
+    Err(if detail.is_empty() {
+        format!("codex mcp add exited with {}", output.status)
+    } else {
+        detail.to_string()
+    })
+}
+
 /// Register the MCP server through the Claude Code CLI, which owns the
 /// config file's format and location.
 fn register_claude_code() -> Result<(), String> {
@@ -8037,8 +8843,8 @@ fn register_claude_code() -> Result<(), String> {
 fn client_config(client: McpSetupClient) -> (&'static str, &'static str) {
     match client {
         McpSetupClient::Codex => (
-            "~/.codex/config.toml",
-            "[mcp_servers.multitool]\ncommand = \"aka\"\nargs = [\"mcp\", \"--client\", \"codex\"]\n",
+            "Codex CLI",
+            "codex mcp add multitool -- aka mcp --client codex\n",
         ),
         McpSetupClient::ClaudeCode => (
             "Claude Code CLI",
@@ -8056,7 +8862,7 @@ fn cmd_setup_mcp(client: McpSetupClient, json: bool) {
     let args = ["mcp", "--client", label];
     let (target, content) = client_config(client);
     let format = match client {
-        McpSetupClient::Codex => "toml",
+        McpSetupClient::Codex => "shell",
         McpSetupClient::ClaudeCode => "shell",
         McpSetupClient::ClaudeDesktop => "json",
     };
@@ -8070,6 +8876,17 @@ fn cmd_setup_mcp(client: McpSetupClient, json: bool) {
             "content": content,
         }));
     } else {
+        match client {
+            McpSetupClient::Codex => ack_dim(
+                "Codex setup command (no changes made; run it or use `aka setup codex --write`):",
+            ),
+            McpSetupClient::ClaudeCode => ack_dim(
+                "Claude Code setup command (no changes made; run it or use `aka setup claude-code --write`):",
+            ),
+            McpSetupClient::ClaudeDesktop => ack_dim(
+                "Claude Desktop requires a manual config edit (no changes made; `--write` only prepares this repository):",
+            ),
+        }
         print!("{content}");
     }
 }
@@ -8081,8 +8898,18 @@ fn cmd_setup_mcp(client: McpSetupClient, json: bool) {
 /// surfaced: AKA_MANAGE_TOKEN, the `aka admin login` store, or the
 /// first-start bootstrap file, first one the broker accepts.
 fn cmd_setup_desktop(root: Option<PathBuf>, json: bool) {
+    let server_context = root.is_none();
     let root = serve_root_from_flags(root);
-    let root_flag = format!(" --root {}", shell_quote(&root.display().to_string()));
+    let root_flag = if server_context {
+        String::new()
+    } else {
+        format!(" --root {}", bare_shell_path(&root))
+    };
+    let target = if server_context {
+        format!("{} (server)", display_home_relative_path(&root))
+    } else {
+        display_home_relative_path(&root)
+    };
     let paths = Paths::under(&root);
     let socket = paths.socket_file();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -8106,21 +8933,38 @@ fn cmd_setup_desktop(root: Option<PathBuf>, json: bool) {
             "the broker at {} answered discovery with HTTP {status}",
             socket.display()
         )),
-        Err(error) => die_with(
-            socket_status_exit_code(&error),
-            format!(
-                "no broker is running at {} — start one: `aka serve{root_flag}`",
-                socket.display()
-            ),
-        ),
+        Err(error) => {
+            let code = socket_status_exit_code(&error);
+            let (kind, detail) = classify_status_failure(&socket, &error);
+            let message = match kind {
+                StatusFailureKind::NotRunning => format!(
+                    "{}\n\nStart it with `aka serve{root_flag}`, then rerun `aka setup desktop`.",
+                    status_heading(&target, "No broker running")
+                ),
+                StatusFailureKind::InvalidSocket => format!(
+                    "{}\n\n{detail}\nMove it, then start the broker again.",
+                    status_heading(&target, "Broker socket is invalid")
+                ),
+                StatusFailureKind::PermissionDenied => format!(
+                    "{}\n\n{detail}\nCheck that the broker root and socket are owned by your user, then retry.",
+                    status_heading(&target, "Broker status unavailable")
+                ),
+                StatusFailureKind::InspectionFailed => format!(
+                    "{}\n\n{detail}\nRetry, or restart the broker if the problem continues.",
+                    status_heading(&target, "Broker status unavailable")
+                ),
+            };
+            die_with(code, message)
+        }
     };
     let Some(url) = manifest["base_url"].as_str() else {
         die_with(
             ExitCode::Generic,
             format!(
-                "this broker advertises no URL the app could dial — restart it with \
-                 the TCP listener (the default): `aka serve{root_flag}`, or set \
-                 --public-url for a non-loopback listener"
+                "{}\n\n\
+                 Restart it with the default TCP listener, or set `--public-url` when using a custom listener.\n\
+                 Then rerun `aka setup desktop`.",
+                status_heading(&target, "Broker has no reachable URL")
             ),
         );
     };
@@ -8159,48 +9003,31 @@ fn cmd_setup_desktop(root: Option<PathBuf>, json: bool) {
         return;
     }
     let color = stdout_use_color();
+    println!("{}", paint::bold_green(color, "Connect the Multitool app"));
+    println!();
     println!(
         "{}",
-        paint::bold_green(color, "Connect the desktop app to this broker")
+        paint::bold_green(color, status_heading(&target, "Broker running"))
     );
-    println!(
-        "{}",
-        paint::dim(
-            color,
-            "The app reaches it as a hosted instance; \"Local Multitool\" is a \
-             different broker."
-        )
-    );
-    println!("{}", colon_field(color, "  ", "URL", url));
+    println!("{}", status_field("URL", url));
     match &token {
-        Some((token, source)) => println!(
-            "{}",
-            colon_field(
-                color,
-                "  ",
-                "token",
-                format!("{}  ({source})", token.as_str())
-            )
-        ),
-        None => println!(
-            "{}",
-            colon_field(
-                color,
-                "  ",
-                "token",
-                format!(
-                    "none found — mint one: `aka admin token{root_flag}` \
-                     (minting rotates: a previously issued token stops working)"
-                )
-            )
-        ),
+        Some((token, _)) => println!("{}", status_field("Management token", token.as_str())),
+        None => println!("{}", status_field("Management token", "Not found")),
+    }
+    println!();
+    if token.is_some() {
+        println!("In Multitool:");
+        println!("1. Choose Hosted Multitool.");
+        println!("2. Enter the URL.");
+        println!("3. Open Advanced and paste the management token.");
+    } else {
+        println!("Run `aka admin token{root_flag}`, then rerun this command.");
+        println!("Issuing a new token invalidates the current management token.");
     }
     println!();
     println!(
-        "In the app: choose \"Hosted Multitool\" (or \"Connect remote…\" in the broker menu),"
+        "To use a passkey instead, run `aka admin enroll{root_flag}`, then choose Sign in with passkey."
     );
-    println!("enter the URL, then open Advanced and paste the token under \"Management token\".");
-    println!("Passkeys work too: enroll with `aka admin enroll`, then \"Sign in with passkey\".");
 }
 
 /// Everything `aka serve` accepts, bundled so the call site stays legible.
@@ -8274,6 +9101,10 @@ fn guide(message: impl std::fmt::Display) {
     presentation::info(message, stderr_use_color());
 }
 
+fn guide_compact(message: impl std::fmt::Display) {
+    presentation::info_compact(message, stderr_use_color());
+}
+
 /// Warning / note on stderr (yellow).
 fn warn_line(message: impl std::fmt::Display) {
     presentation::warning(message, stderr_use_color());
@@ -8296,7 +9127,13 @@ fn configured_cli_command(color: bool, long_help: bool) -> clap::Command {
 
 fn command_line_requests_long_help() -> bool {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    args.iter().any(|arg| arg == "--help") || args.first().is_some_and(|arg| arg == "help")
+    if args.iter().any(|arg| arg == "--help") {
+        return true;
+    }
+    if args.first().is_some_and(|arg| arg == "help") {
+        return args.len() > 1;
+    }
+    false
 }
 
 fn parse_cli() -> Cli {
@@ -8419,6 +9256,8 @@ struct ServeBanner {
     root: PathBuf,
     /// Leading-space flag fragment, e.g. ` --root '/path'`.
     root_flag: String,
+    /// Whether `aka use server` resolves to this root in another terminal.
+    server_context: bool,
     first_start_manage_token: Option<PathBuf>,
     tcp_addr: Option<std::net::SocketAddr>,
     public_url: Option<String>,
@@ -8441,23 +9280,100 @@ impl ServeBanner {
         }
     }
 
+    fn web_ui_summary(&self) -> String {
+        match &self.web_ui {
+            WebUiBannerStatus::Bundled { url } | WebUiBannerStatus::Custom { url, .. } => {
+                url.clone()
+            }
+            WebUiBannerStatus::Disabled(reason) => reason.clone(),
+        }
+    }
+
+    fn ui_root_summary(&self) -> String {
+        match &self.web_ui {
+            WebUiBannerStatus::Bundled { .. } => "bundled".into(),
+            WebUiBannerStatus::Custom { root, .. } => display_home_relative_path(root),
+            WebUiBannerStatus::Disabled(reason) => reason.clone(),
+        }
+    }
+
+    fn context_command(&self, command: &str) -> String {
+        if self.server_context {
+            command.into()
+        } else {
+            format!("{command}{}", self.root_flag)
+        }
+    }
+
     /// Plain-text lines (no ANSI). The last line is empty so the process
     /// leaves a blank line before any later log noise.
     fn lines(&self) -> Vec<String> {
         let mut out = vec![
             "Multitool broker ready".into(),
             String::new(),
-            format_label("Socket", self.socket.display()),
-            format_label("Root", self.root.display()),
+            format!(
+                "{}{} - Broker running",
+                display_home_relative_path(&self.root),
+                if self.server_context { " (server)" } else { "" }
+            ),
+            format!("Web UI  {}", self.web_ui_summary()),
+            String::new(),
+            "FROM ANOTHER TERMINAL".into(),
         ];
-        if let Some(host) = &self.advertise_host {
-            out.push(format_label(
-                "Data host",
-                format!("{host}  (PG leg is plaintext)"),
+
+        let mut commands = Vec::new();
+        if self.server_context {
+            commands.push(("aka use server".into(), "Point aka at this broker".into()));
+        }
+        commands.push((
+            self.context_command("aka status"),
+            "Inspect broker status".into(),
+        ));
+        if self.manage_url().is_some() {
+            commands.push((
+                self.context_command("aka setup desktop"),
+                "Connect the desktop app".into(),
             ));
         }
+        commands.push((
+            self.context_command("aka setup skill --write"),
+            "Install agent docs for Claude".into(),
+        ));
+        out.extend(format_serve_commands(&commands));
+
+        if let Some(path) = &self.first_start_manage_token {
+            out.push(String::new());
+            out.push("MANAGEMENT".into());
+            out.push(format_label(
+                "First token",
+                display_home_relative_path(path),
+            ));
+            out.push(format_label("Permissions", "Owner only"));
+            out.push(format_label(
+                "Expires",
+                format!("{} days", DEFAULT_MANAGE_TOKEN_TTL_DAYS),
+            ));
+            out.push(format_label(
+                "Rotate",
+                format!(
+                    "{} while the broker is live",
+                    self.context_command("aka admin token")
+                ),
+            ));
+        }
+
+        out.push(String::new());
+        out.push("AGENTS".into());
+        out.push(format_label(
+            "Socket",
+            display_home_relative_path(&self.socket),
+        ));
+        out.push(format_label(
+            "Key",
+            display_home_relative_path(&self.token_path),
+        ));
         match &self.mcp {
-            McpBannerStatus::Disabled => {}
+            McpBannerStatus::Disabled => out.push(format_label("MCP", "off (--no-mcp)")),
             McpBannerStatus::Started { addr } => {
                 out.push(format_label("MCP", addr));
             }
@@ -8465,113 +9381,53 @@ impl ServeBanner {
                 out.push(format_label("MCP", format!("not started ({error})")));
             }
         }
-        out.push(format_label("Keychain", &self.vault));
-
-        out.push(String::new());
-
-        if let Some(path) = &self.first_start_manage_token {
+        if let Some(host) = &self.advertise_host {
             out.push(format_label(
-                "First token",
-                format!(
-                    "{}  (0600, expires in {} days)",
-                    path.display(),
-                    DEFAULT_MANAGE_TOKEN_TTL_DAYS
-                ),
-            ));
-            out.push(format_label(
-                "Rotate",
-                format!(
-                    "aka admin token{} while the broker is live",
-                    self.root_flag
-                ),
-            ));
-        } else {
-            out.push(format_label(
-                "Manage",
-                format!(
-                    "aka status{}  (every aka command takes --root)",
-                    self.root_flag
-                ),
-            ));
-            if let Some(url) = self.manage_url() {
-                out.push(format_label(
-                    "Remote",
-                    format!("the same commands with --broker {url} and a manage token"),
-                ));
-            }
-        }
-        if self.manage_url().is_some() {
-            out.push(format_label(
-                "Desktop",
-                format!(
-                    "aka setup desktop{}  (the app connects to this broker as remote)",
-                    self.root_flag
-                ),
+                "Data host",
+                format!("{host}; PG leg is plaintext"),
             ));
         }
         out.push(format_label(
-            "Agent key",
-            format!(
-                "{}  (agent clients read this to connect)",
-                self.token_path.display()
-            ),
-        ));
-        out.push(format_label(
-            "Agent docs",
+            "Docs",
             format!(
                 "curl --unix-socket {} http://localhost/instructions",
-                self.socket.display()
-            ),
-        ));
-        out.push(format_label(
-            "Skill",
-            format!(
-                "aka setup skill --write{}  (installs these docs for Claude)",
-                self.root_flag
+                display_home_relative_path(&self.socket)
             ),
         ));
 
-        if self.tcp_addr.is_some() || self.headless_warning.is_some() {
-            out.push(String::new());
+        out.push(String::new());
+        out.push("HTTP".into());
+        match self.tcp_addr {
+            Some(addr) => {
+                out.push(format_label("Listen", addr));
+                out.push(format_label("UI root", self.ui_root_summary()));
+                out.push(format_label(
+                    "TLS",
+                    "Off; put TLS in front before exposing it",
+                ));
+                out.push(format_label("Pairing", "Disabled over TCP"));
+                out.push(format_label("Manage", "Requires a management token"));
+            }
+            None => {
+                out.push(format_label("Listen", "off (--no-listen)"));
+                out.push(format_label("UI root", self.ui_root_summary()));
+                out.push(format_label("TLS", "Not applicable (--no-listen)"));
+                out.push(format_label("Pairing", "Off (--no-listen)"));
+                out.push(format_label("Manage", "Local socket only"));
+            }
         }
-        if self.tcp_addr.is_some() {
-            out.push(format_label("Note", "/v1/pair is not served on TCP"));
-        }
+
+        out.push(String::new());
+        out.push("KEYCHAIN".into());
+        out.push(format!("  {}", serve_vault_summary(&self.vault)));
+
         if let Some(warning) = &self.headless_warning {
+            out.push(String::new());
             out.push(format_label("Warning", warning));
         }
 
-        // TCP control plane / web UI — own group so the default listener and
-        // the explicit --no-listen state are both obvious.
         out.push(String::new());
-        match self.tcp_addr {
-            Some(addr) => out.push(format_label(
-                "TCP",
-                format!("{addr}  (plaintext; put TLS in front)"),
-            )),
-            None => out.push(format_label("TCP", "off (--no-listen)")),
-        }
-        match (&self.tcp_addr, &self.public_url) {
-            (_, Some(url)) => out.push(format_label("Public URL", url)),
-            (Some(addr), None) => out.push(format_label(
-                "Public URL",
-                format!("off — add --public-url {}", suggested_public_url(*addr)),
-            )),
-            (None, None) => out.push(format_label("Public URL", "off (--no-listen)")),
-        }
-        match &self.web_ui {
-            WebUiBannerStatus::Bundled { url } => {
-                out.push(format_label("UI", format!("{url}  (bundled)")))
-            }
-            WebUiBannerStatus::Custom { url, root } => out.push(format_label(
-                "UI",
-                format!("{url}  (from {})", root.display()),
-            )),
-            WebUiBannerStatus::Disabled(reason) => out.push(format_label("UI", reason)),
-        }
-
-        out.push(String::new());
-        out.push(format_label("Quit", "Ctrl-C or SIGTERM"));
+        out.push("Stop with Ctrl-C or SIGTERM".into());
         out.push(String::new());
         out
     }
@@ -8583,8 +9439,47 @@ impl ServeBanner {
                 eprintln!();
                 continue;
             }
-            if line == "Multitool broker ready" {
+            if matches!(
+                line.as_str(),
+                "Multitool broker ready"
+                    | "FROM ANOTHER TERMINAL"
+                    | "MANAGEMENT"
+                    | "AGENTS"
+                    | "HTTP"
+                    | "KEYCHAIN"
+            ) {
                 eprintln!("{}", paint::bold_green(color, &line));
+                continue;
+            }
+            if let Some(target) = line.strip_suffix(" - Broker running") {
+                eprintln!(
+                    "{}{}{}",
+                    paint::bold_cyan(color, target),
+                    paint::dim(color, " - "),
+                    paint::bold_green(color, "Broker running")
+                );
+                continue;
+            }
+            if let Some(url) = line.strip_prefix("Web UI  ") {
+                eprintln!("{}  {url}", paint::bold_cyan(color, "Web UI"));
+                continue;
+            }
+            if line == "Stop with Ctrl-C or SIGTERM" {
+                eprintln!("{}", paint::dim(color, &line));
+                continue;
+            }
+            if let Some(command) = line.strip_prefix("  aka ") {
+                let command = format!("aka {command}");
+                if let Some(separator) = command.find("  ") {
+                    let (command, description) = command.split_at(separator);
+                    eprintln!(
+                        "  {}{}",
+                        paint::bold_cyan(color, command),
+                        paint::dim(color, description)
+                    );
+                } else {
+                    eprintln!("  {}", paint::bold_cyan(color, &command));
+                }
                 continue;
             }
             let Some((label, value)) = split_label_line(&line) else {
@@ -8593,26 +9488,44 @@ impl ServeBanner {
             };
             let is_warn = matches!(label, "Warning" | "Note" | "First token")
                 || (label == "MCP" && value.starts_with("not started"))
-                || (matches!(label, "TCP" | "Public URL" | "UI") && value.starts_with("off"));
-            let is_quit = label == "Quit";
+                || (matches!(label, "Listen" | "UI root") && value.starts_with("off"))
+                || label == "TLS";
             let padded_label = format!("{label:<11}");
             let label_col = if is_warn {
                 paint::bold_yellow(color, &padded_label)
-            } else if is_quit {
-                paint::dim(color, &padded_label)
             } else {
                 paint::bold_cyan(color, &padded_label)
             };
             let value = if is_warn {
                 paint::bold_yellow(color, value)
-            } else if is_quit {
-                paint::dim(color, value)
             } else {
                 value.to_string()
             };
             eprintln!("  {label_col} {value}");
         }
     }
+}
+
+fn format_serve_commands(commands: &[(String, String)]) -> Vec<String> {
+    let width = commands
+        .iter()
+        .map(|(command, _)| command.chars().count())
+        .max()
+        .unwrap_or_default()
+        .max("aka setup skill --write".len());
+    commands
+        .iter()
+        .map(|(command, description)| format!("  {command:<width$}  {description}"))
+        .collect()
+}
+
+fn serve_vault_summary(vault: &str) -> String {
+    vault
+        .strip_suffix(" (prompts per secret; build is unsigned)")
+        .map_or_else(
+            || vault.to_string(),
+            |name| format!("{name}; prompts per secret"),
+        )
 }
 
 fn format_label(label: &str, value: impl std::fmt::Display) -> String {
@@ -8639,9 +9552,9 @@ fn split_label_line(line: &str) -> Option<(&str, &str)> {
     }
     // Multi-word labels we actually use.
     match label {
-        "Socket" | "Root" | "TCP" | "Public URL" | "Data host" | "UI" | "MCP" | "Keychain"
-        | "First token" | "Rotate" | "Manage" | "Remote" | "Desktop" | "Agent key"
-        | "Agent docs" | "Skill" | "Note" | "Warning" | "Quit" => Some((label, value)),
+        "Socket" | "Key" | "MCP" | "Docs" | "Data host" | "Listen" | "UI root" | "TLS"
+        | "Pairing" | "Manage" | "First token" | "Permissions" | "Expires" | "Rotate"
+        | "Warning" => Some((label, value)),
         _ => None,
     }
 }
@@ -8717,6 +9630,7 @@ fn cmd_serve(args: ServeArgs) {
     }
     // Standalone serve always uses an isolated root (default ~/.akaserver), never
     // the desktop production layout. Vault is always root-scoped on macOS.
+    let server_context = root.is_none();
     let root = serve_root_from_flags(root);
     let root_flag = format!(" --root {}", shell_quote(&root.display().to_string()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -8805,6 +9719,7 @@ fn cmd_serve(args: ServeArgs) {
         socket: daemon.socket_path.clone(),
         root: root.clone(),
         root_flag,
+        server_context,
         first_start_manage_token,
         tcp_addr: daemon.tcp_addr,
         public_url,
@@ -8817,14 +9732,14 @@ fn cmd_serve(args: ServeArgs) {
     }
     .print();
 
-    let signal = runtime.block_on(wait_for_shutdown_signal());
+    runtime.block_on(wait_for_shutdown_signal());
     let color = stderr_use_color();
     eprintln!(
         "  {} {}",
         paint::bold_cyan(color, format!("{:11}", "Shutdown")),
         paint::dim(
             color,
-            format!("{signal} received; draining active sessions")
+            "Stopping broker - waiting for active sessions to finish."
         )
     );
     daemon.stop_accepting();
@@ -8835,7 +9750,10 @@ fn cmd_serve(args: ServeArgs) {
         eprintln!(
             "  {} {}",
             paint::bold_yellow(color, format!("{:11}", "Shutdown")),
-            paint::bold_yellow(color, "deadline reached with active sessions still closing")
+            paint::bold_yellow(
+                color,
+                "Shutdown timeout reached. Some sessions are still closing."
+            )
         );
     } else if sessions > 0 {
         eprintln!(
@@ -8883,6 +9801,221 @@ mod tests {
     }
 
     #[test]
+    fn bare_home_is_compact_actionable_and_separate_from_help() {
+        let output = render_bare_home(
+            BareHome {
+                context: "local".into(),
+                status: "No broker running".into(),
+                online: false,
+                other_context: None,
+                next_intro: Some("Choose how to continue:".into()),
+                next: vec![
+                    bare_row("aka serve", "Start a headless broker"),
+                    bare_row("aka login <invite-url>", "Join an existing broker"),
+                ],
+                after: vec![
+                    bare_row("aka setup <client> [--write]", "Connect an agent or app"),
+                    bare_row("aka ls", "List available connections"),
+                ],
+                commands: bare_setup_commands(),
+            },
+            false,
+        );
+
+        assert!(output.starts_with(&format!("aka {}\n", env!("CARGO_PKG_VERSION"))));
+        assert!(output.contains("local - No broker running"), "{output}");
+        assert!(!output.contains("CONTEXT"), "{output}");
+        assert!(!output.contains("STATUS"), "{output}");
+        assert!(
+            output.contains("NEXT\n Choose how to continue:"),
+            "{output}"
+        );
+        assert!(output.contains("aka serve"), "{output}");
+        assert!(output.contains("aka setup <client> [--write]"), "{output}");
+        assert_eq!(output.matches("aka setup <client>").count(), 1, "{output}");
+        assert!(
+            output.contains("aka -h for common commands\naka --help for full reference"),
+            "{output}"
+        );
+        assert!(!output.contains("https://example.com"), "{output}");
+        assert!(!output.contains("USAGE"), "{output}");
+
+        let colored = render_bare_home(
+            BareHome {
+                context: "local".into(),
+                status: "Broker running".into(),
+                online: true,
+                other_context: None,
+                next_intro: None,
+                next: vec![bare_row("aka ls", "List available connections")],
+                after: vec![bare_row("aka run <conn> -- <cmd>", "Use a connection")],
+                commands: vec![],
+            },
+            true,
+        );
+        assert!(
+            colored.contains(&paint::dim(true, "aka run <conn> -- <cmd>")),
+            "follow-on commands should be faded: {colored:?}"
+        );
+    }
+
+    #[test]
+    fn bare_home_separates_a_running_server_and_prioritizes_switching() {
+        let output = render_bare_home(
+            BareHome {
+                context: "local".into(),
+                status: "No broker running".into(),
+                online: false,
+                other_context: Some(BareContext {
+                    name: "~/.akaserver (server)".into(),
+                    status: "Broker running".into(),
+                    online: true,
+                }),
+                next_intro: None,
+                next: vec![bare_row("aka use server", "Switch to the running broker")],
+                after: vec![
+                    bare_row("aka ls --root ~/.akaserver", "Inspect it without switching"),
+                    bare_row("aka setup <client> --write", "Connect an agent or app"),
+                ],
+                commands: vec![
+                    bare_row("aka use", "Show or switch broker context"),
+                    bare_row("aka status", "Show broker status"),
+                ],
+            },
+            false,
+        );
+
+        assert!(
+            output.contains(
+                "local - No broker running\n~/.akaserver (server) - Broker running\n\nNEXT"
+            ),
+            "{output}"
+        );
+        assert!(
+            output.find("aka use server") < output.find("aka ls --root ~/.akaserver"),
+            "{output}"
+        );
+        assert_eq!(output.matches("aka setup <client>").count(), 1, "{output}");
+    }
+
+    #[test]
+    fn bare_paths_shorten_the_home_directory() {
+        let home = dirs::home_dir().expect("home directory");
+        let root = home.join(".akaserver");
+        assert_eq!(display_home_relative_path(&root), "~/.akaserver");
+        assert_eq!(bare_shell_path(&root), "~/.akaserver");
+    }
+
+    #[test]
+    fn bare_context_source_omits_the_redundant_context_prefix() {
+        assert_eq!(context_source_label("context server"), "server");
+        assert_eq!(
+            context_source_label("AKA_BROKER=server"),
+            "AKA_BROKER=server"
+        );
+        assert_eq!(
+            context_target_description("context server", "~/.akaserver"),
+            "server context at ~/.akaserver"
+        );
+        assert_eq!(
+            context_target_description("AKA_BROKER=server", "~/.akaserver"),
+            "broker from `AKA_BROKER` at ~/.akaserver"
+        );
+        assert_eq!(
+            context_target_description("repo pin /work/.aka", "~/.akaserver"),
+            "repository-pinned context at ~/.akaserver"
+        );
+        assert_eq!(
+            context_saved_description("context server", "~/.akaserver"),
+            "server (~/.akaserver)"
+        );
+        assert_eq!(
+            context_saved_description("AKA_BROKER=server", "~/.akaserver"),
+            "~/.akaserver"
+        );
+    }
+
+    #[test]
+    fn live_management_token_help_is_direct_and_actionable() {
+        assert_eq!(
+            live_management_token_help(),
+            "This broker is running, so live management requires a token.\n\
+             Run `aka admin token`, then save the token with `aka admin login`.\n\
+             Alternatively, set `AKA_MANAGE_TOKEN`."
+        );
+    }
+
+    #[test]
+    fn management_connection_guidance_names_each_recovery() {
+        let local = CliManagementTarget {
+            using: "server context at ~/.akaserver".into(),
+            saved: "server (~/.akaserver)".into(),
+            status: "~/.akaserver (server)".into(),
+            remote_url: None,
+        };
+        let remote = CliManagementTarget {
+            using: "example context at https://example.com".into(),
+            saved: "example (https://example.com)".into(),
+            status: "https://example.com (example)".into(),
+            remote_url: Some("https://example.com".into()),
+        };
+
+        assert_eq!(
+            offline_management_note(),
+            "Broker is stopped; editing its saved configuration offline."
+        );
+        assert!(remote_management_token_help("https://example.com")
+            .contains("`aka admin login --broker https://example.com`"));
+        assert!(rejected_management_token_help(&local, None).contains("`aka admin login`"));
+        let rejected_remote = rejected_management_token_help(&remote, Some("Token expired."));
+        assert!(rejected_remote.contains("Token expired."));
+        assert!(rejected_remote.contains("--broker https://example.com"));
+        let unreachable = unreachable_broker_help(&remote, "connection refused");
+        assert!(unreachable.starts_with("Broker is unreachable.\nconnection refused"));
+        assert!(unreachable.contains("Check the URL, network connection, and broker status"));
+        assert!(unreachable_broker_help(&local, "socket closed")
+            .contains("Check that the broker is still running"));
+        assert!(broker_started_during_offline_help().contains("Retry to manage it live"));
+        assert!(broker_state_busy_help(Some(42))
+            .starts_with("Another `aka` process (PID 42) is editing this broker."));
+    }
+
+    #[test]
+    fn missing_root_and_agent_key_guidance_offer_next_steps() {
+        assert_eq!(
+            missing_broker_root_help(
+                Path::new("/tmp/missing-broker"),
+                Path::new("/tmp/missing-broker/data")
+            ),
+            "/tmp/missing-broker is not a broker root.\n\
+             Expected a data directory at /tmp/missing-broker/data.\n\
+             Check `--root`, or choose another context with `aka use`."
+        );
+        assert_eq!(
+            agent_key_required_help("https://example.com"),
+            "Agent access requires a key.\n\
+             Join with `aka login https://example.com`, or set `AKA_AGENT_KEY`."
+        );
+    }
+
+    #[test]
+    fn management_login_reports_one_verified_or_unverified_outcome() {
+        let target = CliManagementTarget {
+            using: "server context at ~/.akaserver".into(),
+            saved: "server (~/.akaserver)".into(),
+            status: "~/.akaserver (server)".into(),
+            remote_url: None,
+        };
+        assert_eq!(
+            verified_management_token_message(&target),
+            "Management token verified and saved for server (~/.akaserver)."
+        );
+        let unverified = unverified_management_token_message();
+        assert!(unverified.contains("saved without verification"));
+        assert!(unverified.contains("next time"));
+    }
+
+    #[test]
     fn generated_help_is_grouped_and_does_not_drift() {
         let help = match configured_cli_command(false, true).try_get_matches_from(["aka", "--help"])
         {
@@ -8890,26 +10023,33 @@ mod tests {
             Err(error) => error.to_string(),
         };
         assert!(
-            help.contains("GET STARTED")
-                && help.contains("OPERATOR")
-                && help.contains("RUNTIME"),
+            help.contains("GET STARTED") && help.contains("OPERATOR") && help.contains("RUNTIME"),
             "long help should expose every command group:\n{help}"
         );
         assert!(!help.contains("ADVANCED"), "{help}");
+        assert!(help.contains("EXAMPLES"), "{help}");
+        assert!(help.contains("Preview Codex setup"), "{help}");
+        assert!(help.contains("aka setup codex\n"), "{help}");
+        assert!(help.contains("Configure Codex + repo"), "{help}");
+        assert!(help.contains("aka setup codex --write"), "{help}");
+        assert!(help.contains("Preview Claude Code setup"), "{help}");
+        assert!(help.contains("aka setup claude-code\n"), "{help}");
+        assert!(help.contains("Configure Claude Code + repo"), "{help}");
+        assert!(help.contains("aka setup claude-code --write"), "{help}");
+        assert!(help.contains("Preview Claude Desktop"), "{help}");
+        assert!(help.contains("aka setup claude-desktop\n"), "{help}");
+        assert!(help.contains("Prepare Claude Desktop repo"), "{help}");
+        assert!(help.contains("aka setup claude-desktop --write"), "{help}");
         assert!(
-            help.contains("COMMON WORKFLOWS"),
-            "long help should retain workflow reference:\n{help}"
+            help.contains("Show or manage a connection's direct endpoint"),
+            "{help}"
         );
         assert!(!help.contains("EXIT CODES"), "{help}");
         assert!(
             help.contains("aka run <conn> -- psql"),
             "workflows should teach the unified runner:\n{help}"
         );
-        assert_eq!(
-            help.matches("Connect an agent, MCP client, or the desktop app")
-                .count(),
-            1
-        );
+        assert_eq!(help.matches("Connect an agent or app").count(), 1);
         assert!(help.contains("  skill"), "{help}");
         assert!(help.contains("  instructions"), "{help}");
 
@@ -8920,7 +10060,21 @@ mod tests {
         assert!(short.contains("GET STARTED"), "{short}");
         assert!(short.contains("EXAMPLES"), "{short}");
         assert!(short.contains("OPERATOR"), "{short}");
-        assert!(!short.contains("COMMON WORKFLOWS"), "{short}");
+        assert!(!short.contains("  skill"), "{short}");
+        assert!(
+            !short.lines().any(|line| line.starts_with(" skill ")),
+            "{short}"
+        );
+        assert!(short.contains("setup skill"), "{short}");
+        assert!(short.contains("setup instructions"), "{short}");
+        assert!(short.contains("setup desktop"), "{short}");
+        assert!(
+            short.lines().any(|line| line.starts_with(" logout")),
+            "{short}"
+        );
+        assert!(short.contains("aka --help"), "{short}");
+        assert!(!short.contains("aka --help --help"), "{short}");
+        assert!(!short.contains("Configure Codex"), "{short}");
 
         let nested = match configured_cli_command(false, true)
             .try_get_matches_from(["aka", "conn", "show", "--help"])
@@ -8938,10 +10092,7 @@ mod tests {
             Ok(_) => panic!("serve --help unexpectedly parsed as a command"),
             Err(error) => error.to_string(),
         };
-        assert!(
-            serve.contains("Run a broker and its web interface"),
-            "{serve}"
-        );
+        assert!(serve.contains("Run a headless broker"), "{serve}");
         assert!(
             serve.contains("instead of the bundled one") && serve.contains("--no-web"),
             "{serve}"
@@ -9297,29 +10448,9 @@ mod tests {
     fn unsigned_serve_notice_prepares_for_the_login_keychain_prompt() {
         assert_eq!(
             serve_launch_notice(true),
-            Some(
-                "Launching broker… macOS may ask for your password to allow this unsigned aka build to access the login Keychain."
-            )
+            Some("Launching broker - macOS may ask for your password (unsigned build)")
         );
         assert_eq!(serve_launch_notice(false), None);
-    }
-
-    #[test]
-    fn status_labels_only_the_production_socket_as_desktop() {
-        let desktop = Paths::default_locations().unwrap().socket_file();
-        let desktop = desktop.display().to_string();
-        assert_eq!(
-            status_heading("unix", &desktop),
-            format!("desktop broker running on {desktop}")
-        );
-        assert_eq!(
-            status_heading("unix", "/tmp/headless/sock/broker.sock"),
-            "broker running on /tmp/headless/sock/broker.sock"
-        );
-        assert_eq!(
-            status_heading("manage_api", "https://broker.example.test"),
-            "broker running on https://broker.example.test (manage API)"
-        );
     }
 
     #[test]
@@ -9332,9 +10463,7 @@ mod tests {
             "honest\r\nX-Forged: yes",
         ])
         .is_err());
-        assert!(
-            Cli::try_parse_from(["aka", "env", "production", "--client", "ci-runner"]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["aka", "env", "production", "--client", "ci-runner"]).is_ok());
         assert!(Cli::try_parse_from([
             "aka",
             "run",
@@ -9449,12 +10578,9 @@ mod tests {
         });
         let lines = ssh_open_hints(&body, "/tmp/agent-3f1c9a2b04d7e685.sock", now, true);
         let joined = lines.join("\n");
-        assert!(
-            joined.contains("signs only for deploy@prod.example.com"),
-            "{joined}"
-        );
+        assert!(joined.contains("deploy@prod.example.com"), "{joined}");
         assert!(joined.contains("SHA256:abc123"), "{joined}");
-        assert!(joined.contains("connect within 60s"), "{joined}");
+        assert!(joined.contains("60s"), "{joined}");
         assert!(
             joined.contains("09:31:00"),
             "an absolute deadline: {joined}"
@@ -9508,8 +10634,7 @@ mod tests {
             "host_key_fingerprint": serde_json::Value::Null,
         });
         let joined = ssh_open_hints(&body, "/tmp/a.sock", now, true).join("\n");
-        assert!(joined.contains("not pinned"), "{joined}");
-        assert!(joined.contains("will be trusted and pinned"), "{joined}");
+        assert!(joined.to_lowercase().contains("not pinned"), "{joined}");
         // No port key at all: port 22 is left implicit rather than spelled out.
         assert!(joined.contains("ssh -o IdentityFile=none"), "{joined}");
     }
@@ -9789,7 +10914,10 @@ mod tests {
 
         let scaffold =
             conn_add_scaffold(&missing, &args(&["conn", "add", "pg", "analytics"])).unwrap();
-        assert!(scaffold.contains("aka secret add ANALYTICS_PASSWORD"), "{scaffold}");
+        assert!(
+            scaffold.contains("aka secret add ANALYTICS_PASSWORD"),
+            "{scaffold}"
+        );
         assert!(scaffold.contains("aka conn add pg analytics"), "{scaffold}");
 
         // The name survives flags that take values, in either flag form.
@@ -9842,8 +10970,15 @@ mod tests {
         ));
 
         assert!(
-            Cli::try_parse_from(["aka", "conn", "update", "billing", "--confirm", "--no-confirm"])
-                .is_err(),
+            Cli::try_parse_from([
+                "aka",
+                "conn",
+                "update",
+                "billing",
+                "--confirm",
+                "--no-confirm"
+            ])
+            .is_err(),
             "the two confirm flags are opposites"
         );
         assert!(
@@ -9880,21 +11015,15 @@ mod tests {
         );
         assert!(endpoint_action(true, true, false).is_err());
 
-        let error = endpoint_action_supported(EndpointAction::Issue, false).unwrap_err();
-        assert!(error.contains("running broker"));
+        assert!(endpoint_action_supported(EndpointAction::Issue, false).is_err());
         assert!(endpoint_action_supported(EndpointAction::Issue, true).is_ok());
         assert!(endpoint_action_supported(EndpointAction::Renew, false).is_err());
         assert!(endpoint_action_supported(EndpointAction::Renew, true).is_ok());
         assert!(endpoint_action_supported(EndpointAction::Read, false).is_ok());
         assert!(endpoint_action_supported(EndpointAction::Revoke, false).is_ok());
-        assert!(Cli::try_parse_from([
-            "aka",
-            "endpoint",
-            "production",
-            "--renew",
-            "--issue",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["aka", "endpoint", "production", "--renew", "--issue",]).is_err()
+        );
     }
 
     /// SSH-1 / SEC-28. The two flags are opposites rather than a tri-state,
@@ -10091,20 +11220,26 @@ mod tests {
     #[test]
     fn status_distinguishes_socket_failure_classes() {
         let socket = Path::new("/tmp/aka.sock");
-        assert!(
-            socket_status_error(socket, &std::io::Error::from_raw_os_error(libc::ENOTSOCK))
-                .contains("not a Unix socket")
+        assert_eq!(
+            classify_status_failure(socket, &std::io::Error::from_raw_os_error(libc::ENOTSOCK)).0,
+            StatusFailureKind::InvalidSocket
         );
-        assert!(socket_status_error(
-            socket,
-            &std::io::Error::from(std::io::ErrorKind::PermissionDenied)
-        )
-        .contains("permission denied"));
-        assert!(socket_status_error(
-            socket,
-            &std::io::Error::from(std::io::ErrorKind::ConnectionRefused)
-        )
-        .contains("no broker is running"));
+        assert_eq!(
+            classify_status_failure(
+                socket,
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+            )
+            .0,
+            StatusFailureKind::PermissionDenied
+        );
+        assert_eq!(
+            classify_status_failure(
+                socket,
+                &std::io::Error::from(std::io::ErrorKind::ConnectionRefused)
+            )
+            .0,
+            StatusFailureKind::NotRunning
+        );
     }
 
     #[test]
@@ -10177,6 +11312,22 @@ mod tests {
         // Hidden root commands remain parser-compatible for existing scripts.
         assert!(Cli::try_parse_from(["aka", "skill", "--write"]).is_ok());
         assert!(Cli::try_parse_from(["aka", "instructions"]).is_ok());
+        let config = Cli::try_parse_from(["aka", "cloud", "config", "aws-prod"])
+            .expect("cloud config parses");
+        assert!(matches!(
+            config.command,
+            Command::Cloud {
+                command: CloudCommand::Config { .. }
+            }
+        ));
+        let legacy = Cli::try_parse_from(["aka", "cloud", "install", "aws-prod"])
+            .expect("legacy cloud install alias parses");
+        assert!(matches!(
+            legacy.command,
+            Command::Cloud {
+                command: CloudCommand::Config { .. }
+            }
+        ));
         assert!(generated_skill_file(&format!(
             "---\nname: multitool\n---\n{GENERATED_SKILL_MARKER} generated -->"
         )));
@@ -10396,7 +11547,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_lines_format_with_optional_fields() {
+    fn activity_rows_keep_optional_fields_in_their_columns() {
         let entry = ActivityDto {
             icon: "network".into(),
             tone: "blue".into(),
@@ -10416,13 +11567,14 @@ mod tests {
             at: "2026-07-24T12:00:00.123456Z".into(),
         };
         assert_eq!(
-            format_activity_line(&entry, false),
-            "2026-07-24T12:00:00  claude-code requested github — GET \
-             api.github.com/user/repos  [claude-code]"
+            activity_row(&entry),
+            vec![
+                "2026-07-24T12:00:00",
+                "claude-code requested github",
+                "GET api.github.com/user/repos",
+                "claude-code",
+            ]
         );
-        let colored = format_activity_line(&entry, true);
-        assert!(colored.contains('\u{1b}'));
-        assert!(colored.contains("claude-code requested github"));
         let bare = ActivityDto {
             kind: Some("settings_changed".into()),
             text: "Agent access enabled".into(),
@@ -10435,8 +11587,8 @@ mod tests {
             ..entry
         };
         assert_eq!(
-            format_activity_line(&bare, false),
-            "-  Agent access enabled"
+            activity_row(&bare),
+            vec!["-", "Agent access enabled", "—", "—"]
         );
     }
 
@@ -10623,11 +11775,12 @@ mod tests {
     }
 
     #[test]
-    fn serve_banner_labels_listeners_auth_and_quit() {
+    fn serve_banner_follows_the_operator_workflow() {
         let banner = ServeBanner {
             socket: PathBuf::from("/tmp/broker.sock"),
             root: PathBuf::from("/tmp/root"),
             root_flag: " --root '/tmp/root'".into(),
+            server_context: true,
             first_start_manage_token: None,
             tcp_addr: Some("127.0.0.1:4780".parse().unwrap()),
             public_url: Some("http://127.0.0.1:4780".into()),
@@ -10645,43 +11798,46 @@ mod tests {
         };
         let text = banner.lines().join("\n");
         assert!(text.starts_with("Multitool broker ready\n"));
+        assert!(text.contains("/tmp/root (server) - Broker running"));
+        assert!(text.contains("Web UI  http://127.0.0.1:4780"));
+        assert!(text.contains("FROM ANOTHER TERMINAL"));
+        assert!(text.contains("aka use server"));
+        assert!(text.contains("aka status"));
+        assert!(text.contains("aka setup desktop"));
+        assert!(text.contains("aka setup skill --write"));
+        assert!(text.contains("AGENTS"));
         assert!(text.contains("  Socket      /tmp/broker.sock"));
-        assert!(text.contains("  Root        /tmp/root"));
+        assert!(text.contains("  Key         /tmp/root/sock/token"));
         assert!(text.contains("  MCP         127.0.0.1:9"));
-        assert!(text.contains("  Keychain    macOS login keychain"));
         assert!(text.contains(
-            "  Manage      aka status --root '/tmp/root'  (every aka command takes --root)"
+            "  Docs        curl --unix-socket /tmp/broker.sock http://localhost/instructions"
         ));
-        assert!(text.contains(
-            "  Remote      the same commands with --broker http://127.0.0.1:4780 and a manage token"
-        ));
-        assert!(text.contains(
-            "  Desktop     aka setup desktop --root '/tmp/root'  (the app connects to this broker as remote)"
-        ));
-        assert!(text
-            .contains("  Agent key   /tmp/root/sock/token  (agent clients read this to connect)"));
-        assert!(text.contains(
-            "  Agent docs  curl --unix-socket /tmp/broker.sock http://localhost/instructions"
-        ));
-        assert!(text.contains("/v1/pair is not served on TCP"));
-        // Optional control-plane group comes after operator + notes.
-        let note_at = text.find("  Note        /v1/pair").expect("note");
-        let tcp_at = text
-            .find("  TCP         127.0.0.1:4780  (plaintext; put TLS in front)")
-            .expect("tcp");
-        let quit_at = text.find("  Quit        Ctrl-C or SIGTERM").expect("quit");
-        assert!(note_at < tcp_at && tcp_at < quit_at);
-        assert!(text.contains("  Public URL  http://127.0.0.1:4780"));
-        assert!(text.contains("  UI          http://127.0.0.1:4780  (from dist/ui)"));
+        assert!(text.contains("HTTP"));
+        assert!(text.contains("  Listen      127.0.0.1:4780"));
+        assert!(text.contains("  UI root     dist/ui"));
+        assert!(text.contains("  TLS         Off; put TLS in front before exposing it"));
+        assert!(text.contains("  Pairing     Disabled over TCP"));
+        assert!(text.contains("  Manage      Requires a management token"));
+        assert!(text.contains("KEYCHAIN\n  macOS login keychain; prompts per secret"));
+        assert!(text.contains("Stop with Ctrl-C or SIGTERM"));
+        let commands_at = text.find("FROM ANOTHER TERMINAL").expect("commands");
+        let agents_at = text.find("AGENTS").expect("agents");
+        let http_at = text.find("HTTP").expect("http");
+        let keychain_at = text.find("KEYCHAIN").expect("keychain");
+        let stop_at = text.find("Stop with").expect("stop");
+        assert!(commands_at < agents_at && agents_at < http_at);
+        assert!(http_at < keychain_at && keychain_at < stop_at);
+        assert!(!text.contains("--root"));
         assert!(!text.contains("…"));
     }
 
     #[test]
-    fn serve_banner_optional_control_plane_off_hints() {
+    fn serve_banner_handles_a_disabled_control_plane() {
         let banner = ServeBanner {
             socket: PathBuf::from("/tmp/broker.sock"),
             root: PathBuf::from("/tmp/root"),
             root_flag: " --root '/tmp/root'".into(),
+            server_context: false,
             first_start_manage_token: None,
             tcp_addr: None,
             public_url: None,
@@ -10693,27 +11849,32 @@ mod tests {
             token_path: PathBuf::from("/tmp/root/sock/token"),
         };
         let text = banner.lines().join("\n");
-        assert!(text.contains("  TCP         off (--no-listen)"));
-        assert!(text.contains("  Public URL  off (--no-listen)"));
-        assert!(text.contains("  UI          off (--no-listen)"));
-        // Not listening: no remote-management or desktop hints, only the
-        // local --root form.
-        assert!(text.contains("  Manage      aka status --root '/tmp/root'"));
-        assert!(!text.contains("  Remote"));
-        assert!(!text.contains("  Desktop"));
+        assert!(text.contains("Web UI  off (--no-listen)"));
+        assert!(text.contains("  MCP         off (--no-mcp)"));
+        assert!(text.contains("  Listen      off (--no-listen)"));
+        assert!(text.contains("  UI root     off (--no-listen)"));
+        assert!(text.contains("  TLS         Not applicable (--no-listen)"));
+        assert!(text.contains("  Pairing     Off (--no-listen)"));
+        assert!(text.contains("  Manage      Local socket only"));
+        // A custom root keeps explicit --root flags and has no desktop hint
+        // when the TCP listener is disabled.
+        assert!(text.contains("aka status --root '/tmp/root'"));
+        assert!(!text.contains("aka use server"));
+        assert!(!text.contains("aka setup desktop"));
         assert!(!text.contains("--broker"));
-        let skill_at = text.find("  Skill       ").expect("skill");
-        let tcp_at = text.find("  TCP         off").expect("tcp off");
-        let quit_at = text.find("  Quit        ").expect("quit");
-        assert!(skill_at < tcp_at && tcp_at < quit_at);
+        let skill_at = text.find("aka setup skill --write").expect("skill");
+        let http_at = text.find("HTTP").expect("http");
+        let stop_at = text.find("Stop with").expect("stop");
+        assert!(skill_at < http_at && http_at < stop_at);
     }
 
     #[test]
-    fn serve_banner_first_start_token_replaces_manage_block() {
+    fn serve_banner_keeps_first_start_management_details() {
         let banner = ServeBanner {
             socket: PathBuf::from("/s"),
             root: PathBuf::from("/r"),
             root_flag: " --root '/r'".into(),
+            server_context: false,
             first_start_manage_token: Some(PathBuf::from("/r/sock/manage-token")),
             tcp_addr: Some("127.0.0.1:1".parse().unwrap()),
             public_url: Some("http://localhost:1".into()),
@@ -10727,24 +11888,26 @@ mod tests {
             token_path: PathBuf::from("/r/sock/token"),
         };
         let text = banner.lines().join("\n");
+        assert!(text.contains("MANAGEMENT"));
         assert!(text.contains("  First token /r/sock/manage-token"));
+        assert!(text.contains("  Permissions Owner only"));
+        assert!(text.contains("  Expires     30 days"));
         assert!(text.contains("aka admin token --root '/r' while the broker is live"));
-        // First start still points the desktop app at the listener.
-        assert!(text.contains("  Desktop     aka setup desktop --root '/r'"));
-        assert!(!text.contains("  Manage "));
-        assert!(text.contains("  Data host   agents.example  (PG leg is plaintext)"));
+        assert!(text.contains("aka setup desktop --root '/r'"));
+        assert!(text.contains("  Data host   agents.example; PG leg is plaintext"));
         assert!(text.contains("  MCP         not started (bind failed)"));
         assert!(text.contains("  Warning     warning: 1 tool is set to confirm traffic"));
-        assert!(text.contains("  TCP         127.0.0.1:1  (plaintext; put TLS in front)"));
-        assert!(text.contains("  Public URL  http://localhost:1"));
-        assert!(text.contains("  UI          http://localhost:1  (bundled)"));
+        assert!(text.contains("Web UI  http://localhost:1"));
+        assert!(text.contains("  Listen      127.0.0.1:1"));
+        assert!(text.contains("  UI root     bundled"));
+        assert!(text.contains("  Manage      Requires a management token"));
     }
 
     #[test]
     fn split_label_line_recognizes_multiword_labels() {
         assert_eq!(
-            split_label_line("  Public URL  http://example"),
-            Some(("Public URL", "http://example"))
+            split_label_line("  UI root     dist/ui"),
+            Some(("UI root", "dist/ui"))
         );
         assert_eq!(
             split_label_line("  First token /path  (0600)"),

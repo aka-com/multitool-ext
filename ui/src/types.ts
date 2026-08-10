@@ -996,6 +996,10 @@ export interface CommandMap {
     { connectionId: string; format: string; taskBody?: string },
     void
   >;
+  /** The web app's read-back for endpoint copies — the same audited broker
+   * read the desktop's native copy performs; the browser clipboard does the
+   * writing. Web-only: the desktop shell has no command by this name. */
+  copy_endpoint_value: CommandSpec<{ connectionId: string }, IssuedEndpoint | null>;
   revoke_endpoint: CommandSpec<{ endpointId: string }, boolean>;
   rotate_key: CommandSpec<undefined, void>;
   copy_key: CommandSpec<undefined, void>;

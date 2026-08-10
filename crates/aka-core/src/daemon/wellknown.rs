@@ -502,7 +502,7 @@ keys never appear in the response. Already-issued sessions are not
 revocable by Multitool — the short TTL is the bound. Prefer
 `aka run <name> -- <command>` or `aka cloud creds <name>` over calling
 this endpoint by hand. For AWS profiles use
-`aka cloud install <name>`.
+`aka cloud config <name>`.
 
 ## 8. MCP tool routing
 

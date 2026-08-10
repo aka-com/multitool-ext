@@ -21,7 +21,10 @@
 
 import { requestFor } from './commands';
 import { ConnectionSpecError } from './connection-spec';
+import { manageErrorContext, manageFormError } from './manage-errors';
+import { unthrottledTimeout } from './worker-timer';
 import type {
+  BrokerProfile,
   CommandArgs,
   CommandName,
   CommandResult,
@@ -32,9 +35,6 @@ import type {
 } from './types';
 
 const CSRF_HEADER = 'x-multitool-csrf';
-
-/** Where the sign-in page lives on the broker's origin. */
-export const SIGN_IN_PATH = '/';
 
 interface SessionInfo {
   account: string;
@@ -107,6 +107,60 @@ export async function currentSession(): Promise<SessionInfo | null> {
   return readSession();
 }
 
+/** Re-read the session from the broker, bypassing the cache. The sign-in
+ * ceremonies call this after the broker sets the cookie, so the next
+ * mutation carries the fresh CSRF secret instead of eating a 403 first. */
+export async function refreshSession(): Promise<SessionInfo | null> {
+  return readSession(true);
+}
+
+/** Capabilities advertised by this broker, fetched once per page. */
+let capabilities: string[] | null = null;
+
+/**
+ * The web answer to `get_broker_profile`.
+ *
+ * The desktop asks its shell which broker it manages; a browser is already
+ * *at* the answer — the broker that served this page — so the profile is
+ * built here rather than asked for. `connected` reflects the session: the
+ * broker is reachable (it just served the bundle), but without a session
+ * every manage call would 401, and the sign-in pane is the honest surface
+ * for that state.
+ */
+export async function webBrokerProfile(): Promise<BrokerProfile> {
+  const current = await readSession();
+  if (current && capabilities === null) {
+    try {
+      const response = await fetch('/v1/manage/whoami', {
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+      });
+      if (response.ok) {
+        const whoami = (await response.json()) as { capabilities?: unknown };
+        capabilities = Array.isArray(whoami.capabilities)
+          ? whoami.capabilities.filter((value): value is string => typeof value === 'string')
+          : [];
+      }
+    } catch {
+      // Leave capabilities unknown: the surfaces they gate stay hidden and
+      // the next profile read tries again.
+    }
+  }
+  return {
+    mode: 'remote',
+    url: location.origin,
+    connected: current != null,
+    error: null,
+    has_saved_token: false,
+    // The session cookie is this browser's grant; there is nothing saved
+    // beyond it.
+    has_saved_grant: current != null,
+    credential: current ? 'passkey' : null,
+    device_name: null,
+    capabilities: (current ? capabilities : null) ?? [],
+  };
+}
+
 export async function signOut(): Promise<void> {
   // A polling request-inbox lease is independent of the SSE observer. Drop
   // it while this session can still authenticate the DELETE instead of
@@ -114,6 +168,9 @@ export async function signOut(): Promise<void> {
   await detachApprovalSurface();
   stream?.close();
   stream = null;
+  // A reconnect timer left armed here would reopen the stream after the
+  // sign-out it is meant to be part of.
+  stopStreamReconnect();
   const csrf = (await readSession())?.csrf;
   try {
     await fetch('/v1/auth/logout', {
@@ -161,6 +218,18 @@ async function failure(response: Response): Promise<unknown> {
     if (parsed.reason === 'step_up_required') {
       return new StepUpRequiredError(String(parsed.detail ?? ''));
     }
+    // The auth plane answers `{reason, detail}` and older brokers' manage
+    // errors carry only `{code, …}` — neither has the `message` the form
+    // error helpers read, and without one a toast renders as
+    // "[object Object]". Words beat a tag, however generic.
+    if (typeof parsed.message !== 'string') {
+      const detail = typeof parsed.detail === 'string' ? parsed.detail : '';
+      const tag = typeof parsed.reason === 'string' ? parsed.reason
+        : typeof parsed.code === 'string' ? parsed.code
+        : '';
+      const message = detail || tag.replace(/_/g, ' ');
+      if (message) parsed.message = message;
+    }
     return parsed;
   } catch {
     return text || response.statusText;
@@ -196,7 +265,9 @@ export async function invoke<K extends CommandName>(
   let response = await send(request.method, request.path, request.body, csrf);
   // A stale CSRF secret is indistinguishable from a signed-out session at
   // the call site, so try once with a fresh one before giving up. A second
-  // failure is genuine.
+  // failure is genuine. (The broker reports a CSRF mismatch as a 401, the
+  // same as a dead cookie; the 403 branch covers older brokers and any
+  // proxy that answers differently.)
   if (response.status === 403 && mutating) {
     csrf = (await readSession(true))?.csrf;
     if (!csrf) throw new SignedOutError();
@@ -208,10 +279,42 @@ export async function invoke<K extends CommandName>(
     // discarding a session that is in fact still live.
     const problem = await failure(response);
     if (problem instanceof StepUpRequiredError) throw problem;
-    session = null;
-    throw new SignedOutError();
+    // On a mutation, a 401 can also be the stale-CSRF case: the broker
+    // refuses the pair without distinguishing it from a dead cookie.
+    // Re-read the session once to tell them apart — a dead cookie reads
+    // back as signed out, a live one yields the fresh secret and the call
+    // gets exactly one retry.
+    if (mutating) {
+      const fresh = (await readSession(true))?.csrf;
+      if (fresh && fresh !== csrf) {
+        response = await send(request.method, request.path, request.body, fresh);
+        // The retry can hit the step-up demand the stale secret was
+        // masking; that is still a prompt, not a sign-out.
+        if (response.status === 401) {
+          const retried = await failure(response);
+          if (retried instanceof StepUpRequiredError) throw retried;
+        }
+      }
+    }
+    if (response.status === 401) {
+      session = null;
+      throw new SignedOutError();
+    }
   }
-  if (!response.ok) throw await failure(response);
+  if (!response.ok) {
+    const problem = await failure(response);
+    // A manage error carries a `code`; route it onto the same field-level
+    // shape the desktop's command layer produces, so the forms mark the
+    // offending input here too instead of toasting everything globally.
+    if (problem && typeof problem === 'object' && !(problem instanceof Error)) {
+      const structured = manageFormError(
+        problem as Record<string, unknown>,
+        manageErrorContext(command, args),
+      );
+      if (structured) throw structured;
+    }
+    throw problem;
+  }
   if (response.status === 204) return undefined as CommandResult<K>;
   const text = await response.text();
   const value = text ? JSON.parse(text) : undefined;
@@ -233,6 +336,63 @@ const handlers = new Map<string, Set<Handler>>();
 let stream: EventSource | null = null;
 
 /**
+ * The app's handler for "this browser's session ended", discovered here at
+ * the transport rather than by a user action. Without it, a stream that
+ * dies to a revoked session leaves the page rendering its last snapshot
+ * until the next fetch happens to 401 — and a page the user is only
+ * reading never fetches.
+ */
+let sessionLost: (() => void) | null = null;
+
+export function onSessionLost(callback: () => void): void {
+  sessionLost = callback;
+}
+
+/* --------------------------- stream recovery ----------------------------- */
+// EventSource's own retry covers a dropped socket, and only that: any
+// non-2xx answer on reconnect — a proxy's 502 while the broker restarts, a
+// revoked session's 401 — lands the object in CLOSED, permanently. These
+// reopen it: with backoff for transport failures, and never for a session
+// the broker actually ended (that is `sessionLost`'s job).
+
+let streamRetryMs = 1_000;
+let cancelStreamReconnect: (() => void) | null = null;
+/** A manual reopen carries no Last-Event-ID, so whatever the broker sent
+ * during the outage is gone: refetch everything once the stream is back. */
+let resyncOnOpen = false;
+
+function scheduleStreamReconnect(): void {
+  cancelStreamReconnect?.();
+  const delay = streamRetryMs;
+  streamRetryMs = Math.min(streamRetryMs * 2, 30_000);
+  cancelStreamReconnect = unthrottledTimeout(() => {
+    cancelStreamReconnect = null;
+    if (!stream && handlers.size) void ensureStream();
+  }, delay);
+}
+
+function stopStreamReconnect(): void {
+  cancelStreamReconnect?.();
+  cancelStreamReconnect = null;
+}
+
+/**
+ * Returning to the tab re-arms everything immediately — the worker timers
+ * keep ticking while hidden, but a reopened laptop lid or a woken machine
+ * may have missed arbitrary time, and the user is looking right now.
+ */
+let visibilityHooked = false;
+function hookVisibility(): void {
+  if (visibilityHooked || typeof document === 'undefined') return;
+  visibilityHooked = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (stream) void attachApprovalSurface();
+    else if (handlers.size) void ensureStream();
+  });
+}
+
+/**
  * Browsers cannot attach the request-inbox header to a native `EventSource`.
  * The manage API therefore offers the same capability as a short polling
  * lease: mint one while this page has a live observer and renew it often
@@ -245,7 +405,11 @@ interface ApprovalSurface {
 
 const APPROVAL_SURFACE_HEARTBEAT_MS = 5_000;
 let approvalSurfaceId: string | null = null;
-let approvalSurfaceTimer: ReturnType<typeof setTimeout> | null = null;
+// Cancels the pending heartbeat/attach tick. The tick runs on a worker
+// timer (see worker-timer.ts): a hidden tab's page timers are throttled far
+// past the lease's 15-second expiry, and a lease that lapses whenever the
+// tab is backgrounded means approvals fail closed while nothing looks wrong.
+let cancelApprovalSurfaceTick: (() => void) | null = null;
 let approvalSurfaceGeneration = 0;
 let approvalSurfacePending: Promise<void> | null = null;
 
@@ -258,21 +422,31 @@ async function surfaceMutation(method: 'POST' | 'PUT' | 'DELETE', path: string):
     if (!csrf) return null;
     response = await send(method, path, undefined, csrf);
   }
-  if (response.status === 401) session = null;
+  if (response.status === 401) {
+    // Same stale-CSRF ambiguity as `invoke`: the broker reports a drifted
+    // pair as a 401. One forced session read settles it — losing the
+    // approval-surface lease to a secret that merely rotated would leave
+    // agent traffic waiting on prompts this page can no longer show.
+    const fresh = (await readSession(true))?.csrf;
+    if (fresh && fresh !== csrf) {
+      response = await send(method, path, undefined, fresh);
+    }
+    if (response.status === 401) session = null;
+  }
   return response;
 }
 
 function scheduleApprovalSurfaceHeartbeat(generation: number): void {
-  if (approvalSurfaceTimer) clearTimeout(approvalSurfaceTimer);
-  approvalSurfaceTimer = setTimeout(() => {
+  cancelApprovalSurfaceTick?.();
+  cancelApprovalSurfaceTick = unthrottledTimeout(() => {
     void heartbeatApprovalSurface(generation);
   }, APPROVAL_SURFACE_HEARTBEAT_MS);
 }
 
 function scheduleApprovalSurfaceAttach(generation: number): void {
   if (generation !== approvalSurfaceGeneration || !stream) return;
-  if (approvalSurfaceTimer) clearTimeout(approvalSurfaceTimer);
-  approvalSurfaceTimer = setTimeout(() => {
+  cancelApprovalSurfaceTick?.();
+  cancelApprovalSurfaceTick = unthrottledTimeout(() => {
     if (generation === approvalSurfaceGeneration && stream) void attachApprovalSurface();
   }, APPROVAL_SURFACE_HEARTBEAT_MS);
 }
@@ -358,8 +532,8 @@ async function attachApprovalSurface(): Promise<void> {
 
 async function detachApprovalSurface(): Promise<void> {
   approvalSurfaceGeneration += 1;
-  if (approvalSurfaceTimer) clearTimeout(approvalSurfaceTimer);
-  approvalSurfaceTimer = null;
+  cancelApprovalSurfaceTick?.();
+  cancelApprovalSurfaceTick = null;
   const id = approvalSurfaceId;
   approvalSurfaceId = null;
   // Let an in-flight mint observe the generation change and release the id
@@ -436,11 +610,20 @@ function deliver(name: EventName, payload: unknown): void {
 }
 
 async function ensureStream(): Promise<void> {
+  hookVisibility();
   if (stream) {
     await attachApprovalSurface();
     return;
   }
+  stopStreamReconnect();
   stream = new EventSource('/v1/manage/events', { withCredentials: true });
+  stream.onopen = () => {
+    streamRetryMs = 1_000;
+    if (resyncOnOpen) {
+      resyncOnOpen = false;
+      for (const name of RESYNC_TOPICS) deliver(name, {});
+    }
+  };
   stream.onmessage = (message) => {
     let parsed: { event?: string } & Record<string, unknown>;
     try {
@@ -472,16 +655,26 @@ async function ensureStream(): Promise<void> {
     if (name) deliver(name, {});
   };
   stream.onerror = () => {
-    // EventSource retries on its own. A closed stream means the broker
-    // refused the credential — a sign-out rather than a network blip: close
-    // it so the browser drops the dead socket, and reset so a later `listen`
-    // opens a fresh one instead of reusing the corpse.
-    if (stream?.readyState === EventSource.CLOSED) {
-      stream.close();
-      stream = null;
-      void detachApprovalSurface();
-      session = null;
-    }
+    // EventSource retries a dropped socket on its own; CLOSED is final.
+    // But final is ambiguous: a revoked session closes the stream, and so
+    // does a proxy answering 502 while the broker restarts. Ask the broker
+    // which one this was, and either hand the sign-out to the app or
+    // reopen with backoff.
+    if (stream?.readyState !== EventSource.CLOSED) return;
+    stream.close();
+    stream = null;
+    void detachApprovalSurface();
+    void (async () => {
+      const current = await readSession(true);
+      if (!current) {
+        session = null;
+        stopStreamReconnect();
+        sessionLost?.();
+        return;
+      }
+      resyncOnOpen = true;
+      scheduleStreamReconnect();
+    })();
   };
   await attachApprovalSurface();
 }

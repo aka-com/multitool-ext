@@ -93,7 +93,18 @@ fn manage_error_response(error: ManageError) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR
         }
     };
-    (status, Json(error)).into_response()
+    // The web app renders this JSON directly, and its error formatting reads
+    // a `message` field the tagged enum does not carry. The Display string
+    // is that message; the desktop shell keeps building its richer
+    // field-routed errors from `code` and ignores this.
+    let mut body = serde_json::to_value(&error).unwrap_or_else(|_| json!({}));
+    if let serde_json::Value::Object(map) = &mut body {
+        map.insert(
+            "message".into(),
+            serde_json::Value::String(error.to_string()),
+        );
+    }
+    (status, Json(body)).into_response()
 }
 
 fn ok<T: serde::Serialize>(value: T) -> Response {

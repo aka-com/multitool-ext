@@ -241,6 +241,36 @@ export interface ConnectionReadyState {
   name: string;
 }
 
+/**
+ * The web app's own sign-in surface. Meaningful only in a browser served by
+ * the broker (`!isNativeHost()`): the desktop shell owns sign-in there, and
+ * the dev mock answers everything. `unknown` lasts only until boot has asked
+ * the broker; after that the status is definite and the sign-in takeover
+ * renders whenever it is not `signedin`.
+ */
+export interface WebAuthState {
+  status: 'unknown' | 'signedout' | 'signedin';
+  /** Which half of the pane is showing: sign in with an existing passkey,
+   * or enroll a new one with the secret `aka admin enroll` printed. */
+  view: 'signin' | 'enroll';
+  config: {
+    enrolled: boolean;
+    enrollment_open: boolean;
+    passkeys_available: boolean;
+  } | null;
+  /** The config read failed — the pane shows this instead of a form. */
+  configError: string | null;
+  /** The one-use enrollment secret, as typed. */
+  secret: string;
+  /** What to call the new passkey in the enrolled list. */
+  label: string;
+  /** A ceremony is waiting on the browser's passkey prompt. */
+  busy: boolean;
+  /** Why a returning user was sent back to sign-in. */
+  notice: string | null;
+  error: string | null;
+}
+
 export interface RemoteSetupState {
   open: boolean;
   advancedOpen: boolean;
@@ -303,6 +333,7 @@ export interface AppState {
   tab: Tab;
   broker: BrokerProfile;
   brokerMenuOpen: boolean;
+  webAuth: WebAuthState;
   remoteSetup: RemoteSetupState;
   localUsername: string;
   secrets: SecretSummary[];
@@ -497,6 +528,17 @@ function createInitialState(): AppState {
     tab: 'secrets',
     broker: LOCAL_BROKER,
     brokerMenuOpen: false,
+    webAuth: {
+      status: 'unknown',
+      view: 'signin',
+      config: null,
+      configError: null,
+      secret: '',
+      label: '',
+      busy: false,
+      notice: null,
+      error: null,
+    },
     remoteSetup: {
       open: false,
       advancedOpen: false,

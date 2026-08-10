@@ -234,7 +234,7 @@ test('agent names fit the tightest provider constraints', () => {
 
 test('connect commands quote the connection name once, for every surface', () => {
   assert.equal(cloudConnectCommand('aws', "ray's prod"),
-    "aka cloud install 'ray'\"'\"'s prod'");
+    "aka cloud config 'ray'\"'\"'s prod'");
   assert.equal(cloudConnectCommand('gcp', 'gcp-prod'),
     'eval "$(aka cloud env \'gcp-prod\')"');
 });

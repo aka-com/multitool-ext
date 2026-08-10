@@ -355,6 +355,52 @@ test('expanded remote broker setup keeps commands in readable rows', async () =>
   );
 });
 
+test('hosted setup and web sign-in use valid commands and consistent names', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+
+  assert.match(app, /aka admin token/);
+  assert.match(app, /aka admin enroll/);
+  assert.doesNotMatch(app, /aka manage (?:token|enroll)/);
+  assert.match(app, /Couldn’t load sign-in/);
+  assert.match(app, /Restart the\s+broker with <code>--public-url<\/code>/);
+  assert.match(app, /Your session expired\. Sign in again\./);
+  assert.match(app, /Enroll another passkey…/);
+  assert.match(app, /placeholder="Work Mac"/);
+  assert.match(app, /list of authorized devices/);
+  assert.doesNotMatch(app, /list of authorised devices|Enroll this browser instead|placeholder="This browser"/);
+  assert.match(app, /Connecting to hosted Multitool/);
+  assert.match(app, /Can’t reach hosted Multitool/);
+});
+
+test('web-host tool setup presents token paths before desktop-only OAuth', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+
+  assert.match(app, /mcpAdd && isNativeHost\(\)[\s\S]*?Sign in with your account \(OAuth\)/);
+  assert.match(app, /oauthPreset && isNativeHost\(\)[\s\S]*?Sign in with your browser/);
+  assert.match(app, /OAuth setup requires the Multitool desktop app\. Add a bearer token here instead\./);
+  assert.match(app, /Reconnect in the Multitool desktop app\./);
+  assert.doesNotMatch(app, /catcher only the desktop app runs/);
+});
+
+test('unfinished agent setup cannot copy a placeholder prompt', async () => {
+  const startView = await readFile(
+    new URL('../src/features/connect-agents-view.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(startView, /disabled=\{!step1Done \|\| !step2Done\}/);
+});
+
+test('browser clipboard failures explain how to recover', async () => {
+  const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+
+  assert.match(
+    app,
+    /Browser blocked clipboard access\. Copy the value manually or allow clipboard access\./,
+  );
+  assert.doesNotMatch(app, /Could not copy|Your browser blocked the clipboard/);
+});
+
 test('the tray detail drawer stays inside the content below its tabs', async () => {
   const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
@@ -831,8 +877,13 @@ test('endpoint credentials use the native hygienic copy command', async () => {
   )?.[1];
 
   assert.ok(endpointCopy, 'endpoint copy handlers are present');
+  // The desktop keeps the hygienic native copy. The web host, which has no
+  // native clipboard to keep the value out of, goes through the audited
+  // broker read-back instead (copyEndpointTextWeb) — never a data-text
+  // attribute that would park the secret in the DOM.
+  assert.match(endpointCopy, /isNativeHost\(\)/);
   assert.match(endpointCopy, /invoke\('copy_endpoint_text'/);
-  assert.doesNotMatch(endpointCopy, /navigator\.clipboard\.writeText/);
+  assert.match(endpointCopy, /copyEndpointTextWeb\(/);
   assert.doesNotMatch(app, /data-act="copy-endpoint-dsn"[^>]*data-text=/);
   assert.match(gettingStarted, /'copy-first-task'/);
   assert.doesNotMatch(gettingStarted, /data-text=\{task\}/);

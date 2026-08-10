@@ -21,7 +21,7 @@ function shellArgument(value: string): string {
 export function cloudSetupCommand(connection: { name: string; cloud?: CloudInfo | null }): string {
   const name = shellArgument(connection.name);
   return connection.cloud?.provider === 'aws'
-    ? `aka cloud install ${name}`
+    ? `aka cloud config ${name}`
     : `eval "$(aka cloud env ${name})"`;
 }
 

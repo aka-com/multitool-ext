@@ -15,7 +15,10 @@ use comfy_table::{
 
 const ROOT_GROUPS: &[(&str, &[&str])] = &[
     ("USE A CONNECTION", &["run", "env", "ls"]),
-    ("GET STARTED", &["status", "setup", "login", "logout", "use"]),
+    (
+        "GET STARTED",
+        &["setup", "login", "use", "status", "logout", "skill"],
+    ),
     ("ADD & MANAGE", &["conn", "secret", "endpoint"]),
     (
         "APPROVALS & AUDIT",
@@ -25,15 +28,25 @@ const ROOT_GROUPS: &[(&str, &[&str])] = &[
     ("RUNTIME", &["mcp", "ssh-agent", "cloud", "completions"]),
 ];
 
-const ROOT_WORKFLOWS: &[(&str, &str)] = &[
-    ("Install the agent skill", "aka setup skill --write"),
-    ("Configure an MCP client", "aka setup <client>"),
-    ("Run a headless broker", "aka serve"),
-    ("Add a connection", "aka conn add pg --help"),
+const ROOT_EXAMPLES: &[(&str, &str)] = &[
+    ("Preview Codex setup", "aka setup codex"),
+    ("Configure Codex + repo", "aka setup codex --write"),
+    ("Preview Claude Code setup", "aka setup claude-code"),
+    (
+        "Configure Claude Code + repo",
+        "aka setup claude-code --write",
+    ),
+    ("Preview Claude Desktop", "aka setup claude-desktop"),
+    (
+        "Prepare Claude Desktop repo",
+        "aka setup claude-desktop --write",
+    ),
     ("Open Postgres", "aka run <conn> -- psql"),
     ("Open SSH", "aka run <conn> -- ssh <destination>"),
-    ("Open a cloud CLI", "aka run <conn> -- <cmd>"),
-    ("Print scoped exports", "aka env <conn>"),
+    (
+        "Open a cloud CLI",
+        "aka run <conn> -- aws sts get-caller-identity",
+    ),
 ];
 
 fn terminal_width() -> u16 {
@@ -120,6 +133,29 @@ pub fn info(message: impl Display, color: bool) {
     eprintln!("{}", bold_cyan(color, message));
 }
 
+/// Print an informational row without cliclack's trailing spacer bar so a
+/// related row can follow immediately beneath it.
+pub fn info_compact(message: impl Display, color: bool) {
+    let message = message.to_string();
+    if stderr_is_tty() {
+        let message = cliclack::termwrap(&message, 3);
+        let mut lines = message.lines();
+        if let Some(first) = lines.next() {
+            let symbol = style(
+                color,
+                Style::new().fg_color(Some(AnsiColor::Blue.into())),
+                "●",
+            );
+            eprintln!("{symbol}  {first}");
+            for line in lines {
+                eprintln!("{}  {line}", dim(color, "│"));
+            }
+        }
+        return;
+    }
+    eprintln!("{}", bold_cyan(color, message));
+}
+
 pub fn warning(message: impl Display, color: bool) {
     let message = message.to_string();
     if stderr_is_tty() && cliclack::log::warning(&message).is_ok() {
@@ -130,8 +166,11 @@ pub fn warning(message: impl Display, color: bool) {
 
 pub fn error(message: impl Display, color: bool) {
     let message = message.to_string();
-    if stderr_is_tty() && cliclack::log::error(&message).is_ok() {
-        return;
+    if stderr_is_tty() {
+        let message = cliclack::termwrap(&message, 3);
+        if cliclack::log::error(&message).is_ok() {
+            return;
+        }
     }
     eprintln!("{} {message}", bold_red(color, "error:"));
 }
@@ -193,7 +232,16 @@ pub fn table(headers: &[&str], rows: impl IntoIterator<Item = Vec<String>>) -> S
     trim_table(table.to_string())
 }
 
-fn help_table(rows: Vec<Vec<String>>) -> String {
+fn help_table(rows: Vec<Vec<String>>, color: bool, highlighted_column: usize) -> String {
+    help_table_with_first_column_width(rows, color, highlighted_column, None)
+}
+
+fn help_table_with_first_column_width(
+    rows: Vec<Vec<String>>,
+    color: bool,
+    highlighted_column: usize,
+    first_column_width: Option<u16>,
+) -> String {
     if rows.is_empty() {
         return String::new();
     }
@@ -202,14 +250,57 @@ fn help_table(rows: Vec<Vec<String>>) -> String {
         .load_preset(NOTHING)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_width(terminal_width());
+    let highlights = rows
+        .iter()
+        .filter_map(|row| row.get(highlighted_column).cloned())
+        .collect::<Vec<_>>();
     for row in rows {
         table.add_row(Row::from(row));
     }
     table.set_constraints([
-        ColumnConstraint::UpperBoundary(Width::Fixed(30)),
+        first_column_width.map_or(ColumnConstraint::UpperBoundary(Width::Fixed(30)), |width| {
+            ColumnConstraint::Absolute(Width::Fixed(width))
+        }),
         ColumnConstraint::LowerBoundary(Width::Fixed(24)),
     ]);
-    trim_table(table.to_string())
+    let rendered = trim_table(table.to_string());
+    if color {
+        colorize_table_column(rendered, &highlights, highlighted_column)
+    } else {
+        rendered
+    }
+}
+
+/// Apply color only after comfy-table has measured and wrapped the plain
+/// cells. ANSI escape sequences otherwise count toward a cell's visible width
+/// when comfy-table is built without its optional styling feature.
+fn colorize_table_column(rendered: String, values: &[String], column: usize) -> String {
+    if column == 0 {
+        return rendered
+            .lines()
+            .map(|line| {
+                let Some(content) = line.strip_prefix(' ') else {
+                    return line.to_string();
+                };
+                for value in values {
+                    let Some(suffix) = content.strip_prefix(value) else {
+                        continue;
+                    };
+                    if suffix.is_empty() || suffix.starts_with("  ") {
+                        return format!(" {}{suffix}", literal(true, value));
+                    }
+                }
+                line.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    let mut rendered = rendered;
+    for value in values {
+        rendered = rendered.replacen(value, &literal(true, value), 1);
+    }
+    rendered
 }
 
 fn trim_table(rendered: String) -> String {
@@ -243,10 +334,11 @@ fn command_summary(command: &Command) -> String {
         .or_else(|| command.get_long_about())
         .map(ToString::to_string)
         .unwrap_or_default();
-    summary
+    let summary = summary
         .find(". ")
         .map(|end| summary[..=end].to_string())
-        .unwrap_or(summary)
+        .unwrap_or(summary);
+    summary.trim_end_matches('.').to_string()
 }
 
 fn arg_label(arg: &Arg) -> String {
@@ -336,19 +428,23 @@ fn help_command_label(path: &[String]) -> String {
     match key.as_str() {
         "run" => "run <conn> -- <cmd>".into(),
         "env" => "env <conn>".into(),
-        "setup" => "setup [<client>]".into(),
+        "setup" => "setup".into(),
         "login" => "login <url>".into(),
-        "logout" => "logout [<context>]".into(),
-        "use" => "use [<context>]".into(),
+        "logout" => "logout".into(),
+        "use" => "use".into(),
         "endpoint" => "endpoint <conn>".into(),
         "approve" => "approve <id>".into(),
         "deny" => "deny <id>".into(),
         "ssh-agent" => "ssh-agent <conn>".into(),
         "completions" => "completions <shell>".into(),
-        "conn add api" | "conn add pg" | "conn add ssh" | "conn add cloud aws"
-        | "conn add cloud azure" | "conn add cloud gcp" => format!("{leaf} <name>"),
+        "conn add api"
+        | "conn add pg"
+        | "conn add ssh"
+        | "conn add cloud aws"
+        | "conn add cloud azure"
+        | "conn add cloud gcp" => format!("{leaf} <name>"),
         "conn show" => "show <conn>".into(),
-        "conn update" => "update [<conn>]".into(),
+        "conn update" => "update".into(),
         "conn update api" | "conn update pg" | "conn update ssh" => {
             format!("{leaf} <conn>")
         }
@@ -361,7 +457,7 @@ fn help_command_label(path: &[String]) -> String {
         "secret rename" => "rename <name> <new>".into(),
         "secret rotate" => "rotate <name>".into(),
         "secret rm" => "rm <name>".into(),
-        "cloud creds" | "cloud install" => format!("{leaf} <conn>"),
+        "cloud creds" | "cloud config" => format!("{leaf} <conn>"),
         _ => leaf.into(),
     }
 }
@@ -371,39 +467,72 @@ fn append_command_tree_rows(
     command: &Command,
     path: &mut Vec<String>,
     depth: usize,
-    color: bool,
+    expand_children: bool,
 ) {
     path.push(command.get_name().to_string());
-    let label = format!("{}{}", "  ".repeat(depth), help_command_label(path));
-    rows.push(vec![literal(color, label), command_summary(command)]);
-    for child in command
-        .get_subcommands()
-        .filter(|child| child.get_name() != "help" && !child.is_hide_set())
-    {
-        append_command_tree_rows(rows, child, path, depth + 1, color);
+    if !expand_children && path.as_slice() == ["cloud"] {
+        for child in command
+            .get_subcommands()
+            .filter(|child| child.get_name() != "help" && !child.is_hide_set())
+        {
+            path.push(child.get_name().to_string());
+            rows.push(vec![
+                format!("cloud {}", help_command_label(path)),
+                command_summary(child),
+            ]);
+            path.pop();
+        }
+        path.pop();
+        return;
+    }
+    let command_label = match (expand_children, path.as_slice()) {
+        (false, [name]) if matches!(name.as_str(), "conn" | "secret") => {
+            format!("{name} [add | …]")
+        }
+        _ => help_command_label(path),
+    };
+    let label = format!("{}{}", "  ".repeat(depth), command_label);
+    let summary = command_summary(command);
+    rows.push(vec![label, summary]);
+    if !expand_children && path.as_slice() == ["setup"] {
+        for child in command.get_subcommands().filter(|child| {
+            matches!(child.get_name(), "skill" | "instructions" | "desktop") && !child.is_hide_set()
+        }) {
+            path.push(child.get_name().to_string());
+            rows.push(vec![
+                format!("setup {}", help_command_label(path)),
+                command_summary(child),
+            ]);
+            path.pop();
+        }
+    }
+    if expand_children {
+        for child in command
+            .get_subcommands()
+            .filter(|child| child.get_name() != "help" && !child.is_hide_set())
+        {
+            append_command_tree_rows(rows, child, path, depth + 1, true);
+        }
     }
     path.pop();
 }
 
-fn render_root_commands(command: &Command, color: bool) -> String {
-    let mut output = String::new();
+fn render_root_commands(command: &Command, color: bool, expand_children: bool) -> String {
     let mut seen = std::collections::HashSet::new();
+    let mut groups = Vec::new();
     for (group, names) in ROOT_GROUPS {
         let mut rows = Vec::new();
         for subcommand in names.iter().filter_map(|name| {
             command
                 .get_subcommands()
                 .find(|candidate| candidate.get_name() == *name)
+                .filter(|candidate| candidate.get_name() != "skill")
         }) {
             seen.insert(subcommand.get_name());
-            append_command_tree_rows(&mut rows, subcommand, &mut Vec::new(), 0, color);
+            append_command_tree_rows(&mut rows, subcommand, &mut Vec::new(), 0, expand_children);
         }
         if !rows.is_empty() {
-            output.push_str(&format!(
-                "\n{}\n{}\n",
-                heading(color, group),
-                help_table(rows)
-            ));
+            groups.push((*group, rows));
         }
     }
 
@@ -413,20 +542,29 @@ fn render_root_commands(command: &Command, color: bool) -> String {
         .filter(|subcommand| !seen.contains(subcommand.get_name()))
         .map(|subcommand| {
             vec![
-                literal(
-                    color,
-                    help_command_label(&[subcommand.get_name().to_string()]),
-                ),
+                help_command_label(&[subcommand.get_name().to_string()]),
                 command_summary(subcommand),
             ]
         })
         .collect::<Vec<_>>();
     if !other.is_empty() {
-        output.push_str(&format!(
-            "\n{}\n{}\n",
-            heading(color, "OTHER"),
-            help_table(other)
-        ));
+        groups.push(("OTHER", other));
+    }
+
+    let first_column_width = groups
+        .iter()
+        .flat_map(|(_, rows)| rows)
+        .filter_map(|row| row.first())
+        .map(|label| label.chars().count())
+        .max()
+        .unwrap_or_default()
+        .min(28) as u16
+        + 2;
+
+    let mut output = String::new();
+    for (group, rows) in groups {
+        let table = help_table_with_first_column_width(rows, color, 0, Some(first_column_width));
+        output.push_str(&format!("\n{}\n{}\n", heading(color, group), table));
     }
     output
 }
@@ -437,7 +575,7 @@ fn render_subcommands(command: &Command, color: bool) -> String {
         .filter(|subcommand| subcommand.get_name() != "help" && !subcommand.is_hide_set())
         .map(|subcommand| {
             vec![
-                literal(color, subcommand.get_name()),
+                subcommand.get_name().to_string(),
                 command_summary(subcommand),
             ]
         })
@@ -445,7 +583,11 @@ fn render_subcommands(command: &Command, color: bool) -> String {
     if rows.is_empty() {
         String::new()
     } else {
-        format!("\n{}\n{}\n", heading(color, "COMMANDS"), help_table(rows))
+        format!(
+            "\n{}\n{}\n",
+            heading(color, "COMMANDS"),
+            help_table(rows, color, 0)
+        )
     }
 }
 
@@ -453,7 +595,7 @@ fn render_args(command: &Command, color: bool, long: bool) -> String {
     let positionals = command
         .get_positionals()
         .filter(|arg| !arg.is_hide_set() && (!long || !arg.is_hide_long_help_set()))
-        .map(|arg| vec![literal(color, arg_label(arg)), arg_help(arg, long)])
+        .map(|arg| vec![arg_label(arg), arg_help(arg, long)])
         .collect::<Vec<_>>();
     let streaming_command = matches!(
         command.get_bin_name(),
@@ -464,7 +606,7 @@ fn render_args(command: &Command, color: bool, long: bool) -> String {
         .filter(|arg| !arg.is_positional())
         .filter(|arg| arg.get_id() != "json" || !streaming_command)
         .filter(|arg| !arg.is_hide_set() && (!long || !arg.is_hide_long_help_set()))
-        .map(|arg| vec![literal(color, arg_label(arg)), arg_help(arg, long)])
+        .map(|arg| vec![arg_label(arg), arg_help(arg, long)])
         .collect::<Vec<_>>();
 
     let mut output = String::new();
@@ -472,14 +614,14 @@ fn render_args(command: &Command, color: bool, long: bool) -> String {
         output.push_str(&format!(
             "\n{}\n{}\n",
             heading(color, "ARGUMENTS"),
-            help_table(positionals)
+            help_table(positionals, color, 0)
         ));
     }
     if !options.is_empty() {
         output.push_str(&format!(
             "\n{}\n{}\n",
             heading(color, "OPTIONS"),
-            help_table(options)
+            help_table(options, color, 0)
         ));
     }
     output
@@ -498,15 +640,17 @@ fn render_help(command: &Command, color: bool, root: bool, long: bool) -> String
             .unwrap_or_else(|| command.get_name().to_string())
     };
     let mut output = format!("{}\n", bold_green(color, title));
-    let about = command_about(command, long);
-    if !about.is_empty() {
-        output.push_str(&format!("{about}\n"));
+    if !root {
+        let about = command_about(command, long);
+        if !about.is_empty() {
+            output.push_str(&format!("{about}\n"));
+        }
+        output.push('\n');
     }
-    output.push('\n');
     output.push_str(&render_usage(command, color));
     output.push('\n');
     if root {
-        output.push_str(&render_root_commands(command, color));
+        output.push_str(&render_root_commands(command, color, long));
     } else {
         output.push_str(&render_subcommands(command, color));
     }
@@ -520,23 +664,35 @@ fn render_help(command: &Command, color: bool, root: bool, long: bool) -> String
         ];
         let rows = examples
             .iter()
-            .map(|(name, invocation)| vec![name.to_string(), literal(color, invocation)])
+            .map(|(name, invocation)| vec![name.to_string(), invocation.to_string()])
             .collect::<Vec<_>>();
         output.push_str(&format!(
             "\n{}\n{}\n{}\n",
             heading(color, "EXAMPLES"),
-            " Put your command after `--` to run it with short-lived credentials:",
-            help_table(rows)
+            " Run commands after `--` with short-lived credentials:",
+            help_table(rows, color, 1)
+        ));
+        output.push_str(&format!(
+            "\n{}\n{}\n",
+            heading(color, "FULL REFERENCE"),
+            help_table(
+                vec![vec![
+                    "aka --help".into(),
+                    "Show every command and subcommand".into(),
+                ]],
+                color,
+                0,
+            )
         ));
     } else if root {
-        let rows = ROOT_WORKFLOWS
+        let rows = ROOT_EXAMPLES
             .iter()
-            .map(|(name, invocation)| vec![name.to_string(), literal(color, invocation)])
+            .map(|(name, invocation)| vec![name.to_string(), invocation.to_string()])
             .collect::<Vec<_>>();
         output.push_str(&format!(
             "\n{}\n{}\n",
-            heading(color, "COMMON WORKFLOWS"),
-            help_table(rows)
+            heading(color, "EXAMPLES"),
+            help_table(rows, color, 1)
         ));
     } else if let Some(after) = command
         .get_after_long_help()
@@ -588,5 +744,56 @@ mod tests {
         assert!(output.contains("github"));
         assert!(!output.contains('|'));
         assert!(!output.contains('+'));
+    }
+
+    #[test]
+    fn help_table_color_does_not_affect_cell_widths() {
+        let rows = vec![
+            vec!["setup".into(), "Connect an agent or app".into()],
+            vec!["      aws <name>".into(), "Add an AWS connection".into()],
+        ];
+        let plain = help_table(rows.clone(), false, 0);
+        let colored = help_table(rows, true, 0);
+        let decolored = colored
+            .replace("\u{1b}[1m\u{1b}[36m", "")
+            .replace("\u{1b}[0m", "");
+
+        assert_eq!(decolored, plain);
+        assert_eq!(colored.lines().count(), 2);
+    }
+
+    #[test]
+    fn compact_root_choices_are_part_of_command_labels() {
+        let mut command = Command::new("aka")
+            .version("test")
+            .subcommand(
+                Command::new("setup")
+                    .about("Connect an agent or app")
+                    .subcommand(Command::new("skill").about("Install the agent skill"))
+                    .subcommand(Command::new("instructions").about("Print setup instructions"))
+                    .subcommand(Command::new("desktop").about("Show desktop connection details")),
+            )
+            .subcommand(Command::new("conn").about("Add and manage connections"))
+            .subcommand(Command::new("secret").about("Add and manage vault secrets"))
+            .subcommand(Command::new("admin").about("Manage broker access and settings"))
+            .subcommand(
+                Command::new("cloud")
+                    .about("Credential-process integration")
+                    .subcommand(Command::new("creds").about("Print temporary cloud credentials"))
+                    .subcommand(Command::new("config").about("Print cloud CLI configuration")),
+            );
+        command.build();
+
+        let output = render_help(&command, true, true, false);
+        assert!(output.contains(&literal(true, "setup skill")));
+        assert!(output.contains(&literal(true, "setup instructions")));
+        assert!(output.contains(&literal(true, "setup desktop")));
+        assert!(output.contains(&literal(true, "conn [add | …]")));
+        assert!(output.contains(&literal(true, "secret [add | …]")));
+        assert!(!output.contains("commands:"));
+        assert!(!output.contains("commands: invite"));
+        assert!(output.contains(&literal(true, "cloud creds <conn>")));
+        assert!(output.contains(&literal(true, "cloud config <conn>")));
+        assert!(output.contains(&literal(true, "aka --help")));
     }
 }

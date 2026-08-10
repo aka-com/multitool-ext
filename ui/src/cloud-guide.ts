@@ -394,7 +394,7 @@ export function shellArgument(value: string): string {
  * single source for both the add flow's Connect step and the detail pane. */
 export function cloudConnectCommand(provider: CloudProvider, name: string): string {
   return provider === 'aws'
-    ? `aka cloud install ${shellArgument(name)}`
+    ? `aka cloud config ${shellArgument(name)}`
     : `eval "$(aka cloud env ${shellArgument(name)})"`;
 }
 

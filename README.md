@@ -101,17 +101,21 @@ Codex, Cursor, your own harness using `curl`.
 Agent and client onboarding lives under one setup namespace:
 
 ```sh
-aka setup codex               # print a paste-ready MCP client config
+aka setup codex               # preview a paste-ready MCP client command
+aka setup codex --write       # configure Codex, write the skill, pin the repo
+aka setup claude-code         # preview the Claude Code registration command
 aka setup claude-code --write # apply it: register, write the skill, pin the repo
+aka setup claude-desktop      # preview the manual Claude Desktop config
+aka setup claude-desktop --write # print config, write skill, pin repo
 aka setup skill --write       # install the repo-local agent skill on its own
 aka setup instructions        # print the authoritative setup document
 ```
 
 `--write` registers the MCP server with clients that own their config
-through a CLI (Claude Code), writes `.claude/skills/multitool/SKILL.md`,
+through a CLI (Codex and Claude Code), writes `.claude/skills/multitool/SKILL.md`,
 and pins the working directory to the current context. Clients configured
-by editing a file you own (Codex, Claude Desktop) get the stanza printed
-and the path named, so nothing rewrites a file holding your other servers.
+by editing a file you own (Claude Desktop) get the stanza printed and the
+path named, so nothing rewrites a file holding your other servers.
 
 The former top-level `skill` and `instructions` commands remain hidden
 compatibility aliases for existing scripts.
@@ -248,8 +252,10 @@ kind decides what the child process gets.
   aka run staging-aws -- aws s3 ls
   ```
 
-  For tooling that fetches credentials itself, `aka cloud creds` and
-  `aka cloud install` emit `credential_process` forms.
+  For tooling that fetches credentials itself, `aka cloud creds` emits
+  provider-native credentials and `aka cloud config` emits the corresponding
+  configuration. The former `aka cloud install` spelling remains a
+  compatibility alias.
 
 - **HTTP / API** — each API connection gets a loopback endpoint, which
   you can use to directly reach the upstream with `curl` and SDKs. Issue
@@ -307,12 +313,10 @@ claude mcp add multitool -- aka mcp --client claude-code
 }
 ```
 
-**Codex** (`aka setup codex`) in `~/.codex/config.toml`:
+**Codex** (`aka setup codex`):
 
-```toml
-[mcp_servers.multitool]
-command = "aka"
-args = ["mcp", "--client", "codex"]
+```sh
+codex mcp add multitool -- aka mcp --client codex
 ```
 
 `aka mcp` is the stdio server command launched by the configured client. It
