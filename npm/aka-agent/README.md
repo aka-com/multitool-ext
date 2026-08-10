@@ -39,13 +39,17 @@ per-user data directory). **`aka serve`** runs a separate headless
 broker under `~/.akaserver` by default so it can sit beside the app
 without colliding. Override with `--root` or `AKA_SERVER_ROOT` (`--root`
 wins). By default it listens on `127.0.0.1:4780` and advertises the
-passkey-compatible public URL `http://localhost:4780`. Use `--no-listen` for
-Unix-socket-only operation, or override `--listen` and `--public-url` for a
-remote/hosted deployment.
+passkey-compatible public URL `http://localhost:4780`, where it serves its
+bundled web interface and manage API. Use `--no-web` for API-only TCP
+operation, `--no-listen` for Unix-socket-only operation, or override
+`--listen` and `--public-url` for a remote/hosted deployment.
 
 ```sh
 # Headless broker (default root ~/.akaserver). Same machine as the app is fine.
 aka serve
+
+# Open http://localhost:4780. First browser sign-in:
+aka admin enroll --root ~/.akaserver
 
 # First start writes ~/.akaserver/sock/manage-token (0600). Rotate while live:
 aka manage token --root ~/.akaserver
@@ -106,8 +110,8 @@ curl --unix-socket ~/.akaserver/sock/broker.sock http://localhost/instructions
 
 Every command accepts `--root <dir>` for an isolated directory (data and
 socket under it). `aka serve` defaults to `~/.akaserver`, its loopback TCP
-listener, and its localhost public URL; other commands default to the
-production layout unless `--root` is set.
+listener, its localhost public URL, and the bundled web interface; other
+commands default to the production layout unless `--root` is set.
 
 ## Platform notes
 

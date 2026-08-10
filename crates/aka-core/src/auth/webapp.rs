@@ -6,9 +6,10 @@
 //! bundle served from anywhere else would be a different origin and none of
 //! those would hold.
 //!
-//! Files are read from a directory the operator points at (`serve
-//! --web-root`), not embedded. Embedding would tie a UI rebuild to a broker
-//! rebuild, and the two ship on different clocks.
+//! Files are read from a directory rather than embedded. `aka serve` normally
+//! supplies the bundle packaged beside its executable; `serve --web-root`
+//! can replace it with an independently deployed UI build. That override
+//! keeps a UI release from requiring a broker rebuild.
 //!
 //! These routes do not authenticate. The bundle is the same JavaScript every
 //! visitor would download; the manage plane behind it decides what a caller

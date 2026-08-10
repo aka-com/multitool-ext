@@ -279,13 +279,14 @@ enum Command {
     /// authoritative agent setup (requires its management token).
     #[command(hide = true)]
     Instructions(InstructionsArgs),
-    /// Run a headless broker.
+    /// Run a broker and its web interface.
     ///
     /// Uses its own root (not the desktop app store). Default root is
     /// `~/.akaserver` (data + socket under it). Override with `--root` or
     /// `AKA_SERVER_ROOT` (`--root` wins). The Multitool desktop app keeps
     /// using the production layout (`~/.aka`); agents against this process
     /// need this root's token or the shared agent key over its TCP listener.
+    /// The bundled web interface is served from the public URL by default.
     Serve {
         /// Broker root (data + socket under it). Overrides `AKA_SERVER_ROOT`
         /// and the default `~/.akaserver`.
@@ -308,12 +309,15 @@ enum Command {
         /// passkeys; IP-literal public URLs do not.
         #[arg(long, conflicts_with = "no_listen", value_parser = parse_public_url)]
         public_url: Option<String>,
-        /// Serve the Multitool web app from this directory (the `dist/ui`
-        /// a UI build produces). It rides the same listener as the manage
-        /// API on purpose: the session cookie, the passkey's relying
-        /// party, and the CSRF check are all same-origin.
-        #[arg(long, conflicts_with = "no_listen")]
+        /// Serve this Multitool web app instead of the bundled one. Point it
+        /// at the `dist/ui` a UI build produces. It rides the same listener
+        /// as the manage API so sessions, passkeys, and CSRF are same-origin.
+        #[arg(long, conflicts_with_all = ["no_listen", "no_web"])]
         web_root: Option<PathBuf>,
+        /// Do not serve the web interface. The TCP manage API and agent
+        /// control plane still run unless --no-listen is also set.
+        #[arg(long, conflicts_with = "web_root")]
+        no_web: bool,
         /// Bind the PG data plane and API direct endpoints to this
         /// address (e.g. 0.0.0.0 or a LAN IP) for remote agents, instead of
         /// loopback. These legs are plaintext, so a non-loopback value is
@@ -2064,6 +2068,7 @@ fn run_cli() {
             no_listen,
             public_url,
             web_root,
+            no_web,
             data_plane_listen,
             advertise_host,
             data_plane_insecure,
@@ -2079,6 +2084,7 @@ fn run_cli() {
                 no_listen,
                 public_url,
                 web_root,
+                no_web,
                 data_plane_listen,
                 advertise_host,
                 data_plane_insecure,
@@ -3358,6 +3364,137 @@ fn suggested_public_url(addr: std::net::SocketAddr) -> String {
     } else {
         "https://broker.example.com".into()
     }
+}
+
+/// What the ready banner should say about the browser surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WebUiBannerStatus {
+    Bundled { url: String },
+    Custom { url: String, root: PathBuf },
+    Disabled(String),
+}
+
+/// The web root handed to the daemon plus its user-facing startup state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedWebUi {
+    root: Option<PathBuf>,
+    banner: WebUiBannerStatus,
+    warning: Option<String>,
+}
+
+/// The npm platform package keeps its portable assets beside `bin/aka`.
+/// Resolve from the executable, never the caller's current directory, so a
+/// service and an interactive shell see the same bundle.
+fn packaged_web_root_from_exe(exe: &Path) -> Result<PathBuf, String> {
+    let bin = exe
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", exe.display()))?;
+    let package = bin
+        .parent()
+        .ok_or_else(|| format!("{} has no package directory", exe.display()))?;
+    Ok(package.join("share").join("multitool").join("ui"))
+}
+
+fn packaged_web_root() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("could not locate the aka executable: {error}"))?;
+    packaged_web_root_from_exe(&exe)
+}
+
+/// Choose the browser surface without making an API-only deployment fail
+/// merely because it has no public origin. An explicit bad root remains a
+/// configuration error; a missing packaged root is a recoverable packaging
+/// problem and leaves the broker usable with a loud startup warning.
+fn resolve_serve_web_ui(
+    no_listen: bool,
+    no_web: bool,
+    explicit_root: Option<PathBuf>,
+    tcp_addr: Option<std::net::SocketAddr>,
+    public_url: Option<&str>,
+    packaged_root: Result<PathBuf, String>,
+) -> Result<ResolvedWebUi, String> {
+    if no_listen {
+        return Ok(ResolvedWebUi {
+            root: None,
+            banner: WebUiBannerStatus::Disabled("off (--no-listen)".into()),
+            warning: None,
+        });
+    }
+    if no_web {
+        return Ok(ResolvedWebUi {
+            root: None,
+            banner: WebUiBannerStatus::Disabled("off (--no-web)".into()),
+            warning: None,
+        });
+    }
+
+    if let Some(root) = explicit_root {
+        let Some(url) = public_url else {
+            return Err("--web-root needs --public-url when --listen is not loopback".into());
+        };
+        if !root.join("index.html").is_file() {
+            return Err(format!(
+                "--web-root {} has no index.html; point it at the dist/ui a UI build produces",
+                root.display()
+            ));
+        }
+        return Ok(ResolvedWebUi {
+            root: Some(root.clone()),
+            banner: WebUiBannerStatus::Custom {
+                url: url.to_string(),
+                root,
+            },
+            warning: None,
+        });
+    }
+
+    let Some(url) = public_url else {
+        let hint = tcp_addr
+            .map(suggested_public_url)
+            .unwrap_or_else(|| "https://broker.example.com".into());
+        return Ok(ResolvedWebUi {
+            root: None,
+            banner: WebUiBannerStatus::Disabled(format!("off — add --public-url {hint}")),
+            warning: None,
+        });
+    };
+
+    let root = match packaged_root {
+        Ok(root) => root,
+        Err(error) => {
+            let warning = format!(
+                "bundled web interface unavailable ({error}); continuing without it — use --web-root or reinstall aka-agent"
+            );
+            return Ok(ResolvedWebUi {
+                root: None,
+                banner: WebUiBannerStatus::Disabled(
+                    "off — bundled assets unavailable; use --web-root".into(),
+                ),
+                warning: Some(warning),
+            });
+        }
+    };
+    if !root.join("index.html").is_file() {
+        let warning = format!(
+            "bundled web interface is missing at {}; continuing without it — use --web-root or reinstall aka-agent",
+            root.display()
+        );
+        return Ok(ResolvedWebUi {
+            root: None,
+            banner: WebUiBannerStatus::Disabled(
+                "off — bundled assets missing; use --web-root".into(),
+            ),
+            warning: Some(warning),
+        });
+    }
+
+    Ok(ResolvedWebUi {
+        root: Some(root),
+        banner: WebUiBannerStatus::Bundled {
+            url: url.to_string(),
+        },
+        warning: None,
+    })
 }
 
 fn login_keychain_expected() -> bool {
@@ -8073,6 +8210,7 @@ struct ServeArgs {
     no_listen: bool,
     public_url: Option<String>,
     web_root: Option<PathBuf>,
+    no_web: bool,
     data_plane_listen: Option<std::net::IpAddr>,
     advertise_host: Option<String>,
     data_plane_insecure: bool,
@@ -8284,7 +8422,7 @@ struct ServeBanner {
     first_start_manage_token: Option<PathBuf>,
     tcp_addr: Option<std::net::SocketAddr>,
     public_url: Option<String>,
-    web_root: Option<PathBuf>,
+    web_ui: WebUiBannerStatus,
     advertise_host: Option<String>,
     mcp: McpBannerStatus,
     vault: String,
@@ -8421,10 +8559,15 @@ impl ServeBanner {
             )),
             (None, None) => out.push(format_label("Public URL", "off (--no-listen)")),
         }
-        match (&self.public_url, &self.web_root) {
-            (_, Some(path)) => out.push(format_label("UI", path.display())),
-            (Some(_), None) => out.push(format_label("UI", "off — add --web-root dist/ui")),
-            (None, None) => out.push(format_label("UI", "off (listening disabled)")),
+        match &self.web_ui {
+            WebUiBannerStatus::Bundled { url } => {
+                out.push(format_label("UI", format!("{url}  (bundled)")))
+            }
+            WebUiBannerStatus::Custom { url, root } => out.push(format_label(
+                "UI",
+                format!("{url}  (from {})", root.display()),
+            )),
+            WebUiBannerStatus::Disabled(reason) => out.push(format_label("UI", reason)),
         }
 
         out.push(String::new());
@@ -8550,6 +8693,7 @@ fn cmd_serve(args: ServeArgs) {
         no_listen,
         public_url,
         web_root,
+        no_web,
         data_plane_listen,
         advertise_host,
         data_plane_insecure,
@@ -8559,7 +8703,19 @@ fn cmd_serve(args: ServeArgs) {
         no_mcp,
     } = args;
     let (listen, public_url) = resolve_serve_network(no_listen, listen, public_url);
-    // Headless serve always uses an isolated root (default ~/.akaserver), never
+    let web_ui = resolve_serve_web_ui(
+        no_listen,
+        no_web,
+        web_root,
+        listen,
+        public_url.as_deref(),
+        packaged_web_root(),
+    )
+    .unwrap_or_else(|error| die(error));
+    if let Some(warning) = &web_ui.warning {
+        warn_line(warning);
+    }
+    // Standalone serve always uses an isolated root (default ~/.akaserver), never
     // the desktop production layout. Vault is always root-scoped on macOS.
     let root = serve_root_from_flags(root);
     let root_flag = format!(" --root {}", shell_quote(&root.display().to_string()));
@@ -8604,23 +8760,10 @@ fn cmd_serve(args: ServeArgs) {
             Ok(path) => path,
             Err(error) => die(error),
         };
-    // A web root that is not there would serve every request as a 404 with
-    // no hint why, so say so at startup instead.
-    if let Some(web_root) = &web_root {
-        if public_url.is_none() {
-            die("--web-root needs --public-url when --listen is not loopback");
-        }
-        if !web_root.join("index.html").is_file() {
-            die(format!(
-                "--web-root {} has no index.html; point it at the dist/ui a UI build produces",
-                web_root.display()
-            ));
-        }
-    }
     let options = daemon::ServeOptions {
         listen,
         public_url: public_url.clone(),
-        web_root: web_root.clone(),
+        web_root: web_ui.root.clone(),
         data_plane_listen,
         advertise_host: advertise_host.clone(),
         data_plane_insecure,
@@ -8665,7 +8808,7 @@ fn cmd_serve(args: ServeArgs) {
         first_start_manage_token,
         tcp_addr: daemon.tcp_addr,
         public_url,
-        web_root,
+        web_ui: web_ui.banner,
         advertise_host,
         mcp: mcp_banner,
         vault: vault_description(&broker.paths),
@@ -8788,6 +8931,21 @@ mod tests {
         assert!(nested.contains("aka conn show"), "{nested}");
         assert!(nested.contains("ARGUMENTS"), "{nested}");
         assert!(nested.contains("--broker <BROKER>"), "{nested}");
+
+        let serve = match configured_cli_command(false, true)
+            .try_get_matches_from(["aka", "serve", "--help"])
+        {
+            Ok(_) => panic!("serve --help unexpectedly parsed as a command"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            serve.contains("Run a broker and its web interface"),
+            "{serve}"
+        );
+        assert!(
+            serve.contains("instead of the bundled one") && serve.contains("--no-web"),
+            "{serve}"
+        );
     }
 
     #[test]
@@ -9015,6 +9173,127 @@ mod tests {
     }
 
     #[test]
+    fn packaged_web_root_is_resolved_beside_the_binary() {
+        assert_eq!(
+            packaged_web_root_from_exe(Path::new(
+                "/opt/node_modules/@aka-com/aka-agent-linux-x64/bin/aka"
+            ))
+            .unwrap(),
+            PathBuf::from("/opt/node_modules/@aka-com/aka-agent-linux-x64/share/multitool/ui")
+        );
+    }
+
+    #[test]
+    fn serve_web_ui_defaults_to_the_packaged_bundle() {
+        let bundle = tempfile::tempdir().unwrap();
+        std::fs::write(bundle.path().join("index.html"), "<!doctype html>").unwrap();
+        let resolved = resolve_serve_web_ui(
+            false,
+            false,
+            None,
+            Some("127.0.0.1:4780".parse().unwrap()),
+            Some("http://localhost:4780"),
+            Ok(bundle.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(resolved.root.as_deref(), Some(bundle.path()));
+        assert_eq!(
+            resolved.banner,
+            WebUiBannerStatus::Bundled {
+                url: "http://localhost:4780".into()
+            }
+        );
+        assert_eq!(resolved.warning, None);
+    }
+
+    #[test]
+    fn serve_web_ui_honors_explicit_disable_and_custom_roots() {
+        let bundle = tempfile::tempdir().unwrap();
+        std::fs::write(bundle.path().join("index.html"), "<!doctype html>").unwrap();
+
+        let disabled = resolve_serve_web_ui(
+            false,
+            true,
+            None,
+            Some("127.0.0.1:4780".parse().unwrap()),
+            Some("http://localhost:4780"),
+            Err("unused".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            disabled.banner,
+            WebUiBannerStatus::Disabled("off (--no-web)".into())
+        );
+
+        let custom = resolve_serve_web_ui(
+            false,
+            false,
+            Some(bundle.path().to_path_buf()),
+            Some("127.0.0.1:4780".parse().unwrap()),
+            Some("https://broker.example.test"),
+            Err("unused".into()),
+        )
+        .unwrap();
+        assert_eq!(custom.root.as_deref(), Some(bundle.path()));
+        assert_eq!(
+            custom.banner,
+            WebUiBannerStatus::Custom {
+                url: "https://broker.example.test".into(),
+                root: bundle.path().to_path_buf(),
+            }
+        );
+    }
+
+    #[test]
+    fn serve_web_ui_preserves_api_only_deployments_and_missing_bundles() {
+        let remote = resolve_serve_web_ui(
+            false,
+            false,
+            None,
+            Some("0.0.0.0:4780".parse().unwrap()),
+            None,
+            Err("unused".into()),
+        )
+        .unwrap();
+        assert_eq!(remote.root, None);
+        assert_eq!(
+            remote.banner,
+            WebUiBannerStatus::Disabled("off — add --public-url https://broker.example.com".into())
+        );
+
+        let missing = tempfile::tempdir().unwrap();
+        let resolved = resolve_serve_web_ui(
+            false,
+            false,
+            None,
+            Some("127.0.0.1:4780".parse().unwrap()),
+            Some("http://localhost:4780"),
+            Ok(missing.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(resolved.root, None);
+        assert!(resolved
+            .warning
+            .unwrap()
+            .contains("bundled web interface is missing"));
+    }
+
+    #[test]
+    fn an_invalid_explicit_web_root_is_still_an_error() {
+        let missing = tempfile::tempdir().unwrap();
+        let error = resolve_serve_web_ui(
+            false,
+            false,
+            Some(missing.path().to_path_buf()),
+            Some("127.0.0.1:4780".parse().unwrap()),
+            Some("http://localhost:4780"),
+            Err("unused".into()),
+        )
+        .unwrap_err();
+        assert!(error.contains("has no index.html"), "{error}");
+    }
+
+    #[test]
     fn unsigned_serve_notice_prepares_for_the_login_keychain_prompt() {
         assert_eq!(
             serve_launch_notice(true),
@@ -9085,7 +9364,12 @@ mod tests {
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["aka", "serve", "--no-listen"]).is_ok());
+        assert!(Cli::try_parse_from(["aka", "serve", "--no-web"]).is_ok());
+        assert!(Cli::try_parse_from(["aka", "serve", "--no-listen", "--no-web"]).is_ok());
         assert!(Cli::try_parse_from(["aka", "serve", "--web-root", "dist/ui"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["aka", "serve", "--web-root", "dist/ui", "--no-web"]).is_err()
+        );
         for incompatible in ["--listen", "--public-url", "--web-root"] {
             let value = match incompatible {
                 "--listen" => "127.0.0.1:4780",
@@ -10347,7 +10631,10 @@ mod tests {
             first_start_manage_token: None,
             tcp_addr: Some("127.0.0.1:4780".parse().unwrap()),
             public_url: Some("http://127.0.0.1:4780".into()),
-            web_root: Some(PathBuf::from("dist/ui")),
+            web_ui: WebUiBannerStatus::Custom {
+                url: "http://127.0.0.1:4780".into(),
+                root: PathBuf::from("dist/ui"),
+            },
             advertise_host: None,
             mcp: McpBannerStatus::Started {
                 addr: "127.0.0.1:9".parse().unwrap(),
@@ -10385,7 +10672,7 @@ mod tests {
         let quit_at = text.find("  Quit        Ctrl-C or SIGTERM").expect("quit");
         assert!(note_at < tcp_at && tcp_at < quit_at);
         assert!(text.contains("  Public URL  http://127.0.0.1:4780"));
-        assert!(text.contains("  UI          dist/ui"));
+        assert!(text.contains("  UI          http://127.0.0.1:4780  (from dist/ui)"));
         assert!(!text.contains("…"));
     }
 
@@ -10398,7 +10685,7 @@ mod tests {
             first_start_manage_token: None,
             tcp_addr: None,
             public_url: None,
-            web_root: None,
+            web_ui: WebUiBannerStatus::Disabled("off (--no-listen)".into()),
             advertise_host: None,
             mcp: McpBannerStatus::Disabled,
             vault: "encrypted file".into(),
@@ -10408,7 +10695,7 @@ mod tests {
         let text = banner.lines().join("\n");
         assert!(text.contains("  TCP         off (--no-listen)"));
         assert!(text.contains("  Public URL  off (--no-listen)"));
-        assert!(text.contains("  UI          off (listening disabled)"));
+        assert!(text.contains("  UI          off (--no-listen)"));
         // Not listening: no remote-management or desktop hints, only the
         // local --root form.
         assert!(text.contains("  Manage      aka status --root '/tmp/root'"));
@@ -10430,7 +10717,9 @@ mod tests {
             first_start_manage_token: Some(PathBuf::from("/r/sock/manage-token")),
             tcp_addr: Some("127.0.0.1:1".parse().unwrap()),
             public_url: Some("http://localhost:1".into()),
-            web_root: None,
+            web_ui: WebUiBannerStatus::Bundled {
+                url: "http://localhost:1".into(),
+            },
             advertise_host: Some("agents.example".into()),
             mcp: McpBannerStatus::Failed("bind failed".into()),
             vault: "encrypted file".into(),
@@ -10448,7 +10737,7 @@ mod tests {
         assert!(text.contains("  Warning     warning: 1 tool is set to confirm traffic"));
         assert!(text.contains("  TCP         127.0.0.1:1  (plaintext; put TLS in front)"));
         assert!(text.contains("  Public URL  http://localhost:1"));
-        assert!(text.contains("  UI          off — add --web-root dist/ui"));
+        assert!(text.contains("  UI          http://localhost:1  (bundled)"));
     }
 
     #[test]

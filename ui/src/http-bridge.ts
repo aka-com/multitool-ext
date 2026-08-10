@@ -108,6 +108,12 @@ export async function currentSession(): Promise<SessionInfo | null> {
 }
 
 export async function signOut(): Promise<void> {
+  // A polling request-inbox lease is independent of the SSE observer. Drop
+  // it while this session can still authenticate the DELETE instead of
+  // leaving the broker to wait for its short expiry.
+  await detachApprovalSurface();
+  stream?.close();
+  stream = null;
   const csrf = (await readSession())?.csrf;
   try {
     await fetch('/v1/auth/logout', {
@@ -226,6 +232,152 @@ type Handler = (event: EventPayload<unknown>) => void;
 const handlers = new Map<string, Set<Handler>>();
 let stream: EventSource | null = null;
 
+/**
+ * Browsers cannot attach the request-inbox header to a native `EventSource`.
+ * The manage API therefore offers the same capability as a short polling
+ * lease: mint one while this page has a live observer and renew it often
+ * enough that closing the tab fails closed after a few missed heartbeats.
+ */
+interface ApprovalSurface {
+  id: string;
+  expires_in_ms: number;
+}
+
+const APPROVAL_SURFACE_HEARTBEAT_MS = 5_000;
+let approvalSurfaceId: string | null = null;
+let approvalSurfaceTimer: ReturnType<typeof setTimeout> | null = null;
+let approvalSurfaceGeneration = 0;
+let approvalSurfacePending: Promise<void> | null = null;
+
+async function surfaceMutation(method: 'POST' | 'PUT' | 'DELETE', path: string): Promise<Response | null> {
+  let csrf = (await readSession())?.csrf;
+  if (!csrf) return null;
+  let response = await send(method, path, undefined, csrf);
+  if (response.status === 403) {
+    csrf = (await readSession(true))?.csrf;
+    if (!csrf) return null;
+    response = await send(method, path, undefined, csrf);
+  }
+  if (response.status === 401) session = null;
+  return response;
+}
+
+function scheduleApprovalSurfaceHeartbeat(generation: number): void {
+  if (approvalSurfaceTimer) clearTimeout(approvalSurfaceTimer);
+  approvalSurfaceTimer = setTimeout(() => {
+    void heartbeatApprovalSurface(generation);
+  }, APPROVAL_SURFACE_HEARTBEAT_MS);
+}
+
+function scheduleApprovalSurfaceAttach(generation: number): void {
+  if (generation !== approvalSurfaceGeneration || !stream) return;
+  if (approvalSurfaceTimer) clearTimeout(approvalSurfaceTimer);
+  approvalSurfaceTimer = setTimeout(() => {
+    if (generation === approvalSurfaceGeneration && stream) void attachApprovalSurface();
+  }, APPROVAL_SURFACE_HEARTBEAT_MS);
+}
+
+async function heartbeatApprovalSurface(generation: number): Promise<void> {
+  const id = approvalSurfaceId;
+  if (!id || generation !== approvalSurfaceGeneration || !stream) return;
+  let response: Response | null;
+  try {
+    response = await surfaceMutation(
+      'PUT',
+      `/v1/manage/approval-surfaces/${encodeURIComponent(id)}`,
+    );
+  } catch {
+    // A transport interruption should not strand the page permanently. The
+    // old lease expires safely if the retries cannot reach the broker.
+    if (generation === approvalSurfaceGeneration && approvalSurfaceId === id && stream) {
+      scheduleApprovalSurfaceHeartbeat(generation);
+    }
+    return;
+  }
+  if (generation !== approvalSurfaceGeneration || approvalSurfaceId !== id || !stream) return;
+  if (response?.status === 404) {
+    approvalSurfaceId = null;
+    await attachApprovalSurface();
+    return;
+  }
+  if (response?.status === 401) {
+    approvalSurfaceId = null;
+    return;
+  }
+  // Retry transport and broker failures too. The broker expires the old
+  // lease after three missed heartbeats; a later 404 remints a fresh one.
+  scheduleApprovalSurfaceHeartbeat(generation);
+}
+
+async function attachApprovalSurface(): Promise<void> {
+  if (approvalSurfaceId) return;
+  if (approvalSurfacePending) return approvalSurfacePending;
+  const generation = approvalSurfaceGeneration;
+  const operation = (async () => {
+    let response: Response | null;
+    try {
+      response = await surfaceMutation('POST', '/v1/manage/approval-surfaces');
+    } catch {
+      scheduleApprovalSurfaceAttach(generation);
+      return;
+    }
+    if (!response?.ok) {
+      if (response?.status !== 401) scheduleApprovalSurfaceAttach(generation);
+      return;
+    }
+    let surface: ApprovalSurface;
+    try {
+      surface = (await response.json()) as ApprovalSurface;
+    } catch {
+      scheduleApprovalSurfaceAttach(generation);
+      return;
+    }
+    if (!surface.id) return;
+    if (generation !== approvalSurfaceGeneration || !stream) {
+      try {
+        await surfaceMutation(
+          'DELETE',
+          `/v1/manage/approval-surfaces/${encodeURIComponent(surface.id)}`,
+        );
+      } catch {
+        // The lease is deliberately short; failure to release it immediately
+        // is bounded by the broker's expiry.
+      }
+      return;
+    }
+    approvalSurfaceId = surface.id;
+    scheduleApprovalSurfaceHeartbeat(generation);
+  })();
+  approvalSurfacePending = operation;
+  try {
+    await operation;
+  } finally {
+    if (approvalSurfacePending === operation) approvalSurfacePending = null;
+  }
+}
+
+async function detachApprovalSurface(): Promise<void> {
+  approvalSurfaceGeneration += 1;
+  if (approvalSurfaceTimer) clearTimeout(approvalSurfaceTimer);
+  approvalSurfaceTimer = null;
+  const id = approvalSurfaceId;
+  approvalSurfaceId = null;
+  // Let an in-flight mint observe the generation change and release the id
+  // it received before sign-out revokes this page's credential.
+  if (approvalSurfacePending) await approvalSurfacePending;
+  if (id) {
+    try {
+      await surfaceMutation(
+        'DELETE',
+        `/v1/manage/approval-surfaces/${encodeURIComponent(id)}`,
+      );
+    } catch {
+      // Logout and teardown must continue through a network interruption;
+      // the broker expires an unreleased lease after 15 seconds.
+    }
+  }
+}
+
 /** Events that exist only inside the desktop shell. Nothing emits them
  * here, and a listener for one is harmless — it simply never fires. */
 const NATIVE_EVENTS = new Set<EventName>([
@@ -283,8 +435,11 @@ function deliver(name: EventName, payload: unknown): void {
   }
 }
 
-function ensureStream(): void {
-  if (stream) return;
+async function ensureStream(): Promise<void> {
+  if (stream) {
+    await attachApprovalSurface();
+    return;
+  }
   stream = new EventSource('/v1/manage/events', { withCredentials: true });
   stream.onmessage = (message) => {
     let parsed: { event?: string } & Record<string, unknown>;
@@ -324,9 +479,11 @@ function ensureStream(): void {
     if (stream?.readyState === EventSource.CLOSED) {
       stream.close();
       stream = null;
+      void detachApprovalSurface();
       session = null;
     }
   };
+  await attachApprovalSurface();
 }
 
 export async function listen<K extends EventName>(
@@ -337,7 +494,7 @@ export async function listen<K extends EventName>(
   const set = handlers.get(event) ?? new Set<Handler>();
   set.add(handler);
   handlers.set(event, set);
-  if (!NATIVE_EVENTS.has(event)) ensureStream();
+  if (!NATIVE_EVENTS.has(event)) await ensureStream();
   return () => {
     set.delete(handler);
     if (!set.size) handlers.delete(event);

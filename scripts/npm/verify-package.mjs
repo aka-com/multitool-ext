@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   accessSync,
   constants,
+  readdirSync,
   readFileSync,
   statSync,
 } from "node:fs";
@@ -116,6 +117,59 @@ function binaryIdentity(binary) {
   fail(`${binary} is neither a supported ELF nor Mach-O executable`);
 }
 
+function filesUnder(root, relative = "") {
+  const directory = path.join(root, relative);
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const child = path.join(relative, entry.name);
+    if (entry.isDirectory()) return filesUnder(root, child);
+    if (!entry.isFile()) fail(`${path.join(root, child)} is not a regular file`);
+    return [child];
+  });
+}
+
+function verifyWebUi(packageDir, name) {
+  const root = path.join(packageDir, "share", "multitool", "ui");
+  const index = path.join(root, "index.html");
+  try {
+    accessSync(index, constants.R_OK);
+  } catch {
+    fail(`${name} is missing share/multitool/ui/index.html`);
+  }
+  const files = filesUnder(root);
+  if (!files.some((file) => file.endsWith(".js"))) {
+    fail(`${name} web UI contains no JavaScript asset`);
+  }
+  if (!files.some((file) => file.endsWith(".css"))) {
+    fail(`${name} web UI contains no stylesheet`);
+  }
+
+  const html = readFileSync(index, "utf8");
+  const references = [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)]
+    .map((match) => match[1])
+    .filter((reference) =>
+      !reference.startsWith("http:") &&
+      !reference.startsWith("https:") &&
+      !reference.startsWith("data:") &&
+      !reference.startsWith("#")
+    );
+  for (const reference of references) {
+    const local = reference.split(/[?#]/, 1)[0].replace(/^\//, "");
+    if (!local) continue;
+    if (path.isAbsolute(local) || local.split(/[\\/]/).includes("..")) {
+      fail(`${name} web UI index contains unsafe asset path ${reference}`);
+    }
+    const asset = path.join(root, local);
+    try {
+      accessSync(asset, constants.R_OK);
+    } catch {
+      fail(`${name} web UI index references missing asset ${reference}`);
+    }
+    if (!statSync(asset).isFile() || statSync(asset).size === 0) {
+      fail(`${name} web UI asset ${reference} is not a non-empty regular file`);
+    }
+  }
+}
+
 function verifyPlatformPackage(directory, expectedVersion) {
   const expected = PLATFORM_PACKAGES[directory];
   const { packageDir, manifest } = verifyManifest(directory, expectedVersion);
@@ -128,7 +182,7 @@ function verifyPlatformPackage(directory, expectedVersion) {
   }
   verifyExactStrings(
     manifest.files,
-    ["bin/aka", "bin/multitool-onepassword"],
+    ["bin/aka", "bin/multitool-onepassword", "share/multitool/ui"],
     `${name} published files`
   );
 
@@ -157,6 +211,7 @@ function verifyPlatformPackage(directory, expectedVersion) {
   if (!statSync(sidecar).isFile()) {
     fail(`${name}/bin/multitool-onepassword is not a regular file`);
   }
+  verifyWebUi(packageDir, name);
   const sidecarIdentity = binaryIdentity(sidecar);
   if (
     sidecarIdentity.format !== expected.format ||

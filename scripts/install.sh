@@ -108,6 +108,7 @@ echo "           $(mtime_display "$release_src")"
 if [[ "$do_build" -eq 1 ]]; then
   echo
   echo "Building aka ($profile)..."
+  pnpm run frontend:build
   if [[ "$profile" == release ]]; then
     cargo build --release -p multitool
   else
@@ -152,6 +153,16 @@ if [[ ! -f "$src" ]]; then
   exit 1
 fi
 
+ui_src="$repo_root/dist/ui"
+if [[ ! -f "$ui_src/index.html" ]]; then
+  echo "error: web interface not found at $ui_src/index.html" >&2
+  echo "hint: run \`pnpm run frontend:build\` or re-run with --build" >&2
+  exit 1
+fi
+
+install_prefix="$(dirname "$install_dir")"
+ui_dest="$install_prefix/share/multitool/ui"
+
 if [[ ! -d "$install_dir" ]]; then
   echo "Creating $install_dir"
   mkdir -p "$install_dir"
@@ -188,6 +199,7 @@ echo
 echo "Install aka ($profile) to $dest$path_note"
 echo "  source:  $src"
 echo "  dest:    $existing_note"
+echo "  web UI:  $ui_dest"
 echo
 printf "Proceed? [Y/n] "
 read -r answer || true
@@ -200,7 +212,11 @@ case "${answer:-Y}" in
 esac
 
 install -m 755 "$src" "$dest"
+mkdir -p "$(dirname "$ui_dest")"
+rm -rf "$ui_dest"
+cp -R "$ui_src" "$ui_dest"
 echo "Installed $dest"
+echo "Installed $ui_dest"
 
 if command -v aka >/dev/null 2>&1; then
   resolved="$(command -v aka)"

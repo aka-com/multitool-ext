@@ -10,9 +10,10 @@ This is an open-source package (MIT License) that follows an esbuild-style layou
   declares one exact-pinned `optionalDependency` per platform; npm installs the
   single matching one.
 - `aka-agent-{darwin,linux}-{arm64,x64}/` — per-platform packages whose CLI
-  payload is `bin/aka`, published under the `@aka-com` scope for that
-  `os`/`cpu` pair. The binaries are staged by `scripts/npm-dist.sh` and are
-  gitignored; only the manifests are checked in.
+  payload is `bin/aka` plus the bundled web interface under
+  `share/multitool/ui`, published under the `@aka-com` scope for that
+  `os`/`cpu` pair. The binaries and UI assets are staged by
+  `scripts/npm-dist.sh` and are gitignored; only the manifests are checked in.
 
 There are no postinstall scripts and no install-time downloads. Node
 22 or newer is required, as the MCP host runtime.

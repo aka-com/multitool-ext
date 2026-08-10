@@ -1,11 +1,21 @@
-# A hosted Multitool broker for Linux: builds the self-contained `aka` CLI, then
-# runs it with the control plane on TCP and secrets in the encrypted vault.
+# A hosted Multitool broker for Linux: builds `aka` and its web interface, then
+# runs the broker with its control plane on TCP and secrets in the encrypted vault.
 # TLS is your reverse proxy's job; this image serves plain HTTP on 4780.
 #
 # Build from the repo root:
 #   docker build -f dev/hosted-linux/Dockerfile -t multitool-broker .
 # Run (see dev/hosted-linux/README.md for the full command and the vault key):
 #   docker run -e AKA_VAULT_KEY=... -p 4780:4780 -v aka-state:/var/lib/aka multitool-broker
+
+# --- build the browser interface served by aka ---
+FROM node:22-bookworm AS web
+WORKDIR /src
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json vite.config.ts ./
+COPY src-tauri/tauri.conf.json ./src-tauri/tauri.conf.json
+COPY ui ./ui
+RUN corepack enable \
+    && pnpm install --frozen-lockfile \
+    && pnpm run frontend:build
 
 # --- build the aka CLI (glibc; Debian base means no musl needed) ---
 FROM rust:1-bookworm AS rust
@@ -37,6 +47,7 @@ RUN apt-get update \
     && mkdir -p /var/lib/aka && chown aka:aka /var/lib/aka
 COPY --from=rust /src/target/release/aka /usr/local/bin/aka
 COPY --from=onepassword /multitool-onepassword /usr/local/bin/multitool-onepassword
+COPY --from=web /src/dist/ui /usr/local/share/multitool/ui
 
 USER aka
 ENV HOME=/home/aka

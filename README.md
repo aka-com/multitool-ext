@@ -120,7 +120,7 @@ For headless setup, connection creation and updates are grouped by kind so
 each command exposes only relevant fields:
 
 ```sh
-aka serve  # ~/.akaserver, TCP 127.0.0.1:4780, public URL http://localhost:4780
+aka serve  # ~/.akaserver; web UI and API at http://localhost:4780
 aka conn add pg analytics --host db.example.com --dbname app \
   --user agent --secret DATABASE_PASSWORD
 aka conn update pg analytics --sslmode verify-full
@@ -139,9 +139,12 @@ aka conn update analytics --confirm      # hold traffic for user confirmation
 aka conn disable analytics               # refuse every agent's calls
 ```
 
-Use `aka serve --no-listen` for Unix-socket-only operation. Override
-`--listen` and `--public-url` when a proxy, tunnel, or remote deployment needs
-different addresses.
+Open `http://localhost:4780` for the bundled web interface. The first browser
+sign-in needs a passkey enrolled with `aka admin enroll --root ~/.akaserver`.
+Use `aka serve --no-web` for an API-only TCP broker, or `aka serve --no-listen` for
+Unix-socket-only operation. Override `--listen` and `--public-url` when a
+proxy, tunnel, or remote deployment needs different addresses; a non-loopback
+listener needs `--public-url` before the web interface can be enabled.
 
 The desktop app never attaches to a headless broker directly: "Local
 Multitool" in the app runs its own broker on `~/.aka`, while `aka serve` uses

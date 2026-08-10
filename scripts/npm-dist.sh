@@ -114,6 +114,11 @@ if [[ "$all" -eq 1 && -n "$target" ]]; then
 fi
 
 node scripts/npm/sync-versions.mjs --check
+pnpm run frontend:build
+if [[ ! -f "$repo_root/dist/ui/index.html" ]]; then
+  echo "frontend build did not produce dist/ui/index.html" >&2
+  exit 1
+fi
 
 host="$(rustc -vV | sed -n 's/^host: //p')"
 if [[ "$all" -eq 1 ]]; then
@@ -161,7 +166,11 @@ for target in "${targets[@]}"; do
   bash "$script_dir/build-onepassword-sidecar.sh" \
     --target "$target" \
     --output "npm/$platform_pkg/bin/multitool-onepassword"
+  rm -rf "npm/$platform_pkg/share"
+  install -d "npm/$platform_pkg/share/multitool/ui"
+  cp -R "$repo_root/dist/ui/." "npm/$platform_pkg/share/multitool/ui/"
   echo "staged $bin_dir/aka -> npm/$platform_pkg/bin/aka"
+  echo "staged dist/ui -> npm/$platform_pkg/share/multitool/ui"
   node scripts/npm/verify-package.mjs "npm/$platform_pkg"
 
   if [[ "$pack" -eq 1 ]]; then

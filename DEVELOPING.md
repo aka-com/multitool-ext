@@ -79,6 +79,15 @@ secrets, connections, a wired-up agent, and past activity.
 pnpm run frontend:dev   # vite dev server with hot reload
 ```
 
+To exercise the production browser bridge against a real source-built broker,
+build the bundle and point `serve` at it explicitly. Packaged/install-script
+builds place the same bundle beside `aka` and do not need `--web-root`.
+
+```sh
+pnpm run frontend:build
+cargo run -p multitool -- serve --web-root dist/ui
+```
+
 Then open:
 
 - <http://127.0.0.1:1420/> — the main window

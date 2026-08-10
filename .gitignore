@@ -25,5 +25,6 @@ src-tauri/tauri.build.conf.json
 
 # Staged CLI binaries for the npm distribution (scripts/npm-dist.sh)
 /npm/aka-agent-*/bin/
+/npm/aka-agent-*/share/
 # Keep locally staged artifacts from the retired package layout ignored too.
 /npm/multitool-*/bin/

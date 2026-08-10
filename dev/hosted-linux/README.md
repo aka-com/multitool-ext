@@ -4,9 +4,10 @@ The broker runs headless on Linux the same way it does on a Mac
 (`aka serve`), with one difference: **secrets are sealed by an encrypted
 vault** instead of the macOS Keychain, so you must provide a master key.
 Bare `serve` defaults to `~/.akaserver`, TCP `127.0.0.1:4780`, and public URL
-`http://localhost:4780` (override the root with `--root` or `AKA_SERVER_ROOT`);
-production images pin `--root /var/lib/aka` and a reachable listener
-explicitly.
+`http://localhost:4780`, where it serves its bundled web interface and manage
+API (override the root with `--root` or `AKA_SERVER_ROOT`); production images
+pin `--root /var/lib/aka` and a reachable listener explicitly. Pass `--no-web`
+for an API-only listener.
 Everything else — the manage API, the `akamgr_` token, TCP control plane,
 relayed OAuth, data-plane advertise — works identically. Manage it from
 Multitool Desktop exactly as you would a hosted Mac.
@@ -52,7 +53,7 @@ docker run -d --name multitool-broker \
     multitool-broker --public-url https://broker.example.dev --advertise-host broker.lan
 ```
 
-The image builds the self-contained `aka` CLI (glibc/Debian — no musl
+The image builds `aka` and its bundled web assets (glibc/Debian — no musl
 needed); its in-process Rust MCP host serves `<public-url>/mcp`. Args after
 the image name are appended to the entrypoint's
 `aka serve --root /var/lib/aka --listen 0.0.0.0:4780`.
@@ -84,13 +85,17 @@ aka activity --broker https://broker.example.dev
 
 ## Run it (systemd, no container)
 
-Build the `aka` binary (`cargo build --release -p multitool`), install it, create the `aka`
-user and `/var/lib/aka`, and drop the key in `/etc/aka/vault.env`
+Build the web interface and `aka` binary, install both, create the `aka` user and
+`/var/lib/aka`, and drop the key in `/etc/aka/vault.env`
 (`AKA_VAULT_KEY=…`, mode 0400), then use
 [`multitool-broker.service`](multitool-broker.service):
 
 ```sh
+pnpm run frontend:build
+cargo build --release -p multitool
 install -Dm755 target/release/aka /usr/local/bin/aka
+install -d /usr/local/share/multitool/ui
+cp -R dist/ui/. /usr/local/share/multitool/ui/
 useradd --system --home /var/lib/aka --create-home aka
 install -Dm644 dev/hosted-linux/multitool-broker.service /etc/systemd/system/multitool-broker.service
 # edit the unit's --public-url; put the key in /etc/aka/vault.env

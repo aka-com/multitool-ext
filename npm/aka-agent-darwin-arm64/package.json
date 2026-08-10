@@ -9,7 +9,8 @@
   },
   "files": [
     "bin/aka",
-    "bin/multitool-onepassword"
+    "bin/multitool-onepassword",
+    "share/multitool/ui"
   ],
   "engines": {
     "node": ">=22"
