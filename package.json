@@ -34,7 +34,7 @@
     "jsdom": "^30.0.1",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2",
-    "vite": "^8.1.4"
+    "vite": "^8.1.6"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.4",
